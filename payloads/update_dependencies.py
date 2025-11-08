@@ -14,12 +14,11 @@ This script will:
 """
 
 import os, sys, subprocess, signal, time
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
-import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
 
 # --- CONFIGURATION ---
+HCXDUMPTOOL_DIR = "/opt/hcxdumptool"
+HCXDUMPTOOL_REPO = "https://github.com/ZerBea/hcxdumptool.git"
+
 APT_DEPS = [
     "python3-scapy", "python3-netifaces", "python3-pyudev", "python3-serial",
     "python3-smbus", "python3-rpi.gpio", "python3-spidev", "python3-pil", "python3-numpy",
@@ -45,70 +44,77 @@ PIP_DEPS = ["qrcode[pil]", "requests", "zero-hid"] # Added zero-hid for HID emul
 
 # --- Main ---
 def show_message(lines, color="lime"):
-    img = Image.new("RGB", (128, 128), "black")
-    d = ImageDraw.Draw(img)
-    y = 20
+    # In headless mode, print messages to console
     for line in lines:
-        d.text((5, y), line, font=FONT_TITLE, fill=color)
-        y += 15
-    LCD.LCD_ShowImage(img, 0, 0)
+        print(f"[{color.upper()}] {line}")
 
 def run_command(command, step_name):
-    """Runs a command and shows status on the LCD."""
-    show_message([f"Running:", f"{step_name}..."])
+    """Runs a command and shows status on the console."""
+    print(f"\n--- Running: {step_name} ---")
+    print(f"Command: {command}")
     try:
         proc = subprocess.run(command, shell=True, check=True, capture_output=True, text=True, timeout=600)
+        print(f"STDOUT:\n{proc.stdout}")
+        if proc.stderr:
+            print(f"STDERR:\n{proc.stderr}")
+        print(f"--- {step_name} SUCCEEDED ---")
         return True
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         error_msg = e.stderr or e.stdout or str(e)
-        show_message([f"ERROR:", f"{step_name}", f"failed."], "red")
-        print(f"Error during '{step_name}': {error_msg}", file=sys.stderr)
-        time.sleep(5)
+        print(f"--- {step_name} FAILED ---")
+        print(f"ERROR: {error_msg}", file=sys.stderr)
         return False
 
 def install_all():
+    print("\nStarting dependency installation...")
     if not run_command("apt-get update", "apt update"):
+        print("APT update failed. Exiting.")
         return
 
     if not run_command(f"apt-get install -y {' '.join(APT_DEPS)}", "apt install"):
+        print("APT install failed. Exiting.")
         return
     
     # Ensure pip is up-to-date
     if not run_command("python3 -m pip install --upgrade pip setuptools", "pip upgrade"):
+        print("PIP upgrade failed. Exiting.")
         return
         
     if not run_command(f"pip install {' '.join(PIP_DEPS)}", "pip install"):
+        print("PIP install failed. Exiting.")
         return
 
     # Install hcxdumptool from source
-    show_message(["Installing", "hcxdumptool..."])
+    print("\nInstalling hcxdumptool from source...")
     if os.path.exists(HCXDUMPTOOL_DIR):
-        subprocess.run(f"rm -rf {HCXDUMPTOOL_DIR}", shell=True)
-    if not run_command(f"git clone {HCXDUMPTOOL_REPO} {HCXDUMPTOOL_DIR}", "git clone"):
+        print(f"Removing existing {HCXDUMPTOOL_DIR}...")
+        subprocess.run(f"rm -rf {HCXDUMPTOOL_DIR}", shell=True, check=True)
+    if not run_command(f"git clone {HCXDUMPTOOL_REPO} {HCXDUMPTOOL_DIR}", "git clone hcxdumptool"):
+        print("hcxdumptool git clone failed. Exiting.")
         return
-    if not run_command(f"cd {HCXDUMPTOOL_DIR} && make && make install", "make install"):
+    if not run_command(f"cd {HCXDUMPTOOL_DIR} && make && make install", "hcxdumptool make install"):
+        print("hcxdumptool make install failed. Exiting.")
         return
         
-    show_message(["Installation", "Complete!", "", "IMPORTANT:", "Enable USB HID Gadget", "Edit /boot/config.txt:", "dtoverlay=dwc2", "Edit /etc/modules:", "dwc2", "libcomposite", "Then reboot!"])
-    time.sleep(5)
+    print("\nInstallation Complete!")
+    print("IMPORTANT: To enable USB HID Gadget, you might need to:")
+    print("  1. Edit /boot/config.txt: add 'dtoverlay=dwc2'")
+    print("  2. Edit /etc/modules: add 'dwc2' and 'libcomposite'")
+    print("Then reboot your RaspyJack!")
 
 if __name__ == '__main__':
     try:
         # Check for root
         if os.geteuid() != 0:
-            show_message(["Run this", "payload as root!"], "red")
-            time.sleep(3)
+            print("ERROR: This script must be run as root!")
+            print("Please run with 'sudo python3 update_dependencies.py'")
         else:
-            show_message(["Install all", "dependencies?", "Press OK."])
-            while True:
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    break
-                if GPIO.input(PINS["OK"]) == 0:
-                    install_all()
-                    break
-                time.sleep(0.1)
+            install_all()
             
+    except KeyboardInterrupt:
+        print("\nDependency Installer interrupted by user.")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}", file=sys.stderr)
     finally:
-        LCD.LCD_Clear()
-        GPIO.cleanup()
         print("Dependency Installer payload finished.")
+
