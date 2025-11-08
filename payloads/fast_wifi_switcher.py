@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import sys
+sys.path.append('/root/Raspyjack/')
 """
 FAST WiFi Switcher - Responsive wlan0/wlan1 Control
 ===================================================

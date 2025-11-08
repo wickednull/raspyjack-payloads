@@ -35,7 +35,7 @@ APT_DEPS = [
     "wget", # For font download
     "ncat", "tcpdump", "arp-scan", "dsniff", "procps", # General network/offensive tools
     # Bluetooth dependencies
-    "bluetooth", "bluez", "bluez-utils", # Bluetooth dependencies
+    "bluetooth", "bluez", # Bluetooth dependencies
     "sqlite3", # Added for browser_password_stealer.py
     "python3-evdev", # Added for keyboard_tester.py
     "dnsutils" # Added for recon_dns_zone_transfer.py (provides 'host' command)
@@ -80,7 +80,7 @@ def install_all():
         print("PIP upgrade failed. Exiting.")
         return
         
-    if not run_command(f"pip install {' '.join(PIP_DEPS)}", "pip install"):
+    if not run_command(f"pip install --break-system-packages {' '.join(PIP_DEPS)}", "pip install"):
         print("PIP install failed. Exiting.")
         return
 

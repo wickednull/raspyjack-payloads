@@ -1,4 +1,6 @@
-import os, sys, subprocess, signal, time, threading
+#!/usr/bin/env python3
+import sys
+sys.path.append('/root/Raspyjack/')
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config

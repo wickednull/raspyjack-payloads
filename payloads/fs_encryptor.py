@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import sys
+sys.path.append('/root/Raspyjack/')
 """
 RaspyJack *payload* – **Evil: Filesystem Encryptor (Ransomware Sim)**
 ======================================================================

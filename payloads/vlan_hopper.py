@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import sys
+sys.path.append('/root/Raspyjack/')
 """
 RaspyJack *payload* – **VLAN Hopper (802.1Q Double Tagging)**
 ==============================================================

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+import sys
+sys.path.append('/root/Raspyjack/')
+import sys
+sys.path.append('/root/Raspyjack/wifi/')
 """
 RaspyJack *payload* – **Utility: Shutdown Device**
 ===================================================
