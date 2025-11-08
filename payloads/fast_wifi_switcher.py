@@ -54,12 +54,13 @@ class FastWiFiSwitcher:
             raise Exception("Required modules not available")
         
         # LCD setup - proper initialization
-        LCD_Config.GPIO_Init()
+        # LCD_Config.GPIO_Init() # This is often redundant or handled by LCD_Init
         self.lcd = LCD_1in44.LCD()
         self.lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
         self.lcd.LCD_Clear()
         self.WIDTH, self.HEIGHT = 128, 128
         self.font = ImageFont.load_default()
+        self.font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
         
         # GPIO setup with FAST response
         GPIO.setmode(GPIO.BCM)
@@ -69,8 +70,8 @@ class FastWiFiSwitcher:
             'LEFT': 5,
             'RIGHT': 26,
             'CENTER': 13,
-            'KEY1': 21,  # wlan0
-            'KEY2': 20,  # wlan1
+            'KEY1': 21,  # Used for cycling interfaces
+            'KEY2': 20,  # Used for confirming selection
             'KEY3': 16   # exit
         }
         
@@ -79,7 +80,10 @@ class FastWiFiSwitcher:
         
         self.running = True
         self.last_update = 0
-        self.current_interface = self.get_current()
+        
+        self.available_wifi_interfaces = self._get_available_wifi_interfaces()
+        self.selected_interface_index = 0
+        self.current_interface = self.get_current() # This will be the currently active one
         
         # Button state tracking for responsiveness
         self.button_states = {pin: 1 for pin in self.buttons.values()}
@@ -87,11 +91,25 @@ class FastWiFiSwitcher:
         
         print("🚀 Fast WiFi Switcher initialized")
     
+    def _get_available_wifi_interfaces(self):
+        """Get dynamically available WiFi interfaces."""
+        try:
+            interfaces = get_available_interfaces()
+            # Filter to only wlan interfaces
+            wifi_ifaces = [iface for iface in interfaces if iface.startswith('wlan')]
+            # Prioritize external dongles (wlan1, wlan2) over built-in (wlan0)
+            wifi_ifaces.sort(key=lambda x: (x != 'wlan1', x != 'wlan2', x))
+            return wifi_ifaces
+        except Exception as e:
+            print(f"Error getting available WiFi interfaces: {e}")
+            return []
+
     def get_current(self):
         """Get current interface quickly."""
         try:
             return get_current_raspyjack_interface()
-        except:
+        except Exception as e:
+            print(f"Error getting current RaspyJack interface: {e}")
             return "unknown"
     
     def show_fast(self, line1, line2="", line3="", line4="", color="white"):
@@ -105,7 +123,7 @@ class FastWiFiSwitcher:
             y = 5
             for line in [line1, line2, line3, line4]:
                 if line:
-                    d.text((5, y), line[:18], font=self.font, fill=color)
+                    d.text((5, y), line[:18], font=self.font_large, fill=color) # Use font_large
                     y += 15
             
             # Show on LCD
@@ -143,11 +161,6 @@ class FastWiFiSwitcher:
             print(f"🔄 Fast switching to {target_interface} using integration function")
             
             # Use the FIXED set_raspyjack_interface function with LCD callback
-            # This includes all our bug fixes:
-            # - SSID parsing fix
-            # - Auto-connect using WiFi profiles  
-            # - Disconnected interface handling
-            # - LCD-friendly status messages
             success = set_raspyjack_interface(target_interface, lcd_callback)
             
             if success:
@@ -209,7 +222,12 @@ class FastWiFiSwitcher:
     
     def run(self):
         """Main fast response loop."""
-        self.show_fast("Fast WiFi", "Switcher", "KEY1: wlan0", "KEY2: wlan1")
+        if not self.available_wifi_interfaces:
+            self.show_fast("No WiFi", "interfaces", "found!", "", "red")
+            time.sleep(3)
+            return
+
+        self.show_fast("Select Interface", self.available_wifi_interfaces[self.selected_interface_index], "KEY1: Cycle", "KEY2: Select")
         time.sleep(1)
         
         while self.running:
@@ -219,15 +237,15 @@ class FastWiFiSwitcher:
                 
                 if pressed:
                     for button in pressed:
-                        if button == 'KEY1':
-                            # Switch to wlan0
-                            print("KEY1 pressed - switching to wlan0")
-                            self.switch_interface_fast('wlan0')
+                        if button == 'KEY1': # Cycle through available interfaces
+                            self.selected_interface_index = (self.selected_interface_index + 1) % len(self.available_wifi_interfaces)
+                            self.show_fast("Select Interface", self.available_wifi_interfaces[self.selected_interface_index], "KEY1: Cycle", "KEY2: Select")
                             
-                        elif button == 'KEY2':
-                            # Switch to wlan1
-                            print("KEY2 pressed - switching to wlan1")
-                            self.switch_interface_fast('wlan1')
+                        elif button == 'KEY2': # Select and switch to the chosen interface
+                            target_iface = self.available_wifi_interfaces[self.selected_interface_index]
+                            print(f"KEY2 pressed - switching to {target_iface}")
+                            self.switch_interface_fast(target_iface)
+                            self.show_fast("Select Interface", self.available_wifi_interfaces[self.selected_interface_index], "KEY1: Cycle", "KEY2: Select")
                             
                         elif button == 'KEY3':
                             # Exit
@@ -236,16 +254,6 @@ class FastWiFiSwitcher:
                             self.running = False
                             break
                             
-                        elif button == 'UP' or button == 'DOWN':
-                            # Quick toggle
-                            current = self.get_current()
-                            if current == 'wlan0':
-                                self.switch_interface_fast('wlan1')
-                            elif current == 'wlan1':
-                                self.switch_interface_fast('wlan0')
-                            else:
-                                self.switch_interface_fast('wlan1')  # Default to wlan1
-                                
                         elif button == 'CENTER':
                             # Show status
                             self.show_status()
@@ -259,7 +267,7 @@ class FastWiFiSwitcher:
                         if current != self.current_interface:
                             self.current_interface = current
                         
-                        self.show_fast("Fast Switcher", f"Current: {current}", "KEY1: wlan0", "KEY2: wlan1")
+                        self.show_fast("Select Interface", self.available_wifi_interfaces[self.selected_interface_index], "KEY1: Cycle", "KEY2: Select")
                     self.last_update = current_time
                 
                 # Ultra-fast loop - minimal delay
@@ -287,11 +295,15 @@ def main():
     print("🚀 Starting Fast WiFi Switcher")
     
     if not IMPORTS_OK:
-        print("❌ Required modules not available")
-        return
+        print("❌ Required modules not available. Exiting.")
+        sys.exit(1) # Exit if imports failed
     
     switcher = None
     try:
+        # Ensure GPIO is initialized only once and correctly
+        # LCD_Config.GPIO_Init() is often called by LCD_1in44.LCD_Init() internally
+        # or is redundant if GPIO.setmode is called directly.
+        # We'll rely on the switcher's __init__ for GPIO setup.
         switcher = FastWiFiSwitcher()
         switcher.run()
     except KeyboardInterrupt:

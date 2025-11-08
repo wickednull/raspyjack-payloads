@@ -12,26 +12,61 @@ to list shares. It attempts an anonymous (null session) connection.
 
 import os, sys, subprocess, signal, time
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
-import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
+# ---------------------------- Third‑party libs ----------------------------
+try:
+    import RPi.GPIO as GPIO
+    import LCD_1in44, LCD_Config
+    from PIL import Image, ImageDraw, ImageFont
+    HARDWARE_LIBS_AVAILABLE = True
+except ImportError:
+    HARDWARE_LIBS_AVAILABLE = False
+    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
+
+# ---------------------------------------------------------------------------
+# 1) GPIO mapping (BCM)
+# ---------------------------------------------------------------------------
+PINS = { "OK": 13, "KEY3": 16, "KEY1": 21 } # Added KEY1 for config
+
+# ---------------------------------------------------------------------------
+# 2) GPIO & LCD initialisation
+# ---------------------------------------------------------------------------
+if HARDWARE_LIBS_AVAILABLE:
+    GPIO.setmode(GPIO.BCM)
+    for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    LCD = LCD_1in44.LCD()
+    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+    FONT = ImageFont.load_default()
+else:
+    # Dummy objects if hardware libs are not available
+    class DummyLCD:
+        def LCD_Init(self, *args): pass
+        def LCD_Clear(self): pass
+        def LCD_ShowImage(self, *args): pass
+    LCD = DummyLCD()
+    WIDTH, HEIGHT = 128, 128
+    class DummyGPIO:
+        def setmode(self, *args): pass
+        def setup(self, *args): pass
+        def input(self, pin): return 1 # Simulate no button pressed
+        def cleanup(self): pass
+    GPIO = DummyGPIO()
+    class DummyImageFont:
+        def truetype(self, *args, **kwargs): return None
+        def load_default(self): return None
+    ImageFont = DummyImageFont()
+    FONT_TITLE = ImageFont.load_default() # Fallback to default font
+    FONT = ImageFont.load_default() # Fallback to default font
 
 # --- CONFIGURATION ---
-TARGET_IP = "192.168.1.10"
-
-# --- GPIO & LCD ---
-PINS = { "OK": 13, "KEY3": 16 }
-GPIO.setmode(GPIO.BCM)
-for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-LCD = LCD_1in44.LCD()
-LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-FONT = ImageFont.load_default()
+TARGET_IP = "192.168.1.10" # Will be configurable
 
 # --- Globals & Shutdown ---
 running = True
 selected_index = 0
 shares = []
+current_ip_input = TARGET_IP # Initial value for IP input
+ip_input_cursor_pos = 0
 
 def cleanup(*_):
     global running
@@ -41,32 +76,131 @@ signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
 # --- UI ---
-def draw_ui(status_msg=None):
-    img = Image.new("RGB", (128, 128), "black")
+def show_message(lines, color="lime"):
+    if not HARDWARE_LIBS_AVAILABLE:
+        for line in lines:
+            print(line)
+        return
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ImageDraw.Draw(img)
+    font = FONT_TITLE # Use FONT_TITLE for messages
+    y = 40
+    for line in lines:
+        bbox = d.textbbox((0, 0), line, font=font)
+        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        x = (128 - w) // 2
+        d.text((x, y), line, font=font, fill=color)
+        y += h + 5
+    LCD.LCD_ShowImage(img, 0, 0)
+
+def draw_ui(screen_state="main"):
+    if not HARDWARE_LIBS_AVAILABLE:
+        print(f"UI State: {screen_state}")
+        if screen_state == "main":
+            print(f"Target IP: {TARGET_IP}")
+        return
+
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "SMB Share Scanner", font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
 
-    if status_msg:
-        d.text((10, 60), status_msg, font=FONT, fill="yellow")
-    else:
-        start_index = max(0, selected_index - 4)
-        end_index = min(len(shares), start_index + 8)
-        y_pos = 25
-        for i in range(start_index, end_index):
-            color = "yellow" if i == selected_index else "white"
-            line = shares[i]
-            if len(line) > 20: line = line[:19] + "..."
-            d.text((5, y_pos), line, font=FONT, fill=color)
-            y_pos += 11
+    if screen_state == "main":
+        d.text((5, 25), "Target IP:", font=FONT, fill="white")
+        d.text((5, 40), TARGET_IP, font=FONT_TITLE, fill="yellow")
+        
+        if not shares:
+            d.text((10, 60), "No shares found.", font=FONT, fill="white")
+        else:
+            d.text((5, 55), f"Shares Found: {len(shares)}", font=FONT, fill="yellow")
+            start_index = max(0, selected_index - 2)
+            end_index = min(len(shares), start_index + 4)
+            y_pos = 70
+            for i in range(start_index, end_index):
+                color = "yellow" if i == selected_index else "white"
+                d.text((10, y_pos), shares[i], font=FONT, fill=color)
+                y_pos += 11
 
-    d.text((5, 115), "OK=Scan | KEY3=Exit", font=FONT, fill="cyan")
+        d.text((5, 115), "OK=Scan | KEY1=Edit IP | KEY3=Exit", font=FONT, fill="cyan")
+    elif screen_state == "ip_input":
+        d.text((5, 30), "Enter Target IP:", font=FONT, fill="white")
+        display_ip = list(current_ip_input)
+        if ip_input_cursor_pos < len(display_ip):
+            display_ip[ip_input_cursor_pos] = '_'
+        d.text((5, 50), "".join(display_ip), font=FONT_TITLE, fill="yellow")
+        d.text((5, 115), "UP/DOWN=Digit | LEFT/RIGHT=Move | OK=Confirm", font=FONT, fill="cyan")
+    elif screen_state == "scanning":
+        d.text((5, 50), "Scanning...", font=FONT_TITLE, fill="yellow")
+        d.text((5, 70), f"Target: {TARGET_IP}", font=FONT, fill="white")
+        d.text((5, 115), "KEY3=Stop", font=FONT, fill="cyan")
+    
     LCD.LCD_ShowImage(img, 0, 0)
+
+def handle_ip_input_logic(initial_ip):
+    global current_ip_input, ip_input_cursor_pos
+    current_ip_input = initial_ip
+    ip_input_cursor_pos = len(initial_ip) - 1 # Start cursor at end
+    
+    draw_ui("ip_input")
+    
+    while running:
+        btn = None
+        for name, pin in PINS.items():
+            if GPIO.input(pin) == 0:
+                btn = name
+                while GPIO.input(pin) == 0: # Debounce
+                    time.sleep(0.05)
+                break
+        
+        if btn == "KEY3": # Cancel IP input
+            return None
+        
+        if btn == "OK": # Confirm IP
+            # Validate IP format
+            parts = current_ip_input.split('.')
+            if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+                return current_ip_input
+            else:
+                show_message(["Invalid IP!", "Try again."], "red")
+                time.sleep(2)
+                current_ip_input = initial_ip # Reset to initial
+                ip_input_cursor_pos = len(initial_ip) - 1
+                draw_ui("ip_input")
+        
+        if btn == "LEFT":
+            ip_input_cursor_pos = max(0, ip_input_cursor_pos - 1)
+            draw_ui("ip_input")
+        elif btn == "RIGHT":
+            ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
+            draw_ui("ip_input")
+        elif btn == "UP" or btn == "DOWN":
+            if ip_input_cursor_pos < len(current_ip_input):
+                char_list = list(current_ip_input)
+                current_char = char_list[ip_input_cursor_pos]
+                
+                if current_char.isdigit():
+                    digit = int(current_char)
+                    if btn == "UP":
+                        digit = (digit + 1) % 10
+                    else: # DOWN
+                        digit = (digit - 1 + 10) % 10
+                    char_list[ip_input_cursor_pos] = str(digit)
+                    current_ip_input = "".join(char_list)
+                elif current_char == '.':
+                    # Cannot change dot, move cursor
+                    if btn == "UP":
+                        ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
+                    else:
+                        ip_input_cursor_pos = max(0, ip_input_cursor_pos - 1)
+                draw_ui("ip_input")
+        
+        time.sleep(0.1)
+    return None
 
 # --- Scanner ---
 def run_scan():
-    global shares, selected_index
-    draw_ui("Scanning...")
+    global shares, selected_index, TARGET_IP
+    draw_ui("scanning")
     shares = []
     selected_index = 0
     
@@ -99,42 +233,61 @@ def run_scan():
         print(f"smbclient scan failed: {e}", file=sys.stderr)
 
 # --- Main Loop ---
+if not HARDWARE_LIBS_AVAILABLE:
+    print("ERROR: Hardware libraries (RPi.GPIO, LCD drivers, PIL) are not available. Cannot run SMB Share Enumeration.", file=sys.stderr)
+    sys.exit(1)
+
+current_screen = "main"
 try:
     if subprocess.run("which smbclient", shell=True, capture_output=True).returncode != 0:
-        draw_ui("smbclient not found!")
+        show_message(["ERROR:", "smbclient", "not found!"], "red")
         time.sleep(3)
-        raise SystemExit("`smbclient` command not found.")
+        sys.exit(1)
 
-    draw_ui("Press OK to scan")
     while running:
-        if GPIO.input(PINS["KEY3"]) == 0:
-            cleanup()
-            break
+        if current_screen == "main":
+            draw_ui("main")
+            
+            if GPIO.input(PINS["KEY3"]) == 0:
+                cleanup()
+                break
+            
+            if GPIO.input(PINS["OK"]) == 0:
+                run_scan()
+                current_screen = "main"
+                time.sleep(0.3) # Debounce
+            
+            if GPIO.input(PINS["UP"]) == 0:
+                if shares:
+                    selected_index = (selected_index - 1) % len(shares)
+                time.sleep(0.2)
+            elif GPIO.input(PINS["DOWN"]) == 0:
+                if shares:
+                    selected_index = (selected_index + 1) % len(shares)
+                time.sleep(0.2)
+            
+            if GPIO.input(PINS["KEY1"]) == 0: # Edit Target IP
+                current_ip_input = TARGET_IP
+                current_screen = "ip_input"
+                time.sleep(0.3) # Debounce
         
-        if GPIO.input(PINS["OK"]) == 0:
-            run_scan()
-            draw_ui()
-            time.sleep(0.5)
-            # Enter viewing mode
-            while running:
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    break
-                if GPIO.input(PINS["UP"]) == 0:
-                    selected_index = (selected_index - 1) % len(shares) if shares else 0
-                    draw_ui()
-                    time.sleep(0.2)
-                elif GPIO.input(PINS["DOWN"]) == 0:
-                    selected_index = (selected_index + 1) % len(shares) if shares else 0
-                    draw_ui()
-                    time.sleep(0.2)
-                time.sleep(0.05)
+        elif current_screen == "ip_input":
+            char_set = "0123456789."
+            new_ip = handle_ip_input_logic(current_ip_input, "ip_input", char_set)
+            if new_ip:
+                TARGET_IP = new_ip
+            current_screen = "main"
+            time.sleep(0.3) # Debounce
         
         time.sleep(0.1)
 
 except (KeyboardInterrupt, SystemExit):
     pass
+except Exception as e:
+    print(f"[ERROR] {e}", file=sys.stderr)
+    show_message(["CRITICAL ERROR:", str(e)[:20]], "red")
+    time.sleep(3)
 finally:
-    cleanup()
     LCD.LCD_Clear()
     GPIO.cleanup()
     print("SMB Share payload finished.")

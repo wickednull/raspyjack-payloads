@@ -117,27 +117,26 @@ def save_loot():
 # 6) UI Functions
 # ---------------------------------------------------------------------------
 def draw_ui():
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-
-    d.text((5, 5), "Probe Request Sniffer", font=FONT_TITLE, fill="#00FF00")
+    d.text((5, 5), "WiFi Probe Sniffer", font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
 
     with ui_lock:
-        ssid_list = list(probed_ssids.keys())
-        if not ssid_list:
-            d.text((10, 50), "Sniffing...", font=FONT, fill="white")
+        if "Sniffing" in status_msg or "Press" in status_msg:
+            d.text((10, 60), status_msg, font=FONT, fill="yellow")
         else:
-            start_display_index = max(0, selected_index - 3)
-            end_display_index = min(len(ssid_list), start_display_index + 7)
-            
+            sorted_probes = sorted(probes.items(), key=lambda x: x[1]["count"], reverse=True)
+            start_index = max(0, selected_index - 4)
+            end_index = min(len(sorted_probes), start_index + 8)
             y_pos = 25
-            for i in range(start_display_index, end_display_index):
+            for i in range(start_index, end_index):
                 color = "yellow" if i == selected_index else "white"
-                d.text((5, y_pos), ssid_list[i], font=FONT, fill=color)
-                y_pos += 12
+                mac, data = sorted_probes[i]
+                d.text((5, y_pos), f"{mac} ({data['count']})", font=FONT, fill=color)
+                y_pos += 11
 
-    d.text((5, 110), "UP/DOWN | KEY3=Exit", font=FONT, fill="cyan")
+    d.text((5, 115), "OK=Start | KEY3=Exit", font=FONT, fill="cyan")
     LCD.LCD_ShowImage(img, 0, 0)
 
 # ---------------------------------------------------------------------------

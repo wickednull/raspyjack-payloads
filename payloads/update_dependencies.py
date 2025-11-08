@@ -21,23 +21,27 @@ from PIL import Image, ImageDraw, ImageFont
 
 # --- CONFIGURATION ---
 APT_DEPS = [
+    "python3-scapy", "python3-netifaces", "python3-pyudev", "python3-serial",
+    "python3-smbus", "python3-rpi.gpio", "python3-spidev", "python3-pil", "python3-numpy",
+    "python3-setuptools", "python3-cryptography", "python3-requests", "fonts-dejavu-core",
+    "python3-pip", # Added for pip functionality
     "hydra", "mitmproxy", "fswebcam", "alsa-utils", "macchanger",
     "reaver", "hostapd", "dnsmasq", "smbclient", "snmp", "php-cgi",
     "ettercap-common", "nmap", "git", "build-essential", "libcurl4-openssl-dev",
-    "libssl-dev", "pkg-config"
+    "libssl-dev", "pkg-config",
+    "aircrack-ng", "wireless-tools", "wpasupplicant", "iw", # WiFi attack tools
+    "firmware-linux-nonfree", "firmware-realtek", "firmware-atheros", # USB WiFi dongle support
+    "i2c-tools", # Misc
+    "dos2unix", # For script conversion
+    "wget", # For font download
+    "ncat", "tcpdump", "arp-scan", "dsniff", "procps", # General network/offensive tools
+    # Bluetooth dependencies
+    "bluetooth", "bluez", "bluez-utils", # Bluetooth dependencies
+    "sqlite3", # Added for browser_password_stealer.py
+    "python3-evdev", # Added for keyboard_tester.py
+    "dnsutils" # Added for recon_dns_zone_transfer.py (provides 'host' command)
 ]
-PIP_DEPS = ["qrcode[pil]", "requests"]
-HCXDUMPTOOL_REPO = "https://github.com/ZerBea/hcxdumptool.git"
-HCXDUMPTOOL_DIR = "/tmp/hcxdumptool"
-
-# --- GPIO & LCD ---
-PINS = { "OK": 13, "KEY3": 16 }
-GPIO.setmode(GPIO.BCM)
-for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-LCD = LCD_1in44.LCD()
-LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-FONT = ImageFont.load_default()
+PIP_DEPS = ["qrcode[pil]", "requests", "zero-hid"] # Added zero-hid for HID emulation
 
 # --- Main ---
 def show_message(lines, color="lime"):
@@ -68,6 +72,10 @@ def install_all():
 
     if not run_command(f"apt-get install -y {' '.join(APT_DEPS)}", "apt install"):
         return
+    
+    # Ensure pip is up-to-date
+    if not run_command("python3 -m pip install --upgrade pip setuptools", "pip upgrade"):
+        return
         
     if not run_command(f"pip install {' '.join(PIP_DEPS)}", "pip install"):
         return
@@ -81,7 +89,7 @@ def install_all():
     if not run_command(f"cd {HCXDUMPTOOL_DIR} && make && make install", "make install"):
         return
         
-    show_message(["Installation", "Complete!"], "lime")
+    show_message(["Installation", "Complete!", "", "IMPORTANT:", "Enable USB HID Gadget", "Edit /boot/config.txt:", "dtoverlay=dwc2", "Edit /etc/modules:", "dwc2", "libcomposite", "Then reboot!"])
     time.sleep(5)
 
 if __name__ == '__main__':

@@ -145,11 +145,34 @@ def draw_ui(status: str):
 try:
     is_attacking = False
     
-    # Check for eth0 connectivity
-    if "NO-CARRIER" in subprocess.check_output(f"ip link show {ETH_INTERFACE}", shell=True).decode():
-        draw_ui("eth0 Disconnected")
+    # Check for eth0 connectivity and IP
+    try:
+        ip_output = subprocess.check_output(f"ip -o -4 addr show {ETH_INTERFACE}", shell=True).decode()
+        link_output = subprocess.check_output(f"ip link show {ETH_INTERFACE}", shell=True).decode()
+        
+        if "NO-CARRIER" in link_output:
+            draw_ui("eth0 Disconnected")
+            time.sleep(3)
+            raise SystemExit("Ethernet cable not connected.")
+        
+        if "state DOWN" in link_output:
+            draw_ui("eth0 is DOWN!")
+            time.sleep(3)
+            raise SystemExit("Ethernet interface is down.")
+            
+        if "inet " not in ip_output:
+            draw_ui("eth0 No IP!")
+            time.sleep(3)
+            raise SystemExit("Ethernet interface has no IP address.")
+            
+    except subprocess.CalledProcessError:
+        draw_ui(f"eth0 not found!")
         time.sleep(3)
-        raise SystemExit("Ethernet cable not connected.")
+        raise SystemExit(f"Interface {ETH_INTERFACE} not found.")
+    except Exception as e:
+        draw_ui(f"eth0 check error!\n{str(e)[:20]}")
+        time.sleep(3)
+        raise SystemExit(f"Error checking {ETH_INTERFACE}: {e}")
 
     while running:
         draw_ui("ACTIVE" if is_attacking else "STOPPED")

@@ -48,12 +48,15 @@ def run_attack():
     # This command launches ettercap in graphical mode, which will not be visible.
     # It's intended to be run in an environment where the user can see the desktop.
     # For a headless device, a text-only command would be used.
-    command = f"ettercap -G" # or -Tq for text mode
+    # TODO: Implement actual DNS spoofing configuration for text mode.
+    command = f"ettercap -Tq -i {ETH_INTERFACE}" # -Tq for text mode, quiet
     
     try:
         # We don't wait for this to finish, it's a launcher
+        # For actual DNS spoofing, you'd need to configure ettercap with a filter file and hosts.
+        # Example: ettercap -Tq -i {ETH_INTERFACE} -F /path/to/dns_spoof.filter -M arp:remote /<target_ip>/
         subprocess.Popen(command, shell=True)
-        show_message(["Ettercap", "launched.", "Check desktop."])
+        show_message(["Ettercap", "launched in text", "mode. Needs config."])
     except Exception as e:
         show_message(["Launch FAILED!"], "red")
         print(f"Error launching ettercap: {e}", file=sys.stderr)

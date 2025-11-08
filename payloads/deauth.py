@@ -75,7 +75,7 @@ def get_wifi_interface():
             
             # Check interface status
             status = get_interface_status(selected_interface)
-            if status["connected"]:
+            if status["connected"] and status["ip"]:
                 try:
                     log(f"Using connected WiFi interface: {selected_interface}")
                 except:
@@ -83,15 +83,25 @@ def get_wifi_interface():
                 return selected_interface
             else:
                 try:
-                    log(f"Selected interface {selected_interface} not connected, but proceeding anyway")
+                    log(f"Selected interface {selected_interface} not connected or no IP, attempting to set as primary")
                 except:
-                    print(f"Selected interface {selected_interface} not connected, but proceeding anyway")
-                return selected_interface
+                    print(f"Selected interface {selected_interface} not connected or no IP, attempting to set as primary")
+                
+                # Attempt to set this interface as primary using the robust integration function
+                show_status(f"Activating {selected_interface}...")
+                if set_raspyjack_interface(selected_interface):
+                    log(f"Successfully activated {selected_interface} as primary")
+                    return selected_interface
+                else:
+                    log(f"Failed to activate {selected_interface} as primary, falling back to wlan1")
+                    show_status("Activation failed!")
+                    time.sleep(1)
+                    return "wlan1" # Fallback if activation fails
         else:
             try:
-                log("No WiFi interfaces found via integration")
+                log("No WiFi interfaces found via integration, falling back to wlan1")
             except:
-                print("No WiFi interfaces found via integration")
+                print("No WiFi interfaces found via integration, falling back to wlan1")
             return "wlan1"  # Fallback
     else:
         # Fallback to hardcoded interface

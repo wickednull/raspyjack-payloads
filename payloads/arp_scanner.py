@@ -25,6 +25,14 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
 try:
+    sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', 'Raspyjack')))
+    from wifi import raspyjack_integration as rji
+    WIFI_INTEGRATION_AVAILABLE = True
+except ImportError:
+    WIFI_INTEGRATION_AVAILABLE = False
+    print("WARNING: wifi.raspyjack_integration not available. Some features may be limited.", file=sys.stderr)
+
+try:
     from scapy.all import *
 except ImportError:
     print("Scapy is not installed. Please run: pip install scapy", file=sys.stderr)
@@ -89,6 +97,7 @@ def run_arp_scan(network_range):
     """Uses Scapy to perform an ARP scan and update the discovered_hosts list."""
     global discovered_hosts
     try:
+        # srp returns answered and unanswered packets
         ans, unans = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=network_range), timeout=5, iface=ETH_INTERFACE, verbose=0)
         
         temp_hosts = []
@@ -99,8 +108,18 @@ def run_arp_scan(network_range):
             discovered_hosts = sorted(temp_hosts, key=lambda x: [int(y) for y in x['ip'].split('.')])
             save_loot()
             
+    except Scapy_Exception as e:
+        print(f"Scapy ARP Scan failed: {e}", file=sys.stderr)
+        with ui_lock:
+            discovered_hosts = [] # Clear previous results on error
+            draw_ui(f"Scapy Error:\n{str(e)[:20]}")
+            time.sleep(3)
     except Exception as e:
         print(f"ARP Scan failed: {e}", file=sys.stderr)
+        with ui_lock:
+            discovered_hosts = [] # Clear previous results on error
+            draw_ui(f"Scan Error:\n{str(e)[:20]}")
+            time.sleep(3)
 
 def save_loot():
     os.makedirs(LOOT_DIR, exist_ok=True)
@@ -121,7 +140,15 @@ def draw_ui(status_msg=""):
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
 
     if status_msg:
-        d.text((10, 60), status_msg, font=FONT, fill="yellow")
+        # Center multi-line status messages
+        lines = status_msg.split('\n')
+        y_start = (HEIGHT - len(lines) * 12) // 2 # Assuming 12px per line
+        for line in lines:
+            bbox = d.textbbox((0, 0), line, font=FONT)
+            w = bbox[2] - bbox[0]
+            x = (WIDTH - w) // 2
+            d.text((x, y_start), line, font=FONT, fill="yellow")
+            y_start += 12
     else:
         with ui_lock:
             if not discovered_hosts:
@@ -147,9 +174,9 @@ def draw_ui(status_msg=""):
 try:
     network_range = get_network_range()
     if not network_range:
-        draw_ui("eth0 not connected?")
+        draw_ui("Error:\neth0 not connected\nor no IP address.")
         time.sleep(5)
-        raise SystemExit("eth0 has no IP address.")
+        raise SystemExit("eth0 has no IP address or is not connected.")
 
     while running:
         draw_ui()
@@ -183,6 +210,8 @@ except (KeyboardInterrupt, SystemExit):
     pass
 except Exception as e:
     print(f"[ERROR] {e}", file=sys.stderr)
+    draw_ui(f"CRITICAL ERROR:\n{str(e)[:20]}")
+    time.sleep(3)
 finally:
     LCD.LCD_Clear()
     GPIO.cleanup()

@@ -127,15 +127,28 @@ periodic_stop    = threading.Event()
 # 6) Nmap scan routine
 # ---------------------------------------------------------------------------
 
-def current_target() -> str:
+def current_target() -> str | None:
     """Return the IPv4 address + CIDR mask of *eth0* (e.g. 192.168.0.42/24)."""
-    cmd = "ip -4 addr show eth0 | awk '/inet / { print $2 }'"
-    return subprocess.check_output(cmd, shell=True).decode().strip()
-
+    try:
+        cmd = "ip -4 addr show eth0 | awk '/inet / { print $2 }'"
+        output = subprocess.check_output(cmd, shell=True).decode().strip()
+        if not output:
+            return None
+        return output
+    except subprocess.CalledProcessError:
+        return None
+    except Exception as e:
+        print(f"Error getting current target: {e}", file=sys.stderr)
+        return None
 
 def nmap_scan() -> None:
     """Run a single Nmap scan and save results under *LOOT_DIR*."""
     target = current_target()
+    if not target:
+        show(["Error:", "eth0 not configured", "or no IP!"], invert=True)
+        time.sleep(3)
+        return
+
     ts     = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     out    = f"{LOOT_DIR}periodic_scan_{ts}.txt"
 
@@ -146,7 +159,7 @@ def nmap_scan() -> None:
         subprocess.run(["sed", "-i", "s/Nmap scan report for //g", out])
         show(["Scan finished!", ts])
     except subprocess.CalledProcessError as exc:
-        show(["Scan failed :(", str(exc.returncode)])
+        show(["Scan failed :(", str(exc.returncode)], invert=True)
     time.sleep(2)   # small pause so user can read the result
 
 # ---------------------------------------------------------------------------
@@ -196,6 +209,12 @@ def pressed_button() -> str | None:
 # ---------------------------------------------------------------------------
 # 10) Main event loop
 # ---------------------------------------------------------------------------
+
+# Check for nmap dependency
+if subprocess.run("which nmap", shell=True, capture_output=True).returncode != 0:
+    show(["ERROR:", "nmap not found!"], invert=True)
+    time.sleep(4)
+    sys.exit(1)
 
 show(["Ready!", "KEY1 : scan now", "KEY2 : auto/stop", "KEY3 : exit"], invert=False)
 

@@ -125,6 +125,16 @@ running = True
 signal.signal(signal.SIGINT,  lambda *_: sys.exit(0))
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
+# Check for critical dependencies
+if subprocess.run("which git", shell=True, capture_output=True).returncode != 0:
+    show(["ERROR:", "git not found!"], invert=True)
+    time.sleep(4)
+    sys.exit(1)
+if subprocess.run("which systemctl", shell=True, capture_output=True).returncode != 0:
+    show(["ERROR:", "systemctl not found!"], invert=True)
+    time.sleep(4)
+    sys.exit(1)
+
 show(["Auto‑Update", "KEY1: start", "KEY3: exit"])
 
 try:
@@ -137,17 +147,17 @@ try:
             show(["Backing‑up…"])
             ok, info = backup()
             if not ok:
-                show(["Backup failed", info], invert=True); time.sleep(4); break
+                show(["Backup failed", info[:16]], invert=True); time.sleep(4); break
             # 2. Pull latest
             show(["Updating…"])
             ok, info = git_update()
             if not ok:
-                show(["Update failed", info], invert=True); time.sleep(4); break
+                show(["Update failed", info[:16]], invert=True); time.sleep(4); break
             # 3. Restart service
             show(["Restarting…"])
             ok, info = restart_service()
             if not ok:
-                show(["Restart failed", info], invert=True); time.sleep(4); break
+                show(["Restart failed", info[:16]], invert=True); time.sleep(4); break
             show(["Update done!", "Bye 👋"])
             time.sleep(2)
             running = False

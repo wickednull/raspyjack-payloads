@@ -11,22 +11,51 @@ enabled features (e.g., HSTS, cookies), and other configuration details.
 
 import os, sys, subprocess, signal, time, socket
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
-import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
+# ---------------------------- Third‑party libs ----------------------------
+try:
+    import RPi.GPIO as GPIO
+    import LCD_1in44, LCD_Config
+    from PIL import Image, ImageDraw, ImageFont
+    HARDWARE_LIBS_AVAILABLE = True
+except ImportError:
+    HARDWARE_LIBS_AVAILABLE = False
+    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
 
-# --- CONFIGURATION ---
-TARGET_IP = "192.168.1.1"
-TARGET_PORT = 80
+# ---------------------------------------------------------------------------
+# 1) GPIO mapping (BCM)
+# ---------------------------------------------------------------------------
+PINS: dict[str, int] = { "OK": 13, "KEY3": 16, "KEY1": 21, "KEY2": 20 } # Added KEY1, KEY2 for config
 
-# --- GPIO & LCD ---
-PINS = { "OK": 13, "KEY3": 16 }
-GPIO.setmode(GPIO.BCM)
-for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-LCD = LCD_1in44.LCD()
-LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-FONT = ImageFont.load_default()
+# ---------------------------------------------------------------------------
+# 2) GPIO & LCD initialisation
+# ---------------------------------------------------------------------------
+if HARDWARE_LIBS_AVAILABLE:
+    GPIO.setmode(GPIO.BCM)
+    for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    LCD = LCD_1in44.LCD()
+    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+    FONT = ImageFont.load_default()
+else:
+    # Dummy objects if hardware libs are not available
+    class DummyLCD:
+        def LCD_Init(self, *args): pass
+        def LCD_Clear(self): pass
+        def LCD_ShowImage(self, *args): pass
+    LCD = DummyLCD()
+    WIDTH, HEIGHT = 128, 128
+    class DummyGPIO:
+        def setmode(self, *args): pass
+        def setup(self, *args): pass
+        def input(self, pin): return 1 # Simulate no button pressed
+        def cleanup(self): pass
+    GPIO = DummyGPIO()
+    class DummyImageFont:
+        def truetype(self, *args, **kwargs): return None
+        def load_default(self): return None
+    ImageFont = DummyImageFont()
+    FONT_TITLE = ImageFont.load_default() # Fallback to default font
+    FONT = ImageFont.load_default() # Fallback to default font
 
 # --- Globals & Shutdown ---
 running = True

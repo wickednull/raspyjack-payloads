@@ -48,15 +48,22 @@ signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
 # --- UI & Core Logic ---
-def draw_ui(status: str):
+def draw_ui():
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-    d.text((5, 5), "Simple Rogue AP", font=FONT_TITLE, fill="#FFC300")
-    d.line([(0, 22), (128, 22)], fill="#FFC300", width=1)
-    status_color = "lime" if status == "ACTIVE" else "red"
-    d.text((30, 40), status, font=FONT_TITLE, fill=status_color)
-    d.text((5, 60), f"SSID: {ROGUE_SSID}", font=FONT)
-    d.text((5, 110), "Press KEY3 to Stop", font=FONT, fill="cyan")
+    d.text((5, 5), "WiFi Rogue AP", font=FONT_TITLE, fill="#00FF00")
+    d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
+
+    with ui_lock:
+        if "Running" in status_msg or "Press" in status_msg:
+            d.text((10, 60), status_msg, font=FONT, fill="yellow")
+        else:
+            d.text((5, 25), f"SSID: {SSID}", font=FONT, fill="white")
+            d.text((5, 36), f"Channel: {CHANNEL}", font=FONT, fill="white")
+            d.text((5, 47), f"IP: {IP_ADDRESS}", font=FONT, fill="white")
+            d.text((5, 58), f"DNS: {DNS_SERVER}", font=FONT, fill="white")
+
+    d.text((5, 115), "OK=Start | KEY3=Exit", font=FONT, fill="cyan")
     LCD.LCD_ShowImage(img, 0, 0)
 
 def start_attack():

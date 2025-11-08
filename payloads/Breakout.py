@@ -31,11 +31,17 @@ sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 # ---------------------------- Standard library ----------------------------
 from typing import List, Tuple
+import math # Explicitly import math
 
 # ----------------------------- Third-party libs ---------------------------
-import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
-import LCD_1in44, LCD_Config          # Waveshare driver helpers for the LCD
-from PIL import Image, ImageDraw, ImageFont
+try:
+    import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
+    import LCD_1in44, LCD_Config          # Waveshare driver helpers for the LCD
+    from PIL import Image, ImageDraw, ImageFont
+    HARDWARE_LIBS_AVAILABLE = True
+except ImportError:
+    HARDWARE_LIBS_AVAILABLE = False
+    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
 
 # ---------------------------------------------------------------------------
 # 1) GPIO pin mapping (BCM numbering)
@@ -170,6 +176,10 @@ def intersect(rect1, rect2) -> bool:
 # ---------------------------------------------------------------------------
 
 def main():
+    if not HARDWARE_LIBS_AVAILABLE:
+        print("ERROR: Hardware libraries (RPi.GPIO, LCD drivers, PIL) are not available. Cannot run Breakout.", file=sys.stderr)
+        sys.exit(1)
+
     paddle = Paddle()
     ball = Ball()
     bricks = create_bricks()
