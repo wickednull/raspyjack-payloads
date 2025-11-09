@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-import sys
-sys.path.append('/root/Raspyjack/')
 """
 RaspyJack WiFi Deauth - Multi-Target Version
 =================================================
@@ -77,7 +75,7 @@ def get_wifi_interface():
             
             # Check interface status
             status = get_interface_status(selected_interface)
-            if status["connected"] and status["ip"]:
+            if status["connected"]:
                 try:
                     log(f"Using connected WiFi interface: {selected_interface}")
                 except:
@@ -85,43 +83,26 @@ def get_wifi_interface():
                 return selected_interface
             else:
                 try:
-                    log(f"Selected interface {selected_interface} not connected or no IP, attempting to set as primary")
+                    log(f"Selected interface {selected_interface} not connected, but proceeding anyway")
                 except:
-                    print(f"Selected interface {selected_interface} not connected or no IP, attempting to set as primary")
-                
-                # Attempt to set this interface as primary using the robust integration function
-                show_status(f"Activating {selected_interface}...")
-                if set_raspyjack_interface(selected_interface):
-                    log(f"Successfully activated {selected_interface} as primary")
-                    return selected_interface
-                else:
-                    log(f"Failed to activate {selected_interface} as primary, returning None")
-                    show_status("Activation failed!")
-                    time.sleep(1)
-                    return None # Return None if activation fails
+                    print(f"Selected interface {selected_interface} not connected, but proceeding anyway")
+                return selected_interface
         else:
             try:
-                log("No WiFi interfaces found via integration, returning None")
+                log("No WiFi interfaces found via integration")
             except:
-                print("No WiFi interfaces found via integration, returning None")
-            return None  # Return None if no WiFi interfaces found via integration
+                print("No WiFi interfaces found via integration")
+            return "wlan1"  # Fallback
     else:
-        # Fallback to hardcoded interface (only if WIFI_INTEGRATION is False)
+        # Fallback to hardcoded interface
         try:
-            log("Using fallback interface: wlan1 (WIFI_INTEGRATION is False)")
+            log("Using fallback interface: wlan1")
         except:
-            print("Using fallback interface: wlan1 (WIFI_INTEGRATION is False)")
+            print("Using fallback interface: wlan1")
         return "wlan1"
 
 # Initialize WiFi interface
 WIFI_INTERFACE = get_wifi_interface()
-if WIFI_INTERFACE is None:
-    show(["No suitable WiFi", "interface found!", "Exiting..."])
-    time.sleep(3)
-    simple_cleanup()
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    sys.exit(1)
 
 # Interface validation patterns
 INTERFACE_PATTERNS = ["wlan0", "wlan1", "wlan2", "wlan0mon", "wlan1mon", "wlan2mon"]
@@ -134,7 +115,6 @@ selected_index = 0
 selected_targets = []
 attack_processes = []
 current_screen = "main"  # main, networks, attacking
-ORIGINAL_WIFI_INTERFACE = None # Added to store original interface name
 
 # Thread control
 attack_stop_event = threading.Event()
@@ -293,10 +273,10 @@ def setup_monitor_mode():
         show_status("Switch to USB dongle")
         return False
     
-    # Gracefully unmanage interface from NetworkManager
-    show_status("Unmanaging NM...")
-    run_command(f"nmcli device disconnect {WIFI_INTERFACE} 2>/dev/null || true")
-    run_command(f"nmcli device set {WIFI_INTERFACE} managed off 2>/dev/null || true")
+    # Kill interfering processes
+    show_status("Stopping NM...")
+    run_command("pkill -f NetworkManager")
+    run_command("pkill -f wpa_supplicant")
     time.sleep(1)
     
     # Check current mode
@@ -308,10 +288,6 @@ def setup_monitor_mode():
         show_status("Monitor ready!")
         time.sleep(1)
         return True
-    
-    # Store original interface name before potential change to monitor interface
-    global ORIGINAL_WIFI_INTERFACE
-    ORIGINAL_WIFI_INTERFACE = WIFI_INTERFACE
     
     # Try to enable monitor mode
     show_status("Enable monitor...")
@@ -718,7 +694,6 @@ def stop_all_attacks():
 
 def simple_cleanup():
     """Simple, reliable cleanup without complex interface detection."""
-    global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
     try:
         log("Starting simple cleanup")
         show_status("Cleaning up...")
@@ -730,34 +705,8 @@ def simple_cleanup():
         run_command("pkill -f aireplay-ng 2>/dev/null || true")
         run_command("pkill -f airodump-ng 2>/dev/null || true")
         
-        # Stop monitor mode and restore original interface name
-        if WIFI_INTERFACE and "mon" in WIFI_INTERFACE:
-            log(f"Stopping monitor mode on {WIFI_INTERFACE}")
-            show_status("Stop monitor...")
-            run_command(f"airmon-ng stop {WIFI_INTERFACE} 2>/dev/null || true")
-            time.sleep(2)
-            # After airmon-ng stop, the interface name might revert to original
-            # So we use ORIGINAL_WIFI_INTERFACE for nmcli commands
-            WIFI_INTERFACE = ORIGINAL_WIFI_INTERFACE if ORIGINAL_WIFI_INTERFACE else WIFI_INTERFACE
-        
-        # Re-manage interface with NetworkManager
-        if ORIGINAL_WIFI_INTERFACE:
-            log(f"Re-managing {ORIGINAL_WIFI_INTERFACE} with NetworkManager")
-            show_status("Re-manage NM...")
-            run_command(f"nmcli device set {ORIGINAL_WIFI_INTERFACE} managed yes 2>/dev/null || true")
-            time.sleep(1)
-            
-            # Attempt to reconnect the interface
-            log(f"Attempting to reconnect {ORIGINAL_WIFI_INTERFACE}")
-            show_status("Reconnect NM...")
-            run_command(f"nmcli device connect {ORIGINAL_WIFI_INTERFACE} 2>/dev/null || true")
-            time.sleep(5) # Give it some time to reconnect
-        
-        # Restart NetworkManager service for full restoration
-        log("Restarting NetworkManager service")
-        show_status("Restart NM...")
-        run_command("systemctl restart NetworkManager 2>/dev/null || true")
-        time.sleep(5) # Give NetworkManager time to start and scan
+        # Try to restart network manager (ignore errors)
+        run_command("systemctl start NetworkManager 2>/dev/null || true")
         
         log("Simple cleanup completed")
         

@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-import sys
-sys.path.append('/root/Raspyjack/')
 """
 RaspyJack *payload* – **Show USB Keyboard Key**
 ==============================================
@@ -28,51 +26,25 @@ import os, sys, time, signal, select, fcntl
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 # ---------------------------- Third‑party libs -----------------------------
-try:
-    import LCD_1in44, LCD_Config          # Waveshare LCD driver
-    from PIL import Image, ImageDraw, ImageFont
-    import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
-    HARDWARE_LIBS_AVAILABLE = True
-except ImportError:
-    HARDWARE_LIBS_AVAILABLE = False
-    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
-
+import LCD_1in44, LCD_Config          # Waveshare LCD driver
+from PIL import Image, ImageDraw, ImageFont
 from evdev import InputDevice, categorize, ecodes, list_devices
+import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
 
 # ---------------------------------------------------------------------------
 # 1) GPIO initialisation (only KEY3 used for «Back to menu»)
 # ---------------------------------------------------------------------------
 KEY3_PIN = 16                         # BCM pin number
-if HARDWARE_LIBS_AVAILABLE:
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(KEY3_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-else:
-    class DummyGPIO:
-        def setmode(self, *args): pass
-        def setup(self, *args): pass
-        def input(self, pin): return 1 # Simulate no button pressed
-        def cleanup(self): pass
-    GPIO = DummyGPIO()
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(KEY3_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 # ---------------------------------------------------------------------------
 # 2) LCD initialisation
 # ---------------------------------------------------------------------------
-if HARDWARE_LIBS_AVAILABLE:
-    LCD = LCD_1in44.LCD()                     # create driver instance
-    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)      # default scan direction (portrait)
-    WIDTH, HEIGHT = 128, 128                  # pixels
-    font = ImageFont.load_default()           # tiny fixed‑width font
-else:
-    class DummyLCD:
-        def LCD_Init(self, *args): pass
-        def LCD_Clear(self): pass
-        def LCD_ShowImage(self, *args): pass
-    LCD = DummyLCD()
-    WIDTH, HEIGHT = 128, 128
-    class DummyImageFont:
-        def load_default(self): return None
-    ImageFont = DummyImageFont()
-    font = ImageFont.load_default() # Fallback to default font
+LCD = LCD_1in44.LCD()
+LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
+font = ImageFont.load_default()
 
 
 def draw(text: str) -> None:

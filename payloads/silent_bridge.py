@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-import sys
-sys.path.append('/root/Raspyjack/')
 """
 RaspyJack Payload – Transparent Ethernet MITM Bridge
 ↪ Creates a passive bridge between eth0 and eth1

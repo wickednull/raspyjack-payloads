@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-import sys
-sys.path.append('/root/Raspyjack/')
 """
 RaspyJack *payload* example – **Show Buttons**
 =============================================
@@ -39,14 +37,9 @@ import sys            # print exceptions to stderr
 # ----------------------------- Third‑party libs ---------------------------
 # These come pre‑installed on RaspyJack; on a vanilla Pi OS you’d need:
 #   sudo apt install python3-pil python3-rpi.gpio
-try:
-    import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
-    import LCD_1in44, LCD_Config          # Waveshare driver helpers for the LCD
-    from PIL import Image, ImageDraw, ImageFont  # Pillow – draw text on images
-    HARDWARE_LIBS_AVAILABLE = True
-except ImportError:
-    HARDWARE_LIBS_AVAILABLE = False
-    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
+import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
+import LCD_1in44, LCD_Config          # Waveshare driver helpers for the LCD
+from PIL import Image, ImageDraw, ImageFont  # Pillow – draw text on images
 
 # ---------------------------------------------------------------------------
 # 1) GPIO pin mapping (BCM numbering) – tweak here if your wiring differs
@@ -122,10 +115,6 @@ signal.signal(signal.SIGTERM, cleanup)
 # 6) Main loop – poll buttons & update display
 # ---------------------------------------------------------------------------
 try:
-    if not HARDWARE_LIBS_AVAILABLE:
-        print("ERROR: Hardware libraries (RPi.GPIO, LCD drivers, PIL) are not available. Cannot run example.", file=sys.stderr)
-        sys.exit(1)
-
     draw("Ready!")
 
     while running:

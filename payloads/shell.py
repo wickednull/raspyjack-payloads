@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-import sys
-sys.path.append('/root/Raspyjack/')
 """
 RaspyJack payload – Micro Shell on 1.44‑inch LCD (v1.6)
 ======================================================
