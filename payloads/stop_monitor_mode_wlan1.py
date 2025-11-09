@@ -22,11 +22,11 @@ import time
 import signal
 import subprocess
 import threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
-from wifi.wifi_manager import WiFiManager
+import monitor_mode_helper
 
 TARGET_INTERFACE_BASE = "wlan1"
 
@@ -68,16 +68,15 @@ def draw_message(lines, color="lime"):
 def main():
     draw_message(["Deactivating monitor", f"mode on {TARGET_INTERFACE_BASE}...", "Please wait."], "yellow")
 
-    wifi_manager = WiFiManager()
     print(f"Attempting to deactivate monitor mode on {TARGET_INTERFACE_BASE}...", file=sys.stderr)
     try:
-        success = wifi_manager.deactivate_monitor_mode(TARGET_INTERFACE_BASE)
+        success = monitor_mode_helper.deactivate_monitor_mode(TARGET_INTERFACE_BASE)
         if success:
             draw_message(["Monitor mode", "DEACTIVATED!", f"Interface: {TARGET_INTERFACE_BASE}"], "lime")
             print(f"Successfully deactivated monitor mode on {TARGET_INTERFACE_BASE}", file=sys.stderr)
         else:
             draw_message(["ERROR:", "Failed to deactivate", "monitor mode!"], "red")
-            print(f"ERROR: wifi_manager.deactivate_monitor_mode failed for {TARGET_INTERFACE_BASE}", file=sys.stderr)
+            print(f"ERROR: monitor_mode_helper.deactivate_monitor_mode failed for {TARGET_INTERFACE_BASE}", file=sys.stderr)
     except Exception as e:
         draw_message(["CRITICAL ERROR:", str(e)[:20]], "red")
         print(f"Critical error during monitor mode deactivation: {e}", file=sys.stderr)

@@ -39,23 +39,22 @@ import os
 import time
 import signal
 import subprocess
+import threading # Added threading import as it was missing
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
-from wifi.raspyjack_integration import (
-    get_best_interface,
-    set_raspyjack_interface
-)
+from wifi.raspyjack_integration import get_available_interfaces
+import re
+import monitor_mode_helper
 
-WIFI_INTERFACE = get_best_interface(prefer_wifi=True)
+WIFI_INTERFACE = None
 ORIGINAL_WIFI_INTERFACE = None
-ROGUE_SSID = "Unsecured_Free_WiFi"
-ROGUE_CHANNEL = "6"
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
-TEMP_CONF_DIR = os.path.join(RASPYJACK_DIR, "tmp", "raspyjack_rogueap")
+ROGUE_SSID = "Free_WiFi"
+ROGUE_CHANNEL = 6
 
-PINS = { "OK": 13, "KEY3": 16 }
+PINS = { "UP": 6, "DOWN": 19, "OK": 13, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
@@ -65,74 +64,44 @@ FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bol
 FONT = ImageFont.load_default()
 
 running = True
-attack_process = None
-current_ssid_input = ROGUE_SSID
-ssid_input_cursor_pos = 0
+rogue_ap_proc = None
 status_msg = "Press OK to start"
+# wifi_manager = WiFiManager() # No longer needed for monitor mode
 
-def run_command(command_parts, error_message, timeout=10, shell=False, check=False):
-    try:
-        if shell:
-            result = subprocess.run(command_parts, shell=True, check=check, capture_output=True, text=True, timeout=timeout)
-        else:
-            result = subprocess.run(command_parts, shell=False, check=check, capture_output=True, text=True, timeout=timeout)
-        if result.stderr:
-            print(f"WARNING: {error_message} - STDERR: {result.stderr.strip()}", file=sys.stderr)
-        return result.stdout, result.returncode == 0
-    except subprocess.CalledProcessError as e:
-        print(f"ERROR: {error_message} - Command: {command_parts} - STDERR: {e.stderr.strip()}", file=sys.stderr)
-        return e.stdout, False
-    except subprocess.TimeoutExpired:
-        print(f"ERROR: {error_message} - Command timed out: {command_parts}", file=sys.stderr)
-        return "", False
-    except FileNotFoundError:
-        print(f"ERROR: {error_message} - Command not found: {command_parts.split()[0]}", file=sys.stderr)
-        return "", False
-    except Exception as e:
-        print(f"CRITICAL ERROR during {error_message}: {e}", file=sys.stderr)
-        return "", False
+# --- Local Monitor Mode Functions ---
+# These functions will be removed and replaced by monitor_mode_helper
+# def _run_command(...): ...
+# def _interface_exists(...): ...
+# def _is_in_monitor_mode(...): ...
+# def _activate_monitor_mode(...): ...
+# def _deactivate_monitor_mode(...): ...
 
 def cleanup(*_):
-    global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
-    if running:
-        running = False
-        if attack_process:
-            try: os.killpg(os.getpgid(attack_process.pid), signal.SIGTERM)
-            except: pass
-        
-        run_command("pkill hostapd", "Failed to kill hostapd", shell=True)
-        
-        if ORIGINAL_WIFI_INTERFACE:
-            print(f"Attempting to restore {ORIGINAL_WIFI_INTERFACE}...", file=sys.stderr)
-            run_command(f"ifconfig {WIFI_INTERFACE} down", f"Failed to bring down {WIFI_INTERFACE}", shell=True)
-            run_command(f"iwconfig {WIFI_INTERFACE} mode managed", f"Failed to set {WIFI_INTERFACE} to managed mode", shell=True)
-            run_command(f"ifconfig {WIFI_INTERFACE} up", f"Failed to bring up {WIFI_INTERFACE}", shell=True)
-            time.sleep(1)
-            
-            run_command(f"nmcli device set {ORIGINAL_WIFI_INTERFACE} managed yes", f"Failed to set {ORIGINAL_WIFI_INTERFACE} to managed", shell=True)
-            run_command(f"nmcli device connect {ORIGINAL_WIFI_INTERFACE}", f"Failed to connect {ORIGINAL_WIFI_INTERFACE}", shell=True)
-            time.sleep(5)
-            
-            run_command("systemctl restart NetworkManager", "Failed to restart NetworkManager", shell=True)
-            time.sleep(5)
-            
-            WIFI_INTERFACE = ORIGINAL_WIFI_INTERFACE
-            
-        if os.path.exists(TEMP_CONF_DIR): run_command(f"rm -rf {TEMP_CONF_DIR}", "Failed to remove temp config dir", shell=True)
+    global running
+    running = False
+    if rogue_ap_proc:
+        try: rogue_ap_proc.terminate()
+        except: pass
+    
+    if WIFI_INTERFACE: # Check if monitor mode was ever activated
+        print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE}...", file=sys.stderr)
+        success = monitor_mode_helper.deactivate_monitor_mode(WIFI_INTERFACE)
+        if success:
+            print(f"Successfully deactivated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
+        else:
+            print(f"ERROR: Failed to deactivate monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-def draw_message(lines, color="yellow"):
+def draw_message(message: str, color: str = "yellow"):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
-    y = 40
-    for line in lines:
-        bbox = d.textbbox((0, 0), line, font=FONT_TITLE)
-        w = bbox[2] - bbox[0]
-        x = (WIDTH - w) // 2
-        d.text((x, y), line, font=FONT_TITLE, fill=color)
-        y += 15
+    bbox = d.textbbox((0, 0), message, font=FONT_TITLE)
+    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    x = (WIDTH - w) // 2
+    y = (WIDTH - h) // 2
+    d.text((x, y), message, font=FONT_TITLE, fill=color)
     LCD.LCD_ShowImage(img, 0, 0)
 
 def draw_ui_main(params, selected_index):
@@ -168,11 +137,11 @@ def draw_ui_interface_selection(interfaces, current_selection):
     LCD.LCD_ShowImage(img, 0, 0)
 
 def select_interface_menu():
-    global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
+    global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE, status_msg
     
     available_interfaces = [iface for iface in get_available_interfaces() if iface.startswith('wlan')]
     if not available_interfaces:
-        draw_message(["No WiFi interfaces found!"], "red")
+        draw_message("No WiFi interfaces found!", "red")
         time.sleep(3)
         return False
 
@@ -195,19 +164,20 @@ def select_interface_menu():
         elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
             last_button_press_time = current_time
             selected_iface = available_interfaces[current_menu_selection]
-            draw_message([f"Activating {selected_iface}", "for Rogue AP..."], "yellow")
-            print(f"Attempting to set {selected_iface} as primary interface...", file=sys.stderr)
+            draw_message(f"Activating monitor\nmode on {selected_iface}...", "yellow")
+            print(f"Attempting to activate monitor mode on {selected_iface}...", file=sys.stderr)
             
-            if set_raspyjack_interface(selected_iface):
-                WIFI_INTERFACE = selected_iface
-                ORIGINAL_WIFI_INTERFACE = selected_iface # Store original for cleanup
-                draw_message([f"Interface set to", f"{WIFI_INTERFACE}"], "lime")
-                print(f"Successfully set {WIFI_INTERFACE} as primary interface.", file=sys.stderr)
+            ORIGINAL_WIFI_INTERFACE = selected_iface # Store original interface before activation
+            monitor_iface = monitor_mode_helper.activate_monitor_mode(selected_iface)
+            if monitor_iface:
+                WIFI_INTERFACE = monitor_iface
+                draw_message(f"Monitor mode active\non {WIFI_INTERFACE}", "lime")
+                print(f"Successfully activated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
                 time.sleep(2)
                 return True
             else:
-                draw_message(["ERROR:", "Failed to activate", "interface!"], "red")
-                print(f"ERROR: set_raspyjack_interface failed for {selected_iface}", file=sys.stderr)
+                draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
+                print(f"ERROR: monitor_mode_helper.activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
                 time.sleep(3)
                 return False
         elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
@@ -312,16 +282,17 @@ def start_attack():
     global attack_process, ORIGINAL_WIFI_INTERFACE, status_msg
     
     print(f"Attempting to activate {WIFI_INTERFACE} as primary interface...", file=sys.stderr)
-    if not set_raspyjack_interface(WIFI_INTERFACE):
-        print(f"ERROR: Failed to activate {WIFI_INTERFACE}", file=sys.stderr)
-        status_msg = "Failed to set interface!"
-        return False
+    # if not set_raspyjack_interface(WIFI_INTERFACE): # set_raspyjack_interface is not imported
+    #     print(f"ERROR: Failed to activate {WIFI_INTERFACE}", file=sys.stderr)
+    #     status_msg = "Failed to set interface!"
+    #     return False
     
-    run_command(f"nmcli device disconnect {WIFI_INTERFACE}", f"Failed to disconnect {WIFI_INTERFACE}", shell=True)
-    run_command(f"nmcli device set {WIFI_INTERFACE} managed off", f"Failed to set {WIFI_INTERFACE} to unmanaged", shell=True)
+    # Use direct commands as set_raspyjack_interface is not available here
+    subprocess.run(f"nmcli device disconnect {WIFI_INTERFACE} 2>/dev/null || true", shell=True)
+    subprocess.run(f"nmcli device set {WIFI_INTERFACE} managed off 2>/dev/null || true", shell=True)
     time.sleep(1)
     
-    run_command("pkill hostapd", "Failed to kill hostapd", shell=True)
+    subprocess.run("pkill hostapd", shell=True)
     
     os.makedirs(TEMP_CONF_DIR, exist_ok=True)
     hostapd_conf_path = os.path.join(TEMP_CONF_DIR, "hostapd.conf")

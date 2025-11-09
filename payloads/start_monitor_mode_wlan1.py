@@ -23,11 +23,11 @@ import time
 import signal
 import subprocess
 import threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(__file__), '..')) # Add parent directory for monitor_mode_helper
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
-from wifi.wifi_manager import WiFiManager
+import monitor_mode_helper
 
 TARGET_INTERFACE = "wlan1"
 MONITOR_INTERFACE = None
@@ -71,16 +71,15 @@ def main():
     global MONITOR_INTERFACE
     draw_message(["Activating monitor", f"mode on {TARGET_INTERFACE}...", "Please wait."], "yellow")
 
-    wifi_manager = WiFiManager()
     print(f"Attempting to activate monitor mode on {TARGET_INTERFACE}...", file=sys.stderr)
     try:
-        MONITOR_INTERFACE = wifi_manager.activate_monitor_mode(TARGET_INTERFACE)
+        MONITOR_INTERFACE = monitor_mode_helper.activate_monitor_mode(TARGET_INTERFACE)
         if MONITOR_INTERFACE:
             draw_message(["Monitor mode", "ACTIVE!", f"Interface: {MONITOR_INTERFACE}"], "lime")
             print(f"Successfully activated monitor mode on {MONITOR_INTERFACE}", file=sys.stderr)
         else:
             draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
-            print(f"ERROR: wifi_manager.activate_monitor_mode failed for {TARGET_INTERFACE}", file=sys.stderr)
+            print(f"ERROR: monitor_mode_helper.activate_monitor_mode failed for {TARGET_INTERFACE}", file=sys.stderr)
     except Exception as e:
         draw_message(["CRITICAL ERROR:", str(e)[:20]], "red")
         print(f"Critical error during monitor mode activation: {e}", file=sys.stderr)

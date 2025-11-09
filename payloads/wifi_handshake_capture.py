@@ -42,13 +42,15 @@ import os
 import time
 import signal
 import subprocess
-import threading
+import threading # Added threading import as it was missing
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from wifi.raspyjack_integration import get_available_interfaces
-from wifi.wifi_manager import WiFiManager
+import re
+import monitor_mode_helper
 
 WIFI_INTERFACE = None
 ORIGINAL_WIFI_INTERFACE = None
@@ -71,11 +73,15 @@ FONT = ImageFont.load_default()
 running = True
 attack_thread = None
 status_msg = "Press OK to start"
-wifi_manager = WiFiManager()
-current_bssid_input = TARGET_BSSID
-bssid_input_cursor_pos = 0
-current_essid_input = TARGET_ESSID
-essid_input_cursor_pos = 0
+# wifi_manager = WiFiManager() # No longer needed for monitor mode
+
+# --- Local Monitor Mode Functions ---
+# These functions will be removed and replaced by monitor_mode_helper
+# def _run_command(...): ...
+# def _interface_exists(...): ...
+# def _is_in_monitor_mode(...): ...
+# def _activate_monitor_mode(...): ...
+# def _deactivate_monitor_mode(...): ...
 
 def cleanup(*_):
     global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
@@ -84,9 +90,9 @@ def cleanup(*_):
         try: os.kill(attack_thread.pid, signal.SIGTERM) 
         except: pass
     
-    if WIFI_INTERFACE and wifi_manager and ORIGINAL_WIFI_INTERFACE:
-        print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE} and restoring {ORIGINAL_WIFI_INTERFACE}...", file=sys.stderr)
-        success = wifi_manager.deactivate_monitor_mode(WIFI_INTERFACE)
+    if WIFI_INTERFACE: # Check if monitor mode was ever activated
+        print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE}...", file=sys.stderr)
+        success = monitor_mode_helper.deactivate_monitor_mode(WIFI_INTERFACE)
         if success:
             print(f"Successfully deactivated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
         else:
@@ -170,17 +176,17 @@ def select_interface_menu():
             draw_message([f"Activating monitor", f"mode on {selected_iface}..."], "yellow")
             print(f"Attempting to activate monitor mode on {selected_iface}...", file=sys.stderr)
             
-            monitor_iface = wifi_manager.activate_monitor_mode(selected_iface)
+            ORIGINAL_WIFI_INTERFACE = selected_iface # Store original interface before activation
+            monitor_iface = monitor_mode_helper.activate_monitor_mode(selected_iface)
             if monitor_iface:
                 WIFI_INTERFACE = monitor_iface
-                ORIGINAL_WIFI_INTERFACE = selected_iface
                 draw_message([f"Monitor mode active", f"on {WIFI_INTERFACE}"], "lime")
                 print(f"Successfully activated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
                 time.sleep(2)
                 return True
             else:
                 draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
-                print(f"ERROR: wifi_manager.activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
+                print(f"ERROR: monitor_mode_helper.activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
                 time.sleep(3)
                 return False
         elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
@@ -248,6 +254,7 @@ def handle_text_input_logic(initial_text, prompt, char_set):
                 current_char = char_list[cursor_pos_ref]
                 
                 try:
+                    char_set = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()-_=+"
                     char_index = char_set.index(current_char)
                     if btn == "UP":
                         char_index = (char_index + 1) % len(char_set)
@@ -277,7 +284,7 @@ def get_user_number(prompt, initial_value, min_val=1, max_val=165):
             time.sleep(BUTTON_DEBOUNCE_TIME)
         elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
             last_button_press_time = current_time
-            value = max(min_val, value - 1)
+            value = max(1, value - 1)
             time.sleep(BUTTON_DEBOUNCE_TIME)
         elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
             last_button_press_time = current_time
@@ -389,8 +396,9 @@ if __name__ == '__main__':
                             TARGET_ESSID = new_essid
                     elif key == "Channel":
                         new_channel = get_user_number("Channel", int(params[key]), 1, 165)
-                        params[key] = str(new_channel)
-                        TARGET_CHANNEL = str(new_channel)
+                        if new_channel:
+                            params[key] = str(new_channel)
+                            TARGET_CHANNEL = str(new_channel)
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 elif GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time

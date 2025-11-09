@@ -27,13 +27,14 @@ import subprocess
 import re
 import threading
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from wifi.raspyjack_integration import (
     get_best_interface,
-    set_raspyjack_interface
 )
+import monitor_mode_helper
 
 PINS: dict[str, int] = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
@@ -69,47 +70,13 @@ def cleanup(*_):
             except ProcessLookupError:
                 pass
         
-        if ORIGINAL_WIFI_INTERFACE:
-            prepare_interface(False)
+        if WIFI_INTERFACE: # Use WIFI_INTERFACE as it holds the current monitor interface
+            monitor_mode_helper.deactivate_monitor_mode(WIFI_INTERFACE)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-def prepare_interface(enable: bool):
-    global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
-    try:
-        if enable:
-            ORIGINAL_WIFI_INTERFACE = WIFI_INTERFACE
-            
-            subprocess.run(f"nmcli device disconnect {WIFI_INTERFACE} 2>/dev/null || true", shell=True)
-            subprocess.run(f"nmcli device set {WIFI_INTERFACE} managed off 2>/dev/null || true", shell=True)
-            time.sleep(1)
-            
-            subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True, check=True)
-            subprocess.run(f"iwconfig {WIFI_INTERFACE} mode monitor", shell=True, check=True)
-            subprocess.run(f"ifconfig {WIFI_INTERFACE} up", shell=True, check=True)
-            
-            result = subprocess.check_output(f"iwconfig {WIFI_INTERFACE}", shell=True).decode()
-            return "Mode:Monitor" in result
-        else:
-            subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True)
-            subprocess.run(f"iwconfig {WIFI_INTERFACE} mode managed", shell=True)
-            subprocess.run(f"ifconfig {WIFI_INTERFACE} up", shell=True)
-            time.sleep(1)
-            
-            if ORIGINAL_WIFI_INTERFACE:
-                subprocess.run(f"nmcli device set {ORIGINAL_WIFI_INTERFACE} managed yes 2>/dev/null || true", shell=True)
-                subprocess.run(f"nmcli device connect {ORIGINAL_WIFI_INTERFACE} 2>/dev/null || true", shell=True)
-                time.sleep(5)
-                
-                subprocess.run("systemctl restart NetworkManager 2>/dev/null || true", shell=True)
-                time.sleep(5)
-                
-                WIFI_INTERFACE = ORIGINAL_WIFI_INTERFACE
-            return True
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        print(f"Error preparing interface: {e}", file=sys.stderr)
-        return False
+
 
 def run_attack():
     global attack_process, status_lines
@@ -192,10 +159,13 @@ if __name__ == "__main__":
             raise SystemExit("hcxdumptool not found")
 
         draw_message("Preparing interface...")
-        if not prepare_interface(True):
+        ORIGINAL_WIFI_INTERFACE = WIFI_INTERFACE # Store original interface
+        activated_interface = monitor_mode_helper.activate_monitor_mode(WIFI_INTERFACE)
+        if not activated_interface:
             draw_message("Monitor Mode FAILED", "red")
             time.sleep(3)
             raise SystemExit("Failed to enable monitor mode")
+        WIFI_INTERFACE = activated_interface # Update to the actual monitor interface
 
         while running:
             draw_ui("ACTIVE" if is_attacking else "STOPPED")

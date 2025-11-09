@@ -35,9 +35,10 @@ from PIL import Image, ImageDraw, ImageFont
 from scapy.all import *
 conf.verb = 0
 from wifi.raspyjack_integration import get_available_interfaces
-from wifi.wifi_manager import WiFiManager
+from monitor_mode_helper import activate_monitor_mode, deactivate_monitor_mode
 
 WIFI_INTERFACE = None
+ORIGINAL_WIFI_INTERFACE = None # Added for consistent cleanup
 SSID_PREFIX = "Free_WiFi_"
 NUM_SSIDS = 10
 BEACON_INTERVAL = 0.1
@@ -56,17 +57,16 @@ flood_thread = None
 ui_lock = threading.Lock()
 status_msg = "Press OK to start"
 current_menu_selection = 0
-wifi_manager = WiFiManager()
 
 def cleanup(*_):
-    global running
+    global running, ORIGINAL_WIFI_INTERFACE # Added ORIGINAL_WIFI_INTERFACE to global
     running = False
     if flood_thread and flood_thread.is_alive():
         flood_thread.join(timeout=1)
     
-    if WIFI_INTERFACE and wifi_manager:
+    if WIFI_INTERFACE: # Check if monitor mode was ever activated
         print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE}...", file=sys.stderr)
-        success = wifi_manager.deactivate_monitor_mode(WIFI_INTERFACE)
+        success = deactivate_monitor_mode(WIFI_INTERFACE)
         if success:
             print(f"Successfully deactivated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
         else:
@@ -116,7 +116,7 @@ def draw_ui_interface_selection(interfaces, current_selection):
     LCD.LCD_ShowImage(img, 0, 0)
 
 def select_interface_menu():
-    global WIFI_INTERFACE, current_menu_selection, status_msg
+    global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE, current_menu_selection, status_msg
     
     available_interfaces = [iface for iface in get_available_interfaces() if iface.startswith('wlan')]
     if not available_interfaces:
@@ -146,7 +146,8 @@ def select_interface_menu():
             draw_message(f"Activating monitor\nmode on {selected_iface}...", "yellow")
             print(f"Attempting to activate monitor mode on {selected_iface}...", file=sys.stderr)
             
-            monitor_iface = wifi_manager.activate_monitor_mode(selected_iface)
+            ORIGINAL_WIFI_INTERFACE = selected_iface # Store original interface before activation
+            monitor_iface = activate_monitor_mode(selected_iface)
             if monitor_iface:
                 WIFI_INTERFACE = monitor_iface
                 draw_message(f"Monitor mode active\non {WIFI_INTERFACE}", "lime")
@@ -155,7 +156,7 @@ def select_interface_menu():
                 return True
             else:
                 draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
-                print(f"ERROR: wifi_manager.activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
+                print(f"ERROR: activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
                 time.sleep(3)
                 return False
         elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):

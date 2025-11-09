@@ -30,49 +30,50 @@ import time
 import signal
 import subprocess
 import threading
-from collections import OrderedDict
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from scapy.all import *
+conf.verb = 0
 from wifi.raspyjack_integration import get_available_interfaces
-from wifi.wifi_manager import WiFiManager
-
-PINS: dict[str, int] = {
-    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
-    "KEY1": 21, "KEY2": 20, "KEY3": 16,
-}
-
-GPIO.setmode(GPIO.BCM)
-for pin in PINS.values():
-    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-LCD = LCD_1in44.LCD()
-LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-FONT = ImageFont.load_default()
-FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+import re
+import monitor_mode_helper
 
 WIFI_INTERFACE = None
 ORIGINAL_WIFI_INTERFACE = None
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
-LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "ProbeRequests")
+PROBES = {} # {MAC: [SSID1, SSID2, ...]}
+
+PINS = { "UP": 6, "DOWN": 19, "OK": 13, "KEY3": 16 }
+GPIO.setmode(GPIO.BCM)
+for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+LCD = LCD_1in44.LCD()
+LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
+FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+FONT = ImageFont.load_default()
+
 running = True
 sniff_thread = None
-probed_ssids = OrderedDict()
 ui_lock = threading.Lock()
-selected_index = 0
-wifi_manager = WiFiManager()
+status_msg = "Press OK to start"
+current_menu_selection = 0
+selected_probe_index = 0
+# wifi_manager = WiFiManager() # No longer needed for monitor mode
+
+# --- Local Monitor Mode Functions ---
+
 
 def cleanup(*_):
-    global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
-    if running:
-        running = False
+    global running
+    running = False
+    if sniff_thread and sniff_thread.is_alive():
+        sniff_thread.join(timeout=1)
     
-    if WIFI_INTERFACE and wifi_manager and ORIGINAL_WIFI_INTERFACE:
-        print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE} and restoring {ORIGINAL_WIFI_INTERFACE}...", file=sys.stderr)
-        success = wifi_manager.deactivate_monitor_mode(WIFI_INTERFACE)
+    if WIFI_INTERFACE: # Check if monitor mode was ever activated
+        print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE}...", file=sys.stderr)
+        success = monitor_mode_helper.deactivate_monitor_mode(WIFI_INTERFACE)
         if success:
             print(f"Successfully deactivated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
         else:
@@ -81,8 +82,42 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
+def draw_message(message: str, color: str = "yellow"):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ImageDraw.Draw(img)
+    bbox = d.textbbox((0, 0), message, font=FONT_TITLE)
+    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    x = (WIDTH - w) // 2
+    y = (WIDTH - h) // 2
+    d.text((x, y), message, font=FONT_TITLE, fill=color)
+    LCD.LCD_ShowImage(img, 0, 0)
+
+def draw_ui_main():
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ImageDraw.Draw(img)
+    d.text((5, 5), "WiFi Probe Sniffer", font=FONT_TITLE, fill="#00FF00")
+    d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
+
+    with ui_lock:
+        if not PROBES:
+            d.text((10, 60), status_msg, font=FONT, fill="yellow")
+        else:
+            sorted_probes = sorted(PROBES.items(), key=lambda item: len(item[1]), reverse=True)
+            start_index = max(0, selected_probe_index - 4)
+            end_index = min(len(sorted_probes), start_index + 8)
+            y_pos = 25
+            for i in range(start_index, end_index):
+                color = "yellow" if i == selected_probe_index else "white"
+                mac, ssids = sorted_probes[i]
+                d.text((5, y_pos), f"{mac}", font=FONT, fill=color)
+                d.text((5, y_pos + 10), f"  {', '.join(ssids[:2])}", font=FONT, fill=color)
+                y_pos += 22 # Two lines per entry
+
+    d.text((5, 115), "OK=Start | KEY3=Exit", font=FONT, fill="cyan")
+    LCD.LCD_ShowImage(img, 0, 0)
+
 def draw_ui_interface_selection(interfaces, current_selection):
-    img = Image.new("RGB", (128, 128), "black")
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "Select Interface", font=FONT_TITLE, fill="cyan")
     d.line([(0, 22), (128, 22)], fill="cyan", width=1)
@@ -97,11 +132,11 @@ def draw_ui_interface_selection(interfaces, current_selection):
     LCD.LCD_ShowImage(img, 0, 0)
 
 def select_interface_menu():
-    global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
+    global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE, current_menu_selection, status_msg
     
     available_interfaces = [iface for iface in get_available_interfaces() if iface.startswith('wlan')]
     if not available_interfaces:
-        draw_message(["No WiFi interfaces found!"], "red")
+        draw_message("No WiFi interfaces found!", "red")
         time.sleep(3)
         return False
 
@@ -124,20 +159,20 @@ def select_interface_menu():
         elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
             last_button_press_time = current_time
             selected_iface = available_interfaces[current_menu_selection]
-            draw_message([f"Activating monitor", f"mode on {selected_iface}..."], "yellow")
+            draw_message(f"Activating monitor\nmode on {selected_iface}...", "yellow")
             print(f"Attempting to activate monitor mode on {selected_iface}...", file=sys.stderr)
             
-            monitor_iface = wifi_manager.activate_monitor_mode(selected_iface)
+            ORIGINAL_WIFI_INTERFACE = selected_iface # Store original interface before activation
+            monitor_iface = monitor_mode_helper.activate_monitor_mode(selected_iface)
             if monitor_iface:
                 WIFI_INTERFACE = monitor_iface
-                ORIGINAL_WIFI_INTERFACE = selected_iface
-                draw_message([f"Monitor mode active", f"on {WIFI_INTERFACE}"], "lime")
+                draw_message(f"Monitor mode active\non {WIFI_INTERFACE}", "lime")
                 print(f"Successfully activated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
                 time.sleep(2)
                 return True
             else:
                 draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
-                print(f"ERROR: wifi_manager.activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
+                print(f"ERROR: _activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
                 time.sleep(3)
                 return False
         elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
