@@ -300,56 +300,58 @@ def run_scan(interface):
             scan_status = "Scan finished."
 
 if __name__ == "__main__":
-            last_button_press_time = 0
-            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    current_screen = "main"
+    try:
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
     
-            selected_interface = select_interface_menu()
-            if not selected_interface:
-                show_message(["No interface", "selected!", "Exiting..."])
-                time.sleep(3)
-                sys.exit(1)
+        selected_interface = select_interface_menu()
+        if not selected_interface:
+            show_message(["No interface", "selected!", "Exiting..."])
+            time.sleep(3)
+            sys.exit(1)
     
-            scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
-            scan_thread.start()
+        scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
+        scan_thread.start()
     
-            while running:
-                current_time = time.time()
+        while running:
+            current_time = time.time()
+            
+            if current_screen == "main":
+                draw_ui("main")
                 
-                if current_screen == "main":
-                    draw_ui("main")
-                    
-                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        cleanup()
-                        break
-                    
-                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
-                        scan_thread.start()
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
-                    
-                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        current_ports_input = ", ".join(map(str, WEB_PORTS))
-                        current_screen = "ports_input"
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    cleanup()
+                    break
                 
-                elif current_screen == "ports_input":
-                    char_set = "0123456789,"
-                    new_ports_str = handle_text_input_logic(current_ports_input, "ports_input", char_set)
-                    if new_ports_str:
-                        try:
-                            WEB_PORTS = [int(p.strip()) for p in new_ports_str.split(',') if p.strip().isdigit()]
-                            if not WEB_PORTS:
-                                WEB_PORTS = [80, 8080, 443, 8443]
-                        except ValueError:
-                            show_message(["Invalid Ports!", "Use comma-sep", "numbers."])
-                            time.sleep(3)
-                    current_screen = "main"
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
+                    scan_thread.start()
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                time.sleep(0.1)
+                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    current_ports_input = ", ".join(map(str, WEB_PORTS))
+                    current_screen = "ports_input"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            elif current_screen == "ports_input":
+                char_set = "0123456789,"
+                new_ports_str = handle_text_input_logic(current_ports_input, "ports_input", char_set)
+                if new_ports_str:
+                    try:
+                        WEB_PORTS = [int(p.strip()) for p in new_ports_str.split(',') if p.strip().isdigit()]
+                        if not WEB_PORTS:
+                            WEB_PORTS = [80, 8080, 443, 8443]
+                    except ValueError:
+                        show_message(["Invalid Ports!", "Use comma-sep", "numbers."])
+                        time.sleep(3)
+                current_screen = "main"
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            time.sleep(0.1)
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as e:

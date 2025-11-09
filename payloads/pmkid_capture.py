@@ -103,8 +103,7 @@ def run_attack():
         if len(parts) > 1:
             status_text = parts[1].strip()
             
-            ap_count = re.search(r'(\d+)\s+/
-\s*(\d+)\s+APs', status_text)
+            ap_count = re.search(r'(\d+)\s+/\s*(\d+)\s+APs', status_text)
             pmkid_count = re.search(r'(\d+)\s+PMKIDs', status_text)
             
             ap_str = f"APs: {ap_count.group(2)}" if ap_count else "APs: N/A"

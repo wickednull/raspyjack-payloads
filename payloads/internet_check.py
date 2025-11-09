@@ -205,40 +205,42 @@ def run_test():
     draw_ui("main", results=results, summary=summary)
 
 if __name__ == "__main__":
-            last_button_press_time = 0
-            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    current_screen = "main"
+    try:
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
     
-            while running:
-                current_time = time.time()
+        while running:
+            current_time = time.time()
+            
+            if current_screen == "main":
+                draw_ui("main", results=None, summary="Ready")
                 
-                if current_screen == "main":
-                    draw_ui("main", results=None, summary="Ready")
-                    
-                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        cleanup()
-                        break
-                    
-                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        run_test()
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
-                    
-                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        current_hosts_input = ", ".join(HOSTS_TO_CHECK)
-                        current_screen = "hosts_input"
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    cleanup()
+                    break
                 
-                elif current_screen == "hosts_input":
-                    char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-, "
-                    new_hosts_str = handle_text_input_logic(current_hosts_input, "hosts_input", char_set)
-                    if new_hosts_str:
-                        HOSTS_TO_CHECK = [h.strip() for h in new_hosts_str.split(',') if h.strip()]
-                    current_screen = "main"
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    run_test()
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                time.sleep(0.1)
+                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    current_hosts_input = ", ".join(HOSTS_TO_CHECK)
+                    current_screen = "hosts_input"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            elif current_screen == "hosts_input":
+                char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-, "
+                new_hosts_str = handle_text_input_logic(current_hosts_input, "hosts_input", char_set)
+                if new_hosts_str:
+                    HOSTS_TO_CHECK = [h.strip() for h in new_hosts_str.split(',') if h.strip()]
+                current_screen = "main"
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            time.sleep(0.1)
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as e:

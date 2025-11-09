@@ -271,7 +271,6 @@ if __name__ == "__main__":
                     ETH_INTERFACE = new_iface
                     # Restart sniffer with new interface
                     if sniff_thread and sniff_thread.is_alive():
-                        global sniff_thread
                         running_temp = running
                         running = False
                         sniff_thread.join(timeout=1)

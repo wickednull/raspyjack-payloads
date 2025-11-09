@@ -254,56 +254,58 @@ def run_scan(interface):
         print(f"Ping Sweep failed: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
-            last_button_press_time = 0
-            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    current_screen = "main"
+    try:
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
     
-            selected_interface = select_interface_menu()
-            if not selected_interface:
-                show_message(["No interface", "selected!", "Exiting..."], "red")
-                time.sleep(3)
-                sys.exit(1)
+        selected_interface = select_interface_menu()
+        if not selected_interface:
+            show_message(["No interface", "selected!", "Exiting..."], "red")
+            time.sleep(3)
+            sys.exit(1)
     
-            while running:
-                current_time = time.time()
+        while running:
+            current_time = time.time()
+            
+            if current_screen == "main":
+                draw_ui("main")
                 
-                if current_screen == "main":
-                    draw_ui("main")
-                    
-                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        cleanup()
-                        break
-                    
-                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        if not (scan_thread and scan_thread.is_alive()):
-                            scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
-                            scan_thread.start()
-                        current_screen = "scanning"
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
-                    
-                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        show_message(["Interface selection", "is now menu-driven."], "yellow")
-                        time.sleep(2)
-                        current_screen = "main"
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    cleanup()
+                    break
                 
-                elif current_screen == "iface_input":
-                    current_screen = "main"
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    if not (scan_thread and scan_thread.is_alive()):
+                        scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
+                        scan_thread.start()
+                    current_screen = "scanning"
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                elif current_screen == "scanning":
-                    draw_ui("scanning")
-                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        cleanup()
-                        break
-                    if not (scan_thread and scan_thread.is_alive()):
-                        current_screen = "main"
-                    time.sleep(0.1)
-    
+                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    show_message(["Interface selection", "is now menu-driven."], "yellow")
+                    time.sleep(2)
+                    current_screen = "main"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            elif current_screen == "iface_input":
+                current_screen = "main"
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            elif current_screen == "scanning":
+                draw_ui("scanning")
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    cleanup()
+                    break
+                if not (scan_thread and scan_thread.is_alive()):
+                    current_screen = "main"
                 time.sleep(0.1)
+    
+            time.sleep(0.1)
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as e:

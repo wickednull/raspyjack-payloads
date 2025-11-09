@@ -44,14 +44,13 @@ from PIL import Image, ImageDraw, ImageFont
 WIFI_INTERFACE = "wlan1" # Hardcoded to wlan1 as per user request for evil twin attacks
 FAKE_AP_SSID = "Free_VPN_Access"
 FAKE_AP_CHANNEL = "1"
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
-CAPTIVE_PORTAL_BASE_PATH = os.path.join(RASPYJACK_DIR, "DNSSpoof", "sites")
-CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, "phish_vpn")
+CAPTIVE_PORTAL_BASE_PATH = "/root/Raspyjack/DNSSpoof/sites"
+CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, "wifi")
 LOOT_FILE = os.path.join(CAPTIVE_PORTAL_PATH, "loot.txt")
 TEMP_CONF_DIR = "/tmp/raspyjack_eviltwin_vpn/"
 
-CHAR_SET = " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+\\[]{};:'",<.>/?`~"
-current_html_file = "phish_vpn"
+CHAR_SET = ' abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+\\[]{};:"<.>/?`~'
+current_html_file = "wifi"
 html_files_list = []
 html_file_index = 0
 

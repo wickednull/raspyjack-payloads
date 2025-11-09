@@ -259,63 +259,65 @@ def run_scan(interface):
         print(f"smbclient scan failed: {e}", file=sys.stderr)
 
 if __name__ == '__main__':
-            last_button_press_time = 0
-            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    current_screen = "main"
+    try:
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
     
-            if subprocess.run("which smbclient", shell=True, capture_output=True).returncode != 0:
-                show_message(["ERROR:", "smbclient", "not found!"], "red")
-                time.sleep(3)
-                sys.exit(1)
+        if subprocess.run("which smbclient", shell=True, capture_output=True).returncode != 0:
+            show_message(["ERROR:", "smbclient", "not found!"], "red")
+            time.sleep(3)
+            sys.exit(1)
     
-            selected_interface = select_interface_menu()
-            if not selected_interface:
-                show_message(["No interface", "selected!", "Exiting..."], "red")
-                time.sleep(3)
-                sys.exit(1)
+        selected_interface = select_interface_menu()
+        if not selected_interface:
+            show_message(["No interface", "selected!", "Exiting..."], "red")
+            time.sleep(3)
+            sys.exit(1)
     
-            while running:
-                current_time = time.time()
+        while running:
+            current_time = time.time()
+            
+            if current_screen == "main":
+                draw_ui("main")
                 
-                if current_screen == "main":
-                    draw_ui("main")
-                    
-                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        cleanup()
-                        break
-                    
-                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        run_scan(selected_interface)
-                        current_screen = "main"
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
-                    
-                    if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        if shares:
-                            selected_index = (selected_index - 1) % len(shares)
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
-                    elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        if shares:
-                            selected_index = (selected_index + 1) % len(shares)
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
-                    
-                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                        last_button_press_time = current_time
-                        current_ip_input = TARGET_IP
-                        current_screen = "ip_input"
-                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    cleanup()
+                    break
                 
-                elif current_screen == "ip_input":
-                    char_set = "0123456789."
-                    new_ip = handle_ip_input_logic(current_ip_input)
-                    if new_ip:
-                        TARGET_IP = new_ip
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    run_scan(selected_interface)
                     current_screen = "main"
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                time.sleep(0.1)
+                if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    if shares:
+                        selected_index = (selected_index - 1) % len(shares)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    if shares:
+                        selected_index = (selected_index + 1) % len(shares)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                
+                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    current_ip_input = TARGET_IP
+                    current_screen = "ip_input"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            elif current_screen == "ip_input":
+                char_set = "0123456789."
+                new_ip = handle_ip_input_logic(current_ip_input)
+                if new_ip:
+                    TARGET_IP = new_ip
+                current_screen = "main"
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            time.sleep(0.1)
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as e:
