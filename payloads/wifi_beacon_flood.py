@@ -29,6 +29,7 @@ import signal
 import subprocess
 import threading
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -75,14 +76,18 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-def draw_message(message: str, color: str = "yellow"):
-    img = Image.new("RGB", (128, 128), "black")
+def draw_message(lines, color="yellow"):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
-    bbox = d.textbbox((0, 0), message, font=FONT_TITLE)
-    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    x = (128 - w) // 2
-    y = (128 - h) // 2
-    d.text((x, y), message, font=FONT_TITLE, fill=color)
+    font = FONT_TITLE
+    y = 40
+    message_list = lines if isinstance(lines, list) else [lines]
+    for line in message_list:
+        bbox = d.textbbox((0, 0), line, font=font)
+        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        x = (WIDTH - w) // 2
+        d.text((x, y), line, font=font, fill=color)
+        y += h + 5
     LCD.LCD_ShowImage(img, 0, 0)
 
 def draw_ui_main():
@@ -120,7 +125,7 @@ def select_interface_menu():
     
     available_interfaces = [iface for iface in get_available_interfaces() if iface.startswith('wlan')]
     if not available_interfaces:
-        draw_message("No WiFi interfaces found!", "red")
+        draw_message(["No WiFi", "interfaces found!"], "red")
         time.sleep(3)
         return False
 
@@ -143,20 +148,20 @@ def select_interface_menu():
         elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
             last_button_press_time = current_time
             selected_iface = available_interfaces[current_menu_selection]
-            draw_message(f"Activating monitor\nmode on {selected_iface}...", "yellow")
+            draw_message([f"Activating monitor", f"mode on {selected_iface}...",], "yellow")
             print(f"Attempting to activate monitor mode on {selected_iface}...", file=sys.stderr)
             
             ORIGINAL_WIFI_INTERFACE = selected_iface # Store original interface before activation
             monitor_iface = activate_monitor_mode(selected_iface)
             if monitor_iface:
                 WIFI_INTERFACE = monitor_iface
-                draw_message(f"Monitor mode active\non {WIFI_INTERFACE}", "lime")
+                draw_message([f"Monitor mode active", f"on {WIFI_INTERFACE}"], "lime")
                 print(f"Successfully activated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
                 time.sleep(2)
                 return True
             else:
-                draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
-                print(f"ERROR: activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
+                draw_message(["ERROR:", "Monitor mode failed!", "Check stderr for details."], "red")
+                print(f"ERROR: activate_monitor_mode failed for {selected_iface}. See stderr for details from helper.", file=sys.stderr)
                 time.sleep(3)
                 return False
         elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
@@ -205,7 +210,7 @@ def beacon_flood():
 if __name__ == "__main__":
     try:
         if not select_interface_menu():
-            draw_message("No interface selected\nor monitor mode failed.", "red")
+            draw_message(["No interface selected", "or monitor mode failed."], "red")
             time.sleep(3)
             raise SystemExit("No interface selected or monitor mode failed.")
 

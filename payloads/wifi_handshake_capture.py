@@ -185,8 +185,8 @@ def select_interface_menu():
                 time.sleep(2)
                 return True
             else:
-                draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
-                print(f"ERROR: monitor_mode_helper.activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
+                draw_message(["ERROR:", "Monitor mode failed!", "Check stderr for details."], "red")
+                print(f"ERROR: monitor_mode_helper.activate_monitor_mode failed for {selected_iface}. See stderr for details from helper.", file=sys.stderr)
                 time.sleep(3)
                 return False
         elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
@@ -199,14 +199,12 @@ def handle_text_input_logic(initial_text, prompt, char_set):
     global current_bssid_input, bssid_input_cursor_pos, current_essid_input, essid_input_cursor_pos
     
     if prompt == "BSSID":
-        current_input_ref = current_bssid_input
-        cursor_pos_ref = bssid_input_cursor_pos
+        current_input_ref = initial_text
+        cursor_pos_ref = len(initial_text) - 1
     else: # ESSID
-        current_input_ref = current_essid_input
-        cursor_pos_ref = essid_input_cursor_pos
+        current_input_ref = initial_text
+        cursor_pos_ref = len(initial_text) - 1
 
-    current_input_ref = initial_text
-    cursor_pos_ref = len(initial_text) - 1
     
     while running:
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")

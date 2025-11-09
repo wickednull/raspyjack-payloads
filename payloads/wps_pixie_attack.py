@@ -155,8 +155,8 @@ def select_interface_menu():
                 time.sleep(2)
                 return True
             else:
-                draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
-                print(f"ERROR: wifi_manager.activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
+                draw_message(["ERROR:", "Monitor mode failed!", "Check stderr for details."], "red")
+                print(f"ERROR: monitor_mode_helper.activate_monitor_mode failed for {selected_iface}. See stderr for details from helper.", file=sys.stderr)
                 time.sleep(3)
                 return False
         elif GPIO.input(PINS["KEY3"]) == 0:

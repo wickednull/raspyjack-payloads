@@ -43,7 +43,7 @@ import monitor_mode_helper
 
 WIFI_INTERFACE = None
 ORIGINAL_WIFI_INTERFACE = None
-PROBES = {} # {MAC: [SSID1, SSID2, ...]}
+PROBES: dict[str, set[str]] = {}
 
 PINS = { "UP": 6, "DOWN": 19, "OK": 13, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
@@ -82,17 +82,21 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-def draw_message(message: str, color: str = "yellow"):
+def draw_message(lines, color="yellow"):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
-    bbox = d.textbbox((0, 0), message, font=FONT_TITLE)
-    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    x = (WIDTH - w) // 2
-    y = (WIDTH - h) // 2
-    d.text((x, y), message, font=FONT_TITLE, fill=color)
+    font = FONT_TITLE
+    y = 40
+    message_list = lines if isinstance(lines, list) else [lines]
+    for line in message_list:
+        bbox = d.textbbox((0, 0), line, font=font)
+        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        x = (WIDTH - w) // 2
+        d.text((x, y), line, font=font, fill=color)
+        y += h + 5
     LCD.LCD_ShowImage(img, 0, 0)
 
-def draw_ui_main():
+def draw_ui():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "WiFi Probe Sniffer", font=FONT_TITLE, fill="#00FF00")
@@ -102,18 +106,36 @@ def draw_ui_main():
         if not PROBES:
             d.text((10, 60), status_msg, font=FONT, fill="yellow")
         else:
-            sorted_probes = sorted(PROBES.items(), key=lambda item: len(item[1]), reverse=True)
-            start_index = max(0, selected_probe_index - 4)
-            end_index = min(len(sorted_probes), start_index + 8)
+            # Sort by number of SSIDs, then by MAC address
+            sorted_probes = sorted(PROBES.items(), key=lambda item: (len(item[1]), item[0]), reverse=True)
+            
+            # Calculate visible range for scrolling
+            start_index = max(0, selected_probe_index - 2) # Show 2 items above selected
+            end_index = min(len(sorted_probes), start_index + 3) # Show 3 items (MAC + 2 SSIDs)
+
             y_pos = 25
             for i in range(start_index, end_index):
-                color = "yellow" if i == selected_probe_index else "white"
+                if y_pos > HEIGHT - 30: # Prevent drawing off-screen
+                    break
+                
                 mac, ssids = sorted_probes[i]
-                d.text((5, y_pos), f"{mac}", font=FONT, fill=color)
-                d.text((5, y_pos + 10), f"  {', '.join(ssids[:2])}", font=FONT, fill=color)
-                y_pos += 22 # Two lines per entry
+                
+                text_color = "yellow" if i == selected_probe_index else "white"
+                
+                # Display MAC address
+                d.text((5, y_pos), f"{mac}", font=FONT, fill=text_color)
+                y_pos += 11
+                
+                # Display associated SSIDs (up to 2)
+                for j, ssid in enumerate(list(ssids)[:2]):
+                    if y_pos > HEIGHT - 30:
+                        break
+                    d.text((10, y_pos), f"- {ssid[:16]}", font=FONT, fill=text_color)
+                    y_pos += 11
+                
+                y_pos += 5 # Small gap between entries
 
-    d.text((5, 115), "OK=Start | KEY3=Exit", font=FONT, fill="cyan")
+    d.text((5, 115), "UP/DOWN=Scroll | KEY3=Exit", font=FONT, fill="cyan")
     LCD.LCD_ShowImage(img, 0, 0)
 
 def draw_ui_interface_selection(interfaces, current_selection):
@@ -136,7 +158,7 @@ def select_interface_menu():
     
     available_interfaces = [iface for iface in get_available_interfaces() if iface.startswith('wlan')]
     if not available_interfaces:
-        draw_message("No WiFi interfaces found!", "red")
+        draw_message(["No WiFi", "interfaces found!"], "red")
         time.sleep(3)
         return False
 
@@ -159,20 +181,20 @@ def select_interface_menu():
         elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
             last_button_press_time = current_time
             selected_iface = available_interfaces[current_menu_selection]
-            draw_message(f"Activating monitor\nmode on {selected_iface}...", "yellow")
+            draw_message([f"Activating monitor", f"mode on {selected_iface}...",], "yellow")
             print(f"Attempting to activate monitor mode on {selected_iface}...", file=sys.stderr)
             
             ORIGINAL_WIFI_INTERFACE = selected_iface # Store original interface before activation
             monitor_iface = monitor_mode_helper.activate_monitor_mode(selected_iface)
             if monitor_iface:
                 WIFI_INTERFACE = monitor_iface
-                draw_message(f"Monitor mode active\non {WIFI_INTERFACE}", "lime")
+                draw_message([f"Monitor mode active", f"on {WIFI_INTERFACE}"], "lime")
                 print(f"Successfully activated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
                 time.sleep(2)
                 return True
             else:
-                draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
-                print(f"ERROR: _activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
+                draw_message(["ERROR:", "Monitor mode failed!", "Check stderr for details."], "red")
+                print(f"ERROR: monitor_mode_helper.activate_monitor_mode failed for {selected_iface}. See stderr for details from helper.", file=sys.stderr)
                 time.sleep(3)
                 return False
         elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
@@ -183,12 +205,15 @@ def select_interface_menu():
 
 def packet_handler(pkt):
     if pkt.haslayer(Dot11ProbeReq):
+        mac_address = pkt.addr2
         ssid = pkt[Dot11Elt].info.decode(errors="ignore")
-        if ssid:
+        if mac_address and ssid:
             with ui_lock:
-                if ssid not in probed_ssids:
-                    probed_ssids[ssid] = time.strftime("%Y-%m-%d %H:%M:%S")
-                    save_loot()
+                if mac_address not in PROBES:
+                    PROBES[mac_address] = set()
+                if ssid not in PROBES[mac_address]:
+                    PROBES[mac_address].add(ssid)
+                    save_loot() # Save loot whenever a new SSID is found for a MAC
 
 def sniffer_worker():
     while running:
@@ -198,8 +223,11 @@ def save_loot():
     os.makedirs(LOOT_DIR, exist_ok=True)
     loot_file = os.path.join(LOOT_DIR, "probed_ssids.txt")
     with open(loot_file, "w") as f:
-        for ssid, ts in probed_ssids.items():
-            f.write(f"{ts} - {ssid}\n")
+        for mac, ssids in PROBES.items():
+            f.write(f"MAC: {mac}\n")
+            for ssid in ssids:
+                f.write(f"  SSID: {ssid}\n")
+            f.write("\n") # Add a blank line for readability
 
 def draw_ui():
     img = Image.new("RGB", (128, 128), "black")
@@ -208,15 +236,15 @@ def draw_ui():
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
 
     with ui_lock:
-        if not probed_ssids:
+        if not PROBES: # Changed from probed_ssids to PROBES
             d.text((10, 60), "Sniffing...", font=FONT, fill="yellow")
         else:
-            sorted_probes = list(probed_ssids.keys())
-            start_index = max(0, selected_index - 4)
+            sorted_probes = list(PROBES.keys()) # Changed from probed_ssids to PROBES
+            start_index = max(0, selected_probe_index - 4)
             end_index = min(len(sorted_probes), start_index + 8)
             y_pos = 25
             for i in range(start_index, end_index):
-                color = "yellow" if i == selected_index else "white"
+                color = "yellow" if i == selected_probe_index else "white"
                 ssid = sorted_probes[i]
                 d.text((5, y_pos), ssid[:20], font=FONT, fill=color)
                 y_pos += 11
@@ -252,15 +280,17 @@ if __name__ == "__main__":
                 if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with ui_lock:
-                        if probed_ssids:
-                            selected_index = (selected_index - 1) % len(probed_ssids)
+                        if PROBES:
+                            sorted_probes = sorted(PROBES.items(), key=lambda item: (len(item[1]), item[0]), reverse=True)
+                            selected_probe_index = (selected_probe_index - 1 + len(sorted_probes)) % len(sorted_probes)
                     button_pressed = True
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with ui_lock:
-                        if probed_ssids:
-                            selected_index = (selected_index + 1) % len(probed_ssids)
+                        if PROBES:
+                            sorted_probes = sorted(PROBES.items(), key=lambda item: (len(item[1]), item[0]), reverse=True)
+                            selected_probe_index = (selected_probe_index + 1) % len(sorted_probes)
                     button_pressed = True
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 

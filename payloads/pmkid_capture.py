@@ -103,7 +103,8 @@ def run_attack():
         if len(parts) > 1:
             status_text = parts[1].strip()
             
-            ap_count = re.search(r'(\d+)\s+/\s*(\d+)\s+APs', status_text)
+            ap_count = re.search(r'(\d+)\s+/
+\s*(\d+)\s+APs', status_text)
             pmkid_count = re.search(r'(\d+)\s+PMKIDs', status_text)
             
             ap_str = f"APs: {ap_count.group(2)}" if ap_count else "APs: N/A"
@@ -139,14 +140,18 @@ def draw_ui(status: str):
     d.text((5, 110), "OK=Start/Stop | KEY3=Exit", font=FONT, fill="cyan")
     LCD.LCD_ShowImage(img, 0, 0)
 
-def draw_message(message: str, color: str = "yellow"):
+def draw_message(lines, color="yellow"):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
-    bbox = d.textbbox((0, 0), message, font=FONT_TITLE)
-    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    x = (WIDTH - w) // 2
-    y = (HEIGHT - h) // 2
-    d.text((x, y), message, font=FONT_TITLE, fill=color)
+    font = FONT_TITLE
+    y = 40
+    message_list = lines if isinstance(lines, list) else [lines]
+    for line in message_list:
+        bbox = d.textbbox((0, 0), line, font=font)
+        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        x = (WIDTH - w) // 2
+        d.text((x, y), line, font=font, fill=color)
+        y += h + 5
     LCD.LCD_ShowImage(img, 0, 0)
 
 if __name__ == "__main__":
@@ -154,15 +159,15 @@ if __name__ == "__main__":
         is_attacking = False
         
         if subprocess.run("which hcxdumptool", shell=True, capture_output=True).returncode != 0:
-            draw_message("hcxdumptool not found!", "red")
+            draw_message(["hcxdumptool", "not found!"], "red")
             time.sleep(5)
             raise SystemExit("hcxdumptool not found")
 
-        draw_message("Preparing interface...")
+        draw_message(["Preparing", "interface..."])
         ORIGINAL_WIFI_INTERFACE = WIFI_INTERFACE # Store original interface
         activated_interface = monitor_mode_helper.activate_monitor_mode(WIFI_INTERFACE)
         if not activated_interface:
-            draw_message("Monitor Mode FAILED", "red")
+            draw_message(["Monitor Mode FAILED", "Check stderr for details."], "red") # More informative message
             time.sleep(3)
             raise SystemExit("Failed to enable monitor mode")
         WIFI_INTERFACE = activated_interface # Update to the actual monitor interface
@@ -200,11 +205,11 @@ if __name__ == "__main__":
         pass
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)
-        draw_message(f"ERROR:\n{str(e)[:20]}", "red")
+        draw_message(["ERROR:", f"{str(e)[:20]}"], "red")
         time.sleep(3)
     finally:
         cleanup()
-        draw_message("Cleaning up...")
+        draw_message(["Cleaning up..."])
         LCD.LCD_Clear()
         GPIO.cleanup()
         print("PMKID Capture payload finished.")
