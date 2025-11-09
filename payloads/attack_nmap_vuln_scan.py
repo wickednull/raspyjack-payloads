@@ -12,12 +12,23 @@ This is a "fire-and-forget" scan that saves its output to a loot file.
 """
 
 import os, sys, subprocess, signal, time, threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
 # --- CONFIGURATION ---
+try:
+    sys.path.append('/root/Raspyjack/wifi/')
+    from wifi.raspyjack_integration import get_available_interfaces
+    from wifi.wifi_manager import WiFiManager
+    WIFI_INTEGRATION = True
+    wifi_manager = WiFiManager()
+    print("✅ WiFi integration loaded - dynamic interface support enabled")
+except ImportError as e:
+    print(f"⚠️  WiFi integration not available: {e}")
+    WIFI_INTEGRATION = False
+    wifi_manager = None # Ensure wifi_manager is None if import fails
+
 TARGET_IP = "192.168.1.1" # Default IP, will be configurable
 LOOT_DIR = "/root/Raspyjack/loot/Nmap_Vuln/"
 
@@ -66,6 +77,56 @@ def draw_ui(screen_state="main"):
         d.text((5, 115), "UP/DOWN=Digit | LEFT/RIGHT=Move | OK=Confirm", font=FONT, fill="cyan")
     
     LCD.LCD_ShowImage(img, 0, 0)
+
+def draw_ui_interface_selection(interfaces, current_selection):
+    img = Image.new("RGB", (128, 128), "black")
+    d = ImageDraw.Draw(img)
+    d.text((5, 5), "Select Interface", font=FONT_TITLE, fill="cyan")
+    d.line([(0, 22), (128, 22)], fill="cyan", width=1)
+
+    y_pos = 25
+    for i, iface in enumerate(interfaces):
+        color = "yellow" if i == current_selection else "white"
+        d.text((5, y_pos), iface, font=FONT, fill=color)
+        y_pos += 11
+    
+    d.text((5, 115), "UP/DOWN=Select | OK=Confirm", font=FONT, fill="cyan")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+def select_interface_menu():
+    global WIFI_INTERFACE, status_msg
+    
+    if not WIFI_INTEGRATION or not wifi_manager:
+        draw_message("WiFi integration not available!", "red")
+        time.sleep(3)
+        return None # Return None if integration is not available
+
+    available_interfaces = get_available_interfaces() # Get all available interfaces
+    if not available_interfaces:
+        draw_message("No network interfaces found!", "red")
+        time.sleep(3)
+        return None
+
+    current_menu_selection = 0
+    while running:
+        draw_ui_interface_selection(available_interfaces, current_menu_selection)
+        
+        if GPIO.input(PINS["KEY3"]) == 0: # Cancel
+            return None
+        
+        if GPIO.input(PINS["UP"]) == 0:
+            current_menu_selection = (current_menu_selection - 1 + len(available_interfaces)) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["DOWN"]) == 0:
+            current_menu_selection = (current_menu_selection + 1) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["OK"]) == 0:
+            selected_iface = available_interfaces[current_menu_selection]
+            draw_message(f"Selected:\n{selected_iface}", "lime")
+            time.sleep(1)
+            return selected_iface
+        
+        time.sleep(0.1)
 
 def handle_ip_input():
     global current_ip_input, ip_input_cursor_pos, ip_input_segment
@@ -134,17 +195,17 @@ def handle_ip_input():
     return False
 
 # --- Scanner ---
-def run_scan(target_ip):
+def run_scan(target_ip, interface):
     global status_msg
     
     os.makedirs(LOOT_DIR, exist_ok=True)
     timestamp = time.strftime("%Y-%m-%d_%H%M%S")
     output_file = os.path.join(LOOT_DIR, f"vuln_scan_{target_ip}_{timestamp}.txt")
     
-    status_msg = f"Scanning {target_ip}..."
+    status_msg = f"Scanning {target_ip} on {interface}..."
     
     try:
-        command = f"nmap --script vuln -oN {output_file} {target_ip}"
+        command = f"nmap -e {interface} --script vuln -oN {output_file} {target_ip}"
         subprocess.run(command, shell=True, check=True, timeout=600) # 10 minute timeout
         status_msg = "Scan complete!"
     except subprocess.TimeoutExpired:
@@ -160,6 +221,17 @@ try:
         draw_ui()
         time.sleep(3)
         raise SystemExit("`nmap` command not found.")
+
+    selected_interface = None
+    if WIFI_INTEGRATION:
+        selected_interface = select_interface_menu()
+        if not selected_interface:
+            draw_message("No interface selected!", "red")
+            time.sleep(3)
+            raise SystemExit("No interface selected for scan.")
+    else:
+        # Fallback if WIFI_INTEGRATION is not available
+        selected_interface = "eth0" # Default to eth0 if no dynamic selection
 
     current_screen = "main" # State variable for the main loop
 
@@ -180,7 +252,7 @@ try:
             if handle_ip_input(): # If IP input is confirmed
                 TARGET_IP = current_ip_input # Update global TARGET_IP
                 if not (scan_thread and scan_thread.is_alive()):
-                    scan_thread = threading.Thread(target=run_scan, args=(TARGET_IP,), daemon=True)
+                    scan_thread = threading.Thread(target=run_scan, args=(TARGET_IP, selected_interface,), daemon=True)
                     scan_thread.start()
                 current_screen = "main" # Go back to main screen after starting scan
             else: # If IP input is cancelled

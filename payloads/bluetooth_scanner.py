@@ -20,7 +20,6 @@ It demonstrates how to:
 import os, sys, subprocess, signal, time, re
 from select import select
 from typing import List, Tuple
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 # ---------------------------- Third‑party libs ----------------------------
 import RPi.GPIO as GPIO
@@ -56,7 +55,12 @@ running = True
 def cleanup(*_):
     """Signal handler to stop the main loop."""
     global running
-    running = False
+    if running:
+        running = False
+        # Explicitly stop bluetoothctl scanning and ensure it's powered off
+        subprocess.run("bluetoothctl power off", shell=True, capture_output=True)
+        subprocess.run("bluetoothctl scan off", shell=True, capture_output=True)
+        subprocess.run("pkill -f bluetoothctl", shell=True, capture_output=True) # Aggressive kill if needed
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -155,6 +159,12 @@ def discover_devices() -> List[Tuple[str, str]]:
 # 6) Main Loop
 # ---------------------------------------------------------------------------
 try:
+    # Dependency check for bluetoothctl
+    if subprocess.run("which bluetoothctl", shell=True, capture_output=True).returncode != 0:
+        draw_message(["bluetoothctl not found!", "Exiting..."])
+        time.sleep(3)
+        raise SystemExit("bluetoothctl not found.")
+
     # Initial scan
     devices = discover_devices()
     selected_index = 0

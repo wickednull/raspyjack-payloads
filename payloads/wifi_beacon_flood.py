@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import sys
 sys.path.append('/root/Raspyjack/')
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -23,6 +22,7 @@ try:
     from scapy.all import *
     conf.verb = 0
 except ImportError:
+    print("Scapy is not installed. Please run: pip install scapy", file=sys.stderr)
     sys.exit(1)
 
 # ---------------------------- Third‑party libs ----------------------------
@@ -34,13 +34,6 @@ try:
 except ImportError:
     HARDWARE_LIBS_AVAILABLE = False
     print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
-
-try:
-    from scapy.all import *
-    conf.verb = 0
-except ImportError:
-    print("Scapy is not installed. Please run: pip install scapy", file=sys.stderr)
-    sys.exit(1)
 
 # --- CONFIGURATION ---
 WIFI_INTERFACE = None # Will be set by user selection

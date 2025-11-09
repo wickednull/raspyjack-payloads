@@ -12,7 +12,6 @@ enabled features (e.g., HSTS, cookies), and other configuration details.
 """
 
 import os, sys, subprocess, signal, time, socket
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 # ---------------------------- Third‑party libs ----------------------------
 try:
     import RPi.GPIO as GPIO
@@ -59,10 +58,80 @@ else:
     FONT_TITLE = ImageFont.load_default() # Fallback to default font
     FONT = ImageFont.load_default() # Fallback to default font
 
+# --- CONFIGURATION ---
+try:
+    sys.path.append('/root/Raspyjack/wifi/')
+    from wifi.raspyjack_integration import get_available_interfaces, set_raspyjack_interface
+    from wifi.wifi_manager import WiFiManager
+    WIFI_INTEGRATION = True
+    wifi_manager = WiFiManager()
+    print("✅ WiFi integration loaded - dynamic interface support enabled")
+except ImportError as e:
+    print(f"⚠️  WiFi integration not available: {e}")
+    WIFI_INTEGRATION = False
+    wifi_manager = None # Ensure wifi_manager is None if import fails
+
+TARGET_IP = "192.168.1.1" # Will be configurable
+TARGET_PORT = 80 # Will be configurable
+
 # --- Globals & Shutdown ---
 running = True
 selected_index = 0
 headers = []
+current_ip_input = TARGET_IP # For IP input
+ip_input_cursor_pos = 0
+current_port_input = str(TARGET_PORT) # For Port input
+port_input_cursor_pos = 0
+
+def draw_ui_interface_selection(interfaces, current_selection):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ImageDraw.Draw(img)
+    d.text((5, 5), "Select Interface", font=FONT_TITLE, fill="cyan")
+    d.line([(0, 22), (128, 22)], fill="cyan", width=1)
+
+    y_pos = 25
+    for i, iface in enumerate(interfaces):
+        color = "yellow" if i == current_selection else "white"
+        d.text((5, y_pos), iface, font=FONT, fill=color)
+        y_pos += 11
+    
+    d.text((5, 115), "UP/DOWN=Select | OK=Confirm", font=FONT, fill="cyan")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+def select_interface_menu():
+    global ETH_INTERFACE, status_msg
+    
+    if not WIFI_INTEGRATION or not wifi_manager:
+        show_message(["WiFi integration", "not available!"], "red")
+        time.sleep(3)
+        return None # Return None if integration is not available
+
+    available_interfaces = get_available_interfaces() # Get all available interfaces
+    if not available_interfaces:
+        show_message(["No network", "interfaces found!"], "red")
+        time.sleep(3)
+        return None
+
+    current_menu_selection = 0
+    while running:
+        draw_ui_interface_selection(available_interfaces, current_menu_selection)
+        
+        if GPIO.input(PINS["KEY3"]) == 0: # Cancel
+            return None
+        
+        if GPIO.input(PINS["UP"]) == 0:
+            current_menu_selection = (current_menu_selection - 1 + len(available_interfaces)) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["DOWN"]) == 0:
+            current_menu_selection = (current_menu_selection + 1) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["OK"]) == 0:
+            selected_iface = available_interfaces[current_menu_selection]
+            show_message([f"Selected:", f"{selected_iface}"], "lime")
+            time.sleep(1)
+            return selected_iface
+        
+        time.sleep(0.1)
 
 def cleanup(*_):
     global running
@@ -95,13 +164,21 @@ def draw_ui(status_msg=None):
     LCD.LCD_ShowImage(img, 0, 0)
 
 # --- Scanner ---
-def get_headers():
+def get_headers(interface):
     global headers, selected_index
     draw_ui("Connecting...")
     headers = []
     selected_index = 0
     
     try:
+        # Set the selected interface as the primary interface for routing
+        if WIFI_INTEGRATION and set_raspyjack_interface(interface):
+            show_message([f"Interface {interface}", "activated."], "lime")
+            time.sleep(1)
+        else:
+            show_message([f"Failed to activate", f"{interface}."], "red")
+            return
+
         # Use requests library for simplicity
         import requests
         url = f"http://{TARGET_IP}:{TARGET_PORT}"
@@ -118,6 +195,27 @@ def get_headers():
 
 # --- Main Loop ---
 try:
+    # Dependency check for requests
+    try:
+        import requests
+    except ImportError:
+        show_message(["ERROR:", "requests not found!"], "red")
+        time.sleep(3)
+        sys.exit(1)
+
+    selected_interface = None
+    if WIFI_INTEGRATION:
+        selected_interface = select_interface_menu()
+        if not selected_interface:
+            show_message(["No interface", "selected!", "Exiting..."], "red")
+            time.sleep(3)
+            sys.exit(1)
+    else:
+        # Fallback if WIFI_INTEGRATION is not available
+        selected_interface = "eth0" # Default to eth0 if no dynamic selection
+        show_message([f"Using default:", f"{selected_interface}"], "lime")
+        time.sleep(2)
+
     draw_ui("Press OK to get")
     while running:
         if GPIO.input(PINS["KEY3"]) == 0:
@@ -125,7 +223,7 @@ try:
             break
         
         if GPIO.input(PINS["OK"]) == 0:
-            get_headers()
+            get_headers(selected_interface)
             draw_ui()
             time.sleep(0.5) # Debounce
             # Enter viewing mode

@@ -13,7 +13,6 @@ values are often characteristic of a particular OS.
 """
 
 import os, sys, subprocess, signal, time
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 # ---------------------------- Third‑party libs ----------------------------
 try:
     import RPi.GPIO as GPIO
@@ -31,6 +30,18 @@ except ImportError:
     sys.exit(1)
 
 # --- CONFIGURATION ---
+try:
+    sys.path.append('/root/Raspyjack/wifi/')
+    from wifi.raspyjack_integration import get_available_interfaces, set_raspyjack_interface
+    from wifi.wifi_manager import WiFiManager
+    WIFI_INTEGRATION = True
+    wifi_manager = WiFiManager()
+    print("✅ WiFi integration loaded - dynamic interface support enabled")
+except ImportError as e:
+    print(f"⚠️  WiFi integration not available: {e}")
+    WIFI_INTEGRATION = False
+    wifi_manager = None # Ensure wifi_manager is None if import fails
+
 TARGET_IP = "192.168.1.1" # Will be configurable
 TARGET_PORT = 80 # An open port on the target, will be configurable
 
@@ -40,6 +51,56 @@ current_ip_input = TARGET_IP # Initial value for IP input
 ip_input_cursor_pos = 0 # Cursor position for IP input
 current_port_input = str(TARGET_PORT) # Initial value for Port input
 port_input_cursor_pos = 0 # Cursor position for Port input
+
+def draw_ui_interface_selection(interfaces, current_selection):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ImageDraw.Draw(img)
+    d.text((5, 5), "Select Interface", font=FONT_TITLE, fill="cyan")
+    d.line([(0, 22), (128, 22)], fill="cyan", width=1)
+
+    y_pos = 25
+    for i, iface in enumerate(interfaces):
+        color = "yellow" if i == current_selection else "white"
+        d.text((5, y_pos), iface, font=FONT, fill=color)
+        y_pos += 11
+    
+    d.text((5, 115), "UP/DOWN=Select | OK=Confirm", font=FONT, fill="cyan")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+def select_interface_menu():
+    global ETH_INTERFACE, status_msg
+    
+    if not WIFI_INTEGRATION or not wifi_manager:
+        show_message(["WiFi integration", "not available!"], "red")
+        time.sleep(3)
+        return None # Return None if integration is not available
+
+    available_interfaces = get_available_interfaces() # Get all available interfaces
+    if not available_interfaces:
+        show_message(["No network", "interfaces found!"], "red")
+        time.sleep(3)
+        return None
+
+    current_menu_selection = 0
+    while running:
+        draw_ui_interface_selection(available_interfaces, current_menu_selection)
+        
+        if GPIO.input(PINS["KEY3"]) == 0: # Cancel
+            return None
+        
+        if GPIO.input(PINS["UP"]) == 0:
+            current_menu_selection = (current_menu_selection - 1 + len(available_interfaces)) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["DOWN"]) == 0:
+            current_menu_selection = (current_menu_selection + 1) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["OK"]) == 0:
+            selected_iface = available_interfaces[current_menu_selection]
+            show_message([f"Selected:", f"{selected_iface}"], "lime")
+            time.sleep(1)
+            return selected_iface
+        
+        time.sleep(0.1)
 
 def cleanup(*_):
     global running
@@ -230,16 +291,24 @@ def handle_port_input_logic(initial_port):
     return None
 
 # --- Scanner ---
-def run_scan():
+def run_scan(interface):
     global TARGET_IP, TARGET_PORT
     
     draw_ui("scanning")
     scan_results = []
     
     try:
+        # Set the selected interface as the primary interface for routing
+        if WIFI_INTEGRATION and set_raspyjack_interface(interface):
+            show_message([f"Interface {interface}", "activated."], "lime")
+            time.sleep(1)
+        else:
+            show_message([f"Failed to activate", f"{interface}."], "red")
+            return []
+
         # Send a SYN packet and wait for a SYN/ACK response
         p = IP(dst=TARGET_IP)/TCP(dport=int(TARGET_PORT), flags='S')
-        resp = sr1(p, timeout=3, verbose=0)
+        resp = sr1(p, timeout=3, verbose=0, iface=interface)
         
         if resp and resp.haslayer(TCP) and resp[TCP].flags == 'SA': # SYN/ACK
             ttl = resp[IP].ttl
@@ -288,6 +357,19 @@ try:
         time.sleep(3)
         sys.exit(1)
 
+    selected_interface = None
+    if WIFI_INTEGRATION:
+        selected_interface = select_interface_menu()
+        if not selected_interface:
+            show_message(["No interface", "selected!", "Exiting..."], "red")
+            time.sleep(3)
+            sys.exit(1)
+    else:
+        # Fallback if WIFI_INTEGRATION is not available
+        selected_interface = "eth0" # Default to eth0 if no dynamic selection
+        show_message([f"Using default:", f"{selected_interface}"], "lime")
+        time.sleep(2)
+
     while running:
         if current_screen == "main":
             draw_ui("main", scan_results=last_scan_results)
@@ -297,7 +379,7 @@ try:
                 break
             
             if GPIO.input(PINS["OK"]) == 0:
-                last_scan_results = run_scan()
+                last_scan_results = run_scan(selected_interface)
                 current_screen = "results"
                 time.sleep(0.3) # Debounce
             
@@ -333,7 +415,7 @@ try:
                 current_screen = "main"
                 time.sleep(0.3) # Debounce
             if GPIO.input(PINS["OK"]) == 0:
-                last_scan_results = run_scan()
+                last_scan_results = run_scan(selected_interface)
                 time.sleep(0.3) # Debounce
             time.sleep(0.1)
 
@@ -350,67 +432,4 @@ finally:
     GPIO.cleanup()
     print("OS Fingerprint payload finished.")
 
-# --- Scanner ---
-def run_scan():
-    draw_ui([f"Pinging {TARGET_IP}..."])
-    
-    try:
-        # Send a SYN packet and wait for a SYN/ACK response
-        p = IP(dst=TARGET_IP)/TCP(dport=TARGET_PORT, flags='S')
-        resp = sr1(p, timeout=3, verbose=0)
-        
-        if resp and resp.haslayer(TCP) and resp[TCP].flags == 'SA': # SYN/ACK
-            ttl = resp[IP].ttl
-            window_size = resp[TCP].window
-            
-            os_guess = "Unknown"
-            # Simple TTL-based guessing
-            if ttl <= 64:
-                os_guess = "Linux / Unix"
-            elif ttl <= 128:
-                os_guess = "Windows"
-            else:
-                os_guess = "Solaris / Cisco"
 
-            results = [
-                f"Target: {TARGET_IP}",
-                f"TTL: {ttl}",
-                f"Window: {window_size}",
-                "",
-                "Guess:",
-                os_guess
-            ]
-            draw_ui(results)
-            
-        else:
-            draw_ui(["No SYN/ACK received.", "Port may be closed", "or host is down."])
-
-    except Exception as e:
-        draw_ui(["Scan failed!", str(e)[:20]])
-        print(f"OS Scan failed: {e}", file=sys.stderr)
-
-# --- Main Loop ---
-try:
-    draw_ui(["Press OK to scan", TARGET_IP])
-    while running:
-        if GPIO.input(PINS["KEY3"]) == 0:
-            cleanup()
-            break
-        
-        if GPIO.input(PINS["OK"]) == 0:
-            run_scan()
-            # Wait until a button is pressed to scan again
-            while running and GPIO.input(PINS["OK"]) == 0:
-                time.sleep(0.05)
-            while running and GPIO.input(PINS["OK"]) != 0 and GPIO.input(PINS["KEY3"]) != 0:
-                time.sleep(0.05)
-        
-        time.sleep(0.1)
-
-except (KeyboardInterrupt, SystemExit):
-    pass
-finally:
-    cleanup()
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("OS Fingerprint payload finished.")

@@ -9,7 +9,6 @@ hosts with the SSH port (22) open.
 """
 
 import os, sys, subprocess, signal, time, threading, socket
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 # ---------------------------- Third‑party libs ----------------------------
 try:
     import RPi.GPIO as GPIO
@@ -57,6 +56,18 @@ else:
     FONT = ImageFont.load_default() # Fallback to default font
 
 # --- CONFIGURATION ---
+try:
+    sys.path.append('/root/Raspyjack/wifi/')
+    from wifi.raspyjack_integration import get_available_interfaces
+    from wifi.wifi_manager import WiFiManager
+    WIFI_INTEGRATION = True
+    wifi_manager = WiFiManager()
+    print("✅ WiFi integration loaded - dynamic interface support enabled")
+except ImportError as e:
+    print(f"⚠️  WiFi integration not available: {e}")
+    WIFI_INTEGRATION = False
+    wifi_manager = None # Ensure wifi_manager is None if import fails
+
 SSH_PORT = 22 # Will be configurable
 ETH_INTERFACE = "eth0" # Will be configurable
 
@@ -71,6 +82,56 @@ current_interface_input = ETH_INTERFACE # For interface input
 interface_input_cursor_pos = 0
 current_port_input = str(SSH_PORT) # For port input
 port_input_cursor_pos = 0
+
+def draw_ui_interface_selection(interfaces, current_selection):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ImageDraw.Draw(img)
+    d.text((5, 5), "Select Interface", font=FONT_TITLE, fill="cyan")
+    d.line([(0, 22), (128, 22)], fill="cyan", width=1)
+
+    y_pos = 25
+    for i, iface in enumerate(interfaces):
+        color = "yellow" if i == current_selection else "white"
+        d.text((5, y_pos), iface, font=FONT, fill=color)
+        y_pos += 11
+    
+    d.text((5, 115), "UP/DOWN=Select | OK=Confirm", font=FONT, fill="cyan")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+def select_interface_menu():
+    global ETH_INTERFACE, status_msg
+    
+    if not WIFI_INTEGRATION or not wifi_manager:
+        show_message(["WiFi integration", "not available!"], "red")
+        time.sleep(3)
+        return None # Return None if integration is not available
+
+    available_interfaces = get_available_interfaces() # Get all available interfaces
+    if not available_interfaces:
+        show_message(["No network", "interfaces found!"], "red")
+        time.sleep(3)
+        return None
+
+    current_menu_selection = 0
+    while running:
+        draw_ui_interface_selection(available_interfaces, current_menu_selection)
+        
+        if GPIO.input(PINS["KEY3"]) == 0: # Cancel
+            return None
+        
+        if GPIO.input(PINS["UP"]) == 0:
+            current_menu_selection = (current_menu_selection - 1 + len(available_interfaces)) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["DOWN"]) == 0:
+            current_menu_selection = (current_menu_selection + 1) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["OK"]) == 0:
+            selected_iface = available_interfaces[current_menu_selection]
+            show_message([f"Selected:", f"{selected_iface}"], "lime")
+            time.sleep(1)
+            return selected_iface
+        
+        time.sleep(0.1)
 
 def cleanup(*_):
     global running
@@ -210,7 +271,7 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
     return None
 
 # --- Scanner ---
-def run_scan():
+def run_scan(interface):
     global ssh_servers, status_msg, selected_index, ETH_INTERFACE, SSH_PORT
     with ui_lock:
         status_msg = "Scanning network..."
@@ -220,13 +281,13 @@ def run_scan():
     try:
         # Check if interface exists and has IP
         try:
-            ip_output = subprocess.check_output(f"ip -o -4 addr show {ETH_INTERFACE}", shell=True).decode()
+            ip_output = subprocess.check_output(f"ip -o -4 addr show {interface}", shell=True).decode()
             if "inet " not in ip_output:
-                with ui_lock: status_msg = f"{ETH_INTERFACE} No IP!"
+                with ui_lock: status_msg = f"{interface} No IP!"
                 return
             network_range_str = ip_output.split("inet ")[1].split(" ")[0]
         except subprocess.CalledProcessError:
-            with ui_lock: status_msg = f"{ETH_INTERFACE} not found!"
+            with ui_lock: status_msg = f"{interface} not found!"
             return
         
         from ipaddress import ip_network
@@ -261,6 +322,19 @@ if not HARDWARE_LIBS_AVAILABLE:
 
 current_screen = "main"
 try:
+    selected_interface = None
+    if WIFI_INTEGRATION:
+        selected_interface = select_interface_menu()
+        if not selected_interface:
+            show_message(["No interface", "selected!", "Exiting..."], "red")
+            time.sleep(3)
+            sys.exit(1)
+    else:
+        # Fallback if WIFI_INTEGRATION is not available
+        selected_interface = "eth0" # Default to eth0 if no dynamic selection
+        show_message([f"Using default:", f"{selected_interface}"], "lime")
+        time.sleep(2)
+
     while running:
         if current_screen == "main":
             draw_ui("main")
@@ -271,7 +345,7 @@ try:
             
             if GPIO.input(PINS["OK"]) == 0:
                 if not (scan_thread and scan_thread.is_alive()):
-                    scan_thread = threading.Thread(target=run_scan, daemon=True)
+                    scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
                     scan_thread.start()
                 time.sleep(0.3)
             
@@ -284,9 +358,10 @@ try:
                     if ssh_servers: selected_index = (selected_index + 1) % len(ssh_servers)
                 time.sleep(0.2)
             
-            if GPIO.input(PINS["KEY1"]) == 0: # Edit Interface
-                current_interface_input = ETH_INTERFACE
-                current_screen = "iface_input"
+            if GPIO.input(PINS["KEY1"]) == 0: # Edit Interface (now handled by menu)
+                show_message(["Interface selection", "is now menu-driven."], "yellow")
+                time.sleep(2)
+                current_screen = "main"
                 time.sleep(0.3) # Debounce
             
             if GPIO.input(PINS["KEY2"]) == 0: # Edit Port
@@ -294,11 +369,7 @@ try:
                 current_screen = "port_input"
                 time.sleep(0.3) # Debounce
         
-        elif current_screen == "iface_input":
-            char_set = "abcdefghijklmnopqrstuvwxyz0123456789" # Common interface chars
-            new_iface = handle_text_input_logic(current_interface_input, "iface_input", char_set)
-            if new_iface:
-                ETH_INTERFACE = new_iface
+        elif current_screen == "iface_input": # This screen is no longer needed
             current_screen = "main"
             time.sleep(0.3) # Debounce
         

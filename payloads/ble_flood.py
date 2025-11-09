@@ -14,7 +14,6 @@ This is a more generic version of the `ble_spam.py` payload.
 """
 
 import os, sys, subprocess, signal, time, threading, random
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont

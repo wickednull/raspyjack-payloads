@@ -20,7 +20,6 @@ style of ``example_show_buttons.py``.
 # 0) Allow imports of RaspyJack helper modules when run manually  
 # ---------------------------------------------------------------------------
 import os, sys
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 # ---------------------------- Standard library ----------------------------
 import time               # timing & debouncing
@@ -48,6 +47,19 @@ PINS: dict[str, int] = {
     "KEY2" : 20,     # ← toggle periodic scans every 2 h
     "KEY3" : 16,     # ← exit back to RaspyJack UI
 }
+
+# WiFi Integration - Import dynamic interface support
+try:
+    sys.path.append('/root/Raspyjack/wifi/')
+    from wifi.raspyjack_integration import get_available_interfaces
+    from wifi.wifi_manager import WiFiManager
+    WIFI_INTEGRATION = True
+    wifi_manager = WiFiManager()
+    print("✅ WiFi integration loaded - dynamic interface support enabled")
+except ImportError as e:
+    print(f"⚠️  WiFi integration not available: {e}")
+    WIFI_INTEGRATION = False
+    wifi_manager = None # Ensure wifi_manager is None if import fails
 
 # Scan settings
 NMAP_ARGS   = ["-T4"]           # standard quick+service scan
@@ -128,11 +140,59 @@ periodic_stop    = threading.Event()
 # ---------------------------------------------------------------------------
 # 6) Nmap scan routine
 # ---------------------------------------------------------------------------
+def draw_ui_interface_selection(interfaces, current_selection):
+    draw.rectangle((0, 0, WIDTH, HEIGHT), fill="black")
+    draw.text((5, 5), "Select Interface", font=font_large, fill="cyan")
+    draw.line([(0, 22), (WIDTH, 22)], fill="cyan", width=1)
 
-def current_target() -> str | None:
-    """Return the IPv4 address + CIDR mask of *eth0* (e.g. 192.168.0.42/24)."""
+    y_pos = 25
+    for i, iface in enumerate(interfaces):
+        color = "yellow" if i == current_selection else "white"
+        draw.text((5, y_pos), iface, font=font_large, fill=color)
+        y_pos += 11
+    
+    draw.text((5, 115), "UP/DOWN=Select | OK=Confirm", font=font_large, fill="cyan")
+    LCD.LCD_ShowImage(canvas, 0, 0)
+
+def select_interface_menu():
+    global WIFI_INTERFACE
+    
+    if not WIFI_INTEGRATION or not wifi_manager:
+        show(["WiFi integration", "not available!"], invert=True)
+        time.sleep(3)
+        return None # Return None if integration is not available
+
+    available_interfaces = get_available_interfaces() # Get all available interfaces
+    if not available_interfaces:
+        show(["No network", "interfaces found!"], invert=True)
+        time.sleep(3)
+        return None
+
+    current_menu_selection = 0
+    while running:
+        draw_ui_interface_selection(available_interfaces, current_menu_selection)
+        
+        if pressed_button() == "KEY3": # Cancel
+            return None
+        
+        if pressed_button() == "UP":
+            current_menu_selection = (current_menu_selection - 1 + len(available_interfaces)) % len(available_interfaces)
+            time.sleep(0.2)
+        elif pressed_button() == "DOWN":
+            current_menu_selection = (current_menu_selection + 1) % len(available_interfaces)
+            time.sleep(0.2)
+        elif pressed_button() == "OK":
+            selected_iface = available_interfaces[current_menu_selection]
+            show([f"Selected:", f"{selected_iface}"], invert=False)
+            time.sleep(1)
+            return selected_iface
+        
+        time.sleep(0.1)
+
+def current_target(interface: str) -> str | None:
+    """Return the IPv4 address + CIDR mask of the given interface."""
     try:
-        cmd = "ip -4 addr show eth0 | awk '/inet / { print $2 }'"
+        cmd = f"ip -4 addr show {interface} | awk '/inet / {{ print $2 }}'"
         output = subprocess.check_output(cmd, shell=True).decode().strip()
         if not output:
             return None
@@ -140,14 +200,14 @@ def current_target() -> str | None:
     except subprocess.CalledProcessError:
         return None
     except Exception as e:
-        print(f"Error getting current target: {e}", file=sys.stderr)
+        print(f"Error getting current target for {interface}: {e}", file=sys.stderr)
         return None
 
-def nmap_scan() -> None:
+def nmap_scan(interface: str) -> None:
     """Run a single Nmap scan and save results under *LOOT_DIR*."""
-    target = current_target()
+    target = current_target(interface)
     if not target:
-        show(["Error:", "eth0 not configured", "or no IP!"], invert=True)
+        show(["Error:", f"{interface} not configured", "or no IP!"], invert=True)
         time.sleep(3)
         return
 
@@ -156,7 +216,7 @@ def nmap_scan() -> None:
 
     show(["Nmap scan", "in progress…"])
     try:
-        subprocess.run(["nmap", *NMAP_ARGS, "-oN", out, target], check=True)
+        subprocess.run(["nmap", "-e", interface, *NMAP_ARGS, "-oN", out, target], check=True)
         # Clean output like RaspyJack main script
         subprocess.run(["sed", "-i", "s/Nmap scan report for //g", out])
         show(["Scan finished!", ts])
@@ -168,13 +228,13 @@ def nmap_scan() -> None:
 # 7) Periodic scan thread
 # ---------------------------------------------------------------------------
 
-def periodic_loop():
+def periodic_loop(interface: str):
     """Run *nmap_scan* every *SCAN_PERIOD* seconds until *periodic_stop* set."""
     next_run = datetime.now()
     while not periodic_stop.is_set():
         now = datetime.now()
         if now >= next_run:
-            nmap_scan()
+            nmap_scan(interface)
             next_run = now + timedelta(seconds=SCAN_PERIOD)
         # Update idle screen to show next scan time
         wait_msg = f"Next @ {next_run.strftime('%H:%M')}"
@@ -223,13 +283,26 @@ show(["Ready!", "KEY1 : scan now", "KEY2 : auto/stop", "KEY3 : exit"], invert=Fa
 periodic_thread: threading.Thread | None = None
 
 try:
+    selected_interface = None
+    if WIFI_INTEGRATION:
+        selected_interface = select_interface_menu()
+        if not selected_interface:
+            show(["No interface", "selected!", "Exiting..."], invert=True)
+            time.sleep(3)
+            sys.exit(1)
+    else:
+        # Fallback if WIFI_INTEGRATION is not available
+        selected_interface = "eth0" # Default to eth0 if no dynamic selection
+        show([f"Using default:", f"{selected_interface}"], invert=False)
+        time.sleep(2)
+
     while running:
         btn = pressed_button()
 
         if btn == "KEY1":                 # immediate scan
             while pressed_button() == "KEY1":
                 time.sleep(0.05)          # wait release (debounce)
-            nmap_scan()
+            nmap_scan(selected_interface)
             show(["Ready!", "KEY1 : scan now", "KEY2 : auto/stop", "KEY3 : exit"])
 
         elif btn == "KEY2":               # toggle periodic
@@ -239,7 +312,7 @@ try:
 
             if periodic_enabled:
                 periodic_stop.clear()
-                periodic_thread = threading.Thread(target=periodic_loop, daemon=True)
+                periodic_thread = threading.Thread(target=periodic_loop, args=(selected_interface,), daemon=True)
                 periodic_thread.start()
                 show(["AUTO enabled", "Scanning every", "2 hours…"])
                 time.sleep(2)

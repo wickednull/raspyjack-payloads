@@ -13,13 +13,27 @@ complex attacks and does not perform any redirection or phishing itself.
 """
 
 import os, sys, subprocess, signal, time
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
 # --- CONFIGURATION ---
-WIFI_INTERFACE = "wlan1"
+# WiFi Integration - Import dynamic interface support
+try:
+    sys.path.append('/root/Raspyjack/wifi/')
+    from wifi.raspyjack_integration import (
+        get_best_interface,
+        set_raspyjack_interface
+    )
+    WIFI_INTEGRATION = True
+    print("✅ WiFi integration loaded - dynamic interface support enabled")
+except ImportError as e:
+    print(f"⚠️  WiFi integration not available: {e}")
+    WIFI_INTEGRATION = False
+
+WIFI_INTERFACE = get_best_interface(prefer_wifi=True) # Dynamically determine best WiFi interface
+ORIGINAL_WIFI_INTERFACE = None # Added to store original interface name
 ROGUE_SSID = "Unsecured_Free_WiFi"
 ROGUE_CHANNEL = "6"
 TEMP_CONF_DIR = "/tmp/raspyjack_rogueap/"
@@ -37,13 +51,33 @@ running = True
 attack_process = None
 
 def cleanup(*_):
-    global running
+    global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
     if running:
         running = False
         if attack_process:
             try: os.killpg(os.getpgid(attack_process.pid), signal.SIGTERM)
             except: pass
-        subprocess.run(f"ifconfig {WIFI_INTERFACE} down; iwconfig {WIFI_INTERFACE} mode managed; ifconfig {WIFI_INTERFACE} up", shell=True)
+        
+        # Kill any remaining hostapd processes
+        subprocess.run("pkill hostapd 2>/dev/null || true", shell=True)
+        
+        # Restore interface to managed mode and reconnect with NetworkManager
+        if ORIGINAL_WIFI_INTERFACE:
+            subprocess.run(f"ifconfig {WIFI_INTERFACE} down 2>/dev/null || true", shell=True)
+            subprocess.run(f"iwconfig {WIFI_INTERFACE} mode managed 2>/dev/null || true", shell=True)
+            subprocess.run(f"ifconfig {WIFI_INTERFACE} up 2>/dev/null || true", shell=True)
+            time.sleep(1)
+            
+            subprocess.run(f"nmcli device set {ORIGINAL_WIFI_INTERFACE} managed yes 2>/dev/null || true", shell=True)
+            subprocess.run(f"nmcli device connect {ORIGINAL_WIFI_INTERFACE} 2>/dev/null || true", shell=True)
+            time.sleep(5) # Give it some time to reconnect
+            
+            # Restart NetworkManager service for full restoration
+            subprocess.run("systemctl restart NetworkManager 2>/dev/null || true", shell=True)
+            time.sleep(5) # Give NetworkManager time to start and scan
+            
+            WIFI_INTERFACE = ORIGINAL_WIFI_INTERFACE # Reset WIFI_INTERFACE to original
+            
         if os.path.exists(TEMP_CONF_DIR): subprocess.run(f"rm -rf {TEMP_CONF_DIR}", shell=True)
 
 signal.signal(signal.SIGINT, cleanup)
@@ -69,8 +103,25 @@ def draw_ui():
     LCD.LCD_ShowImage(img, 0, 0)
 
 def start_attack():
-    global attack_process
-    subprocess.run("pkill wpa_supplicant; pkill hostapd", shell=True, capture_output=True)
+    global attack_process, ORIGINAL_WIFI_INTERFACE
+    
+    # Store original interface name
+    ORIGINAL_WIFI_INTERFACE = WIFI_INTERFACE
+    
+    # Ensure the selected interface is properly set up as the primary interface
+    if WIFI_INTEGRATION:
+        if not set_raspyjack_interface(WIFI_INTERFACE):
+            print(f"Failed to activate {WIFI_INTERFACE}", file=sys.stderr)
+            return False
+    
+    # Gracefully unmanage interface from NetworkManager
+    subprocess.run(f"nmcli device disconnect {WIFI_INTERFACE} 2>/dev/null || true", shell=True)
+    subprocess.run(f"nmcli device set {WIFI_INTERFACE} managed off 2>/dev/null || true", shell=True)
+    time.sleep(1)
+    
+    # Kill hostapd if already running (from previous runs or other scripts)
+    subprocess.run("pkill hostapd 2>/dev/null || true", shell=True)
+    
     os.makedirs(TEMP_CONF_DIR, exist_ok=True)
     hostapd_conf_path = os.path.join(TEMP_CONF_DIR, "hostapd.conf")
     with open(hostapd_conf_path, "w") as f: f.write(f"interface={WIFI_INTERFACE}\\ndriver=nl80211\\nssid={ROGUE_SSID}\\nhw_mode=g\\nchannel={ROGUE_CHANNEL}\\n")

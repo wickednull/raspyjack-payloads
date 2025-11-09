@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 import sys
 sys.path.append('/root/Raspyjack/')
-import sys
-sys.path.append('/root/Raspyjack/wifi/')
 """
 RaspyJack *payload* – **HID Attack: Disable Windows Defender**
 ================================================================
@@ -14,7 +12,6 @@ may also be blocked by Defender's Tamper Protection.
 """
 
 import os, sys, subprocess, time
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 try:
     import RPi.GPIO as GPIO
     import LCD_1in44, LCD_Config

@@ -27,7 +27,6 @@ UP/DOWN : navigation OK : sélectionner KEY3 : retour/menu RaspyJack.
 import os, sys, subprocess, signal, time, re
 from select import select
 from typing import List, Tuple
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 # ---------------------------- Third‑party libs ----------------------------
 import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
@@ -85,7 +84,13 @@ running = True
 
 def cleanup(*_):
     global running
-    running = False
+    if running:
+        running = False
+        # Explicitly stop bluetoothctl scanning and ensure it's powered off
+        subprocess.run("bluetoothctl power off", shell=True, capture_output=True)
+        subprocess.run("bluetoothctl disconnect", shell=True, capture_output=True)
+        subprocess.run("bluetoothctl scan off", shell=True, capture_output=True)
+        subprocess.run("pkill -f bluetoothctl", shell=True, capture_output=True) # Aggressive kill if needed
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -237,6 +242,12 @@ def choose(devices: List[Tuple[str, str]]):
 # 7) Main loop
 # ---------------------------------------------------------------------------
 try:
+    # Dependency check for bluetoothctl
+    if subprocess.run("which bluetoothctl", shell=True, capture_output=True).returncode != 0:
+        draw(["bluetoothctl not found!", "Exiting..."])
+        time.sleep(3)
+        raise SystemExit("bluetoothctl not found.")
+
     while running:
         devs = discover_devices()
         choice = choose(devs)

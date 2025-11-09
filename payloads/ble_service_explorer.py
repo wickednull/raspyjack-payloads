@@ -14,7 +14,6 @@ out the capabilities of surrounding BLE devices.
 """
 
 import os, sys, subprocess, signal, time, re
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -35,7 +34,13 @@ results = [] # List of strings to display
 
 def cleanup(*_):
     global running
-    running = False
+    if running:
+        running = False
+        # Explicitly stop bluetoothctl scanning and disconnect
+        subprocess.run("bluetoothctl power off", shell=True, capture_output=True)
+        subprocess.run("bluetoothctl disconnect", shell=True, capture_output=True)
+        subprocess.run("bluetoothctl scan off", shell=True, capture_output=True)
+        subprocess.run("pkill -f bluetoothctl", shell=True, capture_output=True) # Aggressive kill if needed
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -127,6 +132,12 @@ def run_scan():
 
 # --- Main Loop ---
 try:
+    # Dependency check for bluetoothctl
+    if subprocess.run("which bluetoothctl", shell=True, capture_output=True).returncode != 0:
+        draw_message("bluetoothctl not found!", "red")
+        time.sleep(5)
+        raise SystemExit("bluetoothctl not found.")
+
     draw_ui("Press OK to scan")
     while running:
         if GPIO.input(PINS["KEY3"]) == 0:

@@ -24,7 +24,6 @@ Features:
 # ---------------------------------------------------------------------------
 import os, sys, subprocess, signal, time, re
 from select import select
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 # ---------------------------- Third‑party libs ----------------------------
 import RPi.GPIO as GPIO
@@ -63,7 +62,13 @@ running = True
 # ---------------------------------------------------------------------------
 def cleanup(*_):
     global running
-    running = False
+    if running:
+        running = False
+        # Explicitly stop bluetoothctl scanning if it's running in the background
+        subprocess.run("bluetoothctl power off", shell=True, capture_output=True)
+        subprocess.run("bluetoothctl disconnect", shell=True, capture_output=True)
+        subprocess.run("bluetoothctl scan off", shell=True, capture_output=True)
+        subprocess.run("pkill -f bluetoothctl", shell=True, capture_output=True) # Aggressive kill if needed
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -206,6 +211,12 @@ def get_gatt_table(mac):
 # 7) Main Loop
 # ---------------------------------------------------------------------------
 try:
+    # Dependency check for bluetoothctl
+    if subprocess.run("which bluetoothctl", shell=True, capture_output=True).returncode != 0:
+        draw_message("bluetoothctl not found!", "red")
+        time.sleep(5)
+        raise SystemExit("bluetoothctl not found.")
+
     while running:
         devices = scan_ble_devices()
         if not devices:

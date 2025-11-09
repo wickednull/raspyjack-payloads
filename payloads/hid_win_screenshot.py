@@ -11,7 +11,6 @@ This could be combined with an exfiltration payload to steal the image.
 """
 
 import os, sys, subprocess, time
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 try:
     import RPi.GPIO as GPIO
     import LCD_1in44, LCD_Config

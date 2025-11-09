@@ -18,7 +18,6 @@ It demonstrates how to:
 # 0) Imports & boilerplate
 # ---------------------------------------------------------------------------
 import os, sys, subprocess, signal, time
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 # ---------------------------- Third‑party libs ----------------------------
 try:

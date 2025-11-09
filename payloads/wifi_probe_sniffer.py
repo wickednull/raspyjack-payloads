@@ -20,7 +20,6 @@ Features:
 # ---------------------------------------------------------------------------
 import os, sys, subprocess, signal, time, threading
 from collections import OrderedDict
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 # ---------------------------- Third‑party libs ----------------------------
 import RPi.GPIO as GPIO
@@ -57,7 +56,20 @@ FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bol
 # ---------------------------------------------------------------------------
 # 3) Global State & Configuration
 # ---------------------------------------------------------------------------
-WIFI_INTERFACE = "wlan1mon" # Assumes monitor mode is already set or will be set
+try:
+    sys.path.append('/root/Raspyjack/wifi/')
+    from wifi.raspyjack_integration import get_available_interfaces
+    from wifi.wifi_manager import WiFiManager
+    WIFI_INTEGRATION = True
+    wifi_manager = WiFiManager()
+    print("✅ WiFi integration loaded - dynamic interface support enabled")
+except ImportError as e:
+    print(f"⚠️  WiFi integration not available: {e}")
+    WIFI_INTEGRATION = False
+    wifi_manager = None # Ensure wifi_manager is None if import fails
+
+WIFI_INTERFACE = None # Will be set by user selection
+ORIGINAL_WIFI_INTERFACE = None # Added to store original interface name
 LOOT_DIR = "/root/Raspyjack/loot/ProbeRequests/"
 running = True
 sniff_thread = None
@@ -69,9 +81,14 @@ selected_index = 0
 # 4) Graceful shutdown
 # ---------------------------------------------------------------------------
 def cleanup(*_):
-    global running
+    global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
     if running:
         running = False
+    
+    # Deactivate monitor mode on cleanup
+    if WIFI_INTERFACE and wifi_manager and ORIGINAL_WIFI_INTERFACE:
+        print(f"Deactivating monitor mode on {WIFI_INTERFACE} and restoring {ORIGINAL_WIFI_INTERFACE}...")
+        wifi_manager.deactivate_monitor_mode(WIFI_INTERFACE)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -79,19 +96,64 @@ signal.signal(signal.SIGTERM, cleanup)
 # ---------------------------------------------------------------------------
 # 5) WiFi & Sniffing Functions
 # ---------------------------------------------------------------------------
-def prepare_interface(enable: bool):
-    # This payload assumes monitor mode is set by another tool like deauth.py
-    # or pmkid_capture.py. We just check for it.
-    try:
-        result = subprocess.check_output(f"iwconfig {WIFI_INTERFACE.replace('mon', '')}", shell=True).decode()
-        if "Mode:Monitor" in result:
-            # If the base interface is in monitor mode, use it
-            globals()["WIFI_INTERFACE"] = WIFI_INTERFACE.replace('mon', '')
-            return True
-        result = subprocess.check_output(f"iwconfig {WIFI_INTERFACE}", shell=True).decode()
-        return "Mode:Monitor" in result
-    except (subprocess.CalledProcessError, FileNotFoundError):
+def draw_ui_interface_selection(interfaces, current_selection):
+    img = Image.new("RGB", (128, 128), "black")
+    d = ImageDraw.Draw(img)
+    d.text((5, 5), "Select Interface", font=FONT_TITLE, fill="cyan")
+    d.line([(0, 22), (128, 22)], fill="cyan", width=1)
+
+    y_pos = 25
+    for i, iface in enumerate(interfaces):
+        color = "yellow" if i == current_selection else "white"
+        d.text((5, y_pos), iface, font=FONT, fill=color)
+        y_pos += 11
+    
+    d.text((5, 115), "UP/DOWN=Select | OK=Confirm", font=FONT, fill="cyan")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+def select_interface_menu():
+    global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE, status_msg
+    
+    if not WIFI_INTEGRATION or not wifi_manager:
+        draw_message("WiFi integration not available!", "red")
+        time.sleep(3)
         return False
+
+    available_interfaces = [iface for iface in get_available_interfaces() if iface.startswith('wlan')]
+    if not available_interfaces:
+        draw_message("No WiFi interfaces found!", "red")
+        time.sleep(3)
+        return False
+
+    current_menu_selection = 0
+    while running:
+        draw_ui_interface_selection(available_interfaces, current_menu_selection)
+        
+        if GPIO.input(PINS["UP"]) == 0:
+            current_menu_selection = (current_menu_selection - 1 + len(available_interfaces)) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["DOWN"]) == 0:
+            current_menu_selection = (current_menu_selection + 1) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["OK"]) == 0:
+            selected_iface = available_interfaces[current_menu_selection]
+            draw_message(f"Activating monitor\nmode on {selected_iface}...", "yellow")
+            
+            monitor_iface = wifi_manager.activate_monitor_mode(selected_iface)
+            if monitor_iface:
+                WIFI_INTERFACE = monitor_iface
+                ORIGINAL_WIFI_INTERFACE = selected_iface # Store original for cleanup
+                draw_message(f"Monitor mode active\non {WIFI_INTERFACE}", "lime")
+                time.sleep(2)
+                return True
+            else:
+                draw_message(f"Failed to activate\nmonitor mode on {selected_iface}", "red")
+                time.sleep(3)
+                return False
+        elif GPIO.input(PINS["KEY3"]) == 0: # Cancel
+            return False
+        
+        time.sleep(0.1)
 
 def packet_handler(pkt):
     """Scapy packet handler for sniffing probe requests."""
@@ -145,11 +207,10 @@ def draw_ui():
 # 7) Main Loop
 # ---------------------------------------------------------------------------
 try:
-    draw_message("Preparing sniffer...")
-    if not prepare_interface(True):
-        draw_message("Monitor Mode FAILED", "red")
+    if not select_interface_menu():
+        draw_message("No interface selected\nor monitor mode failed.", "red")
         time.sleep(3)
-        raise SystemExit("Failed to find monitor interface")
+        raise SystemExit("No interface selected or monitor mode failed.")
 
     sniff_thread = threading.Thread(target=sniffer_worker, daemon=True)
     sniff_thread.start()
