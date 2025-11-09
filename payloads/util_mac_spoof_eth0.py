@@ -1,4 +1,21 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **MAC Spoof (eth0)**
+========================================
+This payload changes the MAC address of the `eth0` network interface to a
+randomly generated one. MAC address spoofing can be used for privacy,
+bypassing MAC-based filtering, or impersonating other devices on a network.
+
+Features:
+- Changes the MAC address of `eth0` to a random MAC.
+- Uses `macchanger` utility.
+- Displays success or failure messages on the LCD.
+- Verifies `macchanger` installation.
+
+Usage:
+- This payload is designed to be executed directly.
+- No interactive controls after launch, it performs its function and exits.
+"""
 import sys
 import os
 import time
@@ -18,8 +35,18 @@ GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
+
+running = True
+
+def cleanup(*_):
+    global running
+    running = False
+
+signal.signal(signal.SIGINT, cleanup)
+signal.signal(signal.SIGTERM, cleanup)
 
 def show_message(lines, color="lime"):
     img = Image.new("RGB", (128, 128), "black")

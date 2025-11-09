@@ -1,4 +1,21 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Webcam Spy**
+==================================
+This payload allows the user to capture images from a connected USB webcam.
+It uses the `fswebcam` utility to take a picture and saves it to the
+RaspyJack's loot directory.
+
+Features:
+- Captures a still image from the default USB webcam.
+- Saves the captured image with a timestamp to the `loot/Webcam_Spy` directory.
+- Displays status messages on the LCD.
+- Verifies `fswebcam` installation.
+
+Controls:
+- OK: Capture an image.
+- KEY3: Exit Payload.
+"""
 import sys
 import os
 import time
@@ -17,7 +34,17 @@ GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+
+running = True
+
+def cleanup_handler(*_):
+    global running
+    running = False
+
+signal.signal(signal.SIGINT, cleanup_handler)
+signal.signal(signal.SIGTERM, cleanup_handler)
 
 def show_message(lines, color="red"):
     img = Image.new("RGB", (128, 128), "black")
@@ -59,10 +86,17 @@ if __name__ == '__main__':
             time.sleep(3)
         else:
             show_message(["Webcam Spy", "Press OK to", "capture image."])
-            while True:
-                if GPIO.input(PINS["KEY3"]) == 0:
+            
+            last_button_press_time = 0
+            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+
+            while running:
+                current_time = time.time()
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     break
-                if GPIO.input(PINS["OK"]) == 0:
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     run_capture()
                     time.sleep(4)
                     show_message(["Ready."])

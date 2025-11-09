@@ -1,4 +1,33 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **VLAN Hopper**
+===================================
+This payload attempts to perform a basic VLAN hopping attack using double-tagging.
+It constructs a specially crafted 802.1Q packet with two VLAN tags, aiming to
+bypass VLAN segmentation and reach a target host on a different VLAN.
+
+Features:
+- Interactive UI for configuring target IP, native VLAN, and target VLAN.
+- Constructs and sends double-tagged 802.1Q packets.
+- Displays success or failure of the ICMP reply on the LCD.
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- CONFIGURATION SCREEN:
+    - UP/DOWN: Navigate configuration parameters.
+    - OK: Edit selected parameter.
+    - KEY1: Launch VLAN hopping attack.
+    - KEY3: Exit Payload.
+- IP INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm IP.
+    - KEY3: Cancel input.
+- VLAN INPUT SCREEN:
+    - UP/DOWN: Increment/decrement VLAN ID.
+    - OK: Confirm VLAN ID.
+    - KEY3: Cancel input.
+"""
 import sys
 import os
 import time
@@ -31,6 +60,8 @@ running = True
 target_ip = "192.168.20.10"
 native_vlan = 1
 target_vlan = 20
+current_ip_input = target_ip
+ip_input_cursor_pos = 0
 
 def cleanup(*_):
     global running
@@ -49,43 +80,115 @@ def draw_message(message, color="yellow"):
     d.text((x, y), message, font=FONT_TITLE, fill=color)
     LCD.LCD_ShowImage(img, 0, 0)
 
-def draw_config_ui(params, selected_index):
+def draw_config_ui(params, selected_index, screen_state="config"):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "VLAN Hopper Config", font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
 
-    y_pos = 25
-    param_keys = list(params.keys())
-    for i, key in enumerate(param_keys):
-        color = "yellow" if i == selected_index else "white"
-        d.text((5, y_pos), f"{key}: {params[key]}", font=FONT, fill=color)
-        y_pos += 15
-        
-    d.text((5, 110), "OK=Edit | KEY1=Launch", font=FONT, fill="cyan")
+    if screen_state == "config":
+        y_pos = 25
+        param_keys = list(params.keys())
+        for i, key in enumerate(param_keys):
+            color = "yellow" if i == selected_index else "white"
+            d.text((5, y_pos), f"{key}: {params[key]}", font=FONT, fill=color)
+            y_pos += 15
+            
+        d.text((5, 110), "OK=Edit | KEY1=Launch", font=FONT, fill="cyan")
+    elif screen_state == "ip_input":
+        d.text((5, 30), "Enter Target IP:", font=FONT, fill="white")
+        display_ip = list(current_ip_input)
+        if ip_input_cursor_pos < len(display_ip):
+            display_ip[ip_input_cursor_pos] = '_'
+        d.text((5, 50), "".join(display_ip), font=FONT_TITLE, fill="yellow")
+        d.text((5, 115), "UP/DOWN=Digit | LEFT/RIGHT=Move | OK=Confirm", font=FONT, fill="cyan")
+    
     LCD.LCD_ShowImage(img, 0, 0)
 
-def get_user_input(prompt, initial_value):
-    user_text = str(initial_value)
-    draw_message(f"{prompt}:\n{user_text}")
+def handle_ip_input_logic(initial_ip):
+    global current_ip_input, ip_input_cursor_pos
+    current_ip_input = initial_ip
+    ip_input_cursor_pos = len(initial_ip) - 1
     
-    time.sleep(2)
-    return user_text
+    draw_config_ui({}, 0, screen_state="ip_input")
+    
+    last_button_press_time = 0
+    BUTTON_DEBOUNCE_TIME = 0.2 # seconds
+
+    while running:
+        current_time = time.time()
+        btn = None
+        for name, pin in PINS.items():
+            if GPIO.input(pin) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                btn = name
+                last_button_press_time = current_time
+                break
+        
+        if btn == "KEY3":
+            return None
+        
+        if btn == "OK":
+            parts = current_ip_input.split('.')
+            if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+                return current_ip_input
+            else:
+                draw_message(["Invalid IP!", "Try again."], "red")
+                time.sleep(2)
+                current_ip_input = initial_ip
+                ip_input_cursor_pos = len(initial_ip) - 1
+                draw_config_ui({}, 0, screen_state="ip_input")
+        
+        if btn == "LEFT":
+            ip_input_cursor_pos = max(0, ip_input_cursor_pos - 1)
+            draw_config_ui({}, 0, screen_state="ip_input")
+        elif btn == "RIGHT":
+            ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
+            draw_config_ui({}, 0, screen_state="ip_input")
+        elif btn == "UP" or btn == "DOWN":
+            if ip_input_cursor_pos < len(current_ip_input):
+                char_list = list(current_ip_input)
+                current_char = char_list[ip_input_cursor_pos]
+                
+                if current_char.isdigit():
+                    digit = int(current_char)
+                    if btn == "UP":
+                        digit = (digit + 1) % 10
+                    else:
+                        digit = (digit - 1 + 10) % 10
+                    char_list[ip_input_cursor_pos] = str(digit)
+                    current_ip_input = "".join(char_list)
+                elif current_char == '.':
+                    if btn == "UP":
+                        ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
+                    else:
+                        ip_input_cursor_pos = max(0, ip_input_cursor_pos - 1)
+                draw_config_ui({}, 0, screen_state="ip_input")
+        
+        time.sleep(0.05)
+    return None
 
 def get_user_number(prompt, initial_value):
     value = initial_value
+    last_button_press_time = 0
+    BUTTON_DEBOUNCE_TIME = 0.2 # seconds
+
     while running:
+        current_time = time.time()
         draw_message(f"{prompt}:\n{value}\nUP/DOWN | OK=Save")
         
-        if GPIO.input(PINS["UP"]) == 0:
+        if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             value += 1
-            time.sleep(0.2)
-        elif GPIO.input(PINS["DOWN"]) == 0:
+            time.sleep(BUTTON_DEBOUNCE_TIME)
+        elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             value = max(1, value - 1)
-            time.sleep(0.2)
-        elif GPIO.input(PINS["OK"]) == 0:
+            time.sleep(BUTTON_DEBOUNCE_TIME)
+        elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             return value
-        elif GPIO.input(PINS["KEY3"]) == 0:
+        elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             return initial_value
         time.sleep(0.05)
 
@@ -137,31 +240,42 @@ if __name__ == '__main__':
         param_keys = list(params.keys())
         selected_index = 0
 
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.2 # seconds
+
         while running:
+            current_time = time.time()
             draw_config_ui(params, selected_index)
             
-            if GPIO.input(PINS["KEY3"]) == 0:
+            if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                last_button_press_time = current_time
                 cleanup()
                 break
             
-            if GPIO.input(PINS["UP"]) == 0:
+            if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                last_button_press_time = current_time
                 selected_index = (selected_index - 1) % len(param_keys)
-                time.sleep(0.2)
-            elif GPIO.input(PINS["DOWN"]) == 0:
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                last_button_press_time = current_time
                 selected_index = (selected_index + 1) % len(param_keys)
-                time.sleep(0.2)
-            elif GPIO.input(PINS["OK"]) == 0:
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                last_button_press_time = current_time
                 key = param_keys[selected_index]
-                if "IP" in key:
-                    draw_message("IP editing not\nimplemented.", "yellow")
-                    time.sleep(2)
+                if key == "Target IP":
+                    new_ip = handle_ip_input_logic(params[key])
+                    if new_ip:
+                        params[key] = new_ip
+                        target_ip = new_ip
                 else:
                     new_val = get_user_number(key, params[key])
                     params[key] = new_val
-                time.sleep(0.2)
-            elif GPIO.input(PINS["KEY1"]) == 0:
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            elif GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                last_button_press_time = current_time
                 run_vlan_hop_attack(src_mac, params["Target IP"], params["Native VLAN"], params["Target VLAN"])
-                time.sleep(0.2)
+                time.sleep(BUTTON_DEBOUNCE_TIME)
 
             time.sleep(0.05)
 

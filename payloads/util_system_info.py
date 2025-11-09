@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **System Information**
+==========================================
+This payload displays key system information on the LCD, providing a quick
+overview of the RaspyJack's operational status.
+
+Features:
+- Displays CPU load average.
+- Shows memory usage percentage.
+- Reports disk usage percentage for the root filesystem.
+- Displays the primary IP address.
+- Updates information periodically.
+
+Controls:
+- KEY3: Exit Payload.
+"""
 import sys
 import os
 import time
@@ -14,8 +30,18 @@ GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-FONT = ImageFont.load_default() 
+FONT = ImageFont.load_default()
+
+running = True
+
+def cleanup_handler(*_):
+    global running
+    running = False
+
+signal.signal(signal.SIGINT, cleanup_handler)
+signal.signal(signal.SIGTERM, cleanup_handler)
 
 def get_info():
     info = {}
@@ -56,13 +82,18 @@ def draw_ui(info):
 
 if __name__ == '__main__':
     try:
-        while True:
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+
+        while running:
             system_info = get_info()
             draw_ui(system_info)
             
             start_wait = time.time()
-            while time.time() - start_wait < 5.0:
-                if GPIO.input(PINS["KEY3"]) == 0:
+            while running and (time.time() - start_wait < 5.0):
+                current_time = time.time()
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     raise SystemExit
                 time.sleep(0.1)
 

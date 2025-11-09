@@ -1,4 +1,36 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Unified Loot Viewer**
+===========================================
+This payload provides a consolidated view of various "loot" collected by other
+RaspyJack payloads. It gathers credentials, logs, and scan results from
+designated directories and displays them on the LCD, allowing the user
+to browse collected information.
+
+Features:
+- Collects data from Responder, DNSSpoof, EvilTwin (ip.txt), and Nmap logs.
+- Displays collected loot items on the LCD with scrolling capabilities.
+- Allows dynamically adding new loot source directories.
+- Parses specific log formats (e.g., Responder NTLMv2, phishing credentials).
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Refresh collected loot.
+    - UP/DOWN: Scroll through loot items.
+    - KEY1: Add a new loot source directory.
+    - KEY3: Exit Payload.
+- ADD SOURCE NAME INPUT:
+    - UP/DOWN: Cycle characters.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm name.
+    - KEY3: Cancel input.
+- ADD SOURCE PATH INPUT:
+    - UP/DOWN: Cycle characters.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm path.
+    - KEY3: Cancel input.
+"""
 import sys
 import os
 import time
@@ -229,66 +261,74 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
     return None
 
 if __name__ == "__main__":
-    current_screen = "main"
-    try:
-        draw_ui("main")
-        gather_loot()
-
-        while running:
-            if current_screen == "main":
-                draw_ui("main")
+            last_button_press_time = 0
+            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    
+            # Initial data load
+            draw_ui("main")
+            gather_loot()
+    
+            while running:
+                current_time = time.time()
                 
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    cleanup()
-                    break
-                
-                if GPIO.input(PINS["OK"]) == 0:
-                    gather_loot()
-                    selected_index = 0
-                    time.sleep(0.3)
-                
-                if GPIO.input(PINS["UP"]) == 0:
-                    if loot_items:
-                        selected_index = (selected_index - 1) % len(loot_items)
-                    time.sleep(0.3)
-                elif GPIO.input(PINS["DOWN"]) == 0:
-                    if loot_items:
-                        selected_index = (selected_index + 1) % len(loot_items)
-                    time.sleep(0.3)
-                
-                if GPIO.input(PINS["KEY1"]) == 0:
-                    current_loot_source_name = ""
-                    current_screen = "add_source_name"
-                    time.sleep(0.3)
-            
-            elif current_screen == "add_source_name":
-                char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
-                new_name = handle_text_input_logic(current_loot_source_name, "add_source_name", char_set)
-                if new_name:
-                    current_loot_source_name = new_name
-                    current_loot_source_path = ""
-                    current_screen = "add_source_path"
-                else:
-                    current_screen = "main"
-                time.sleep(0.3)
-            
-            elif current_screen == "add_source_path":
-                char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-"
-                new_path = handle_text_input_logic(current_loot_source_path, "add_source_path", char_set)
-                if new_path:
-                    if os.path.isdir(new_path):
-                        LOOT_SOURCES[current_loot_source_name] = new_path
-                        show_message(["Source added!", f"{current_loot_source_name}"], "lime")
-                        time.sleep(2)
+                if current_screen == "main":
+                    draw_ui("main")
+                    
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        cleanup()
+                        break
+                    
+                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
                         gather_loot()
+                        selected_index = 0
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        if loot_items:
+                            selected_index = (selected_index - 1) % len(loot_items)
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        if loot_items:
+                            selected_index = (selected_index + 1) % len(loot_items)
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        current_loot_source_name = ""
+                        current_screen = "add_source_name"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                
+                elif current_screen == "add_source_name":
+                    char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+                    new_name = handle_text_input_logic(current_loot_source_name, "add_source_name", char_set)
+                    if new_name:
+                        current_loot_source_name = new_name
+                        current_loot_source_path = ""
+                        current_screen = "add_source_path"
                     else:
-                        show_message(["Invalid Path!", "Not found."], "red")
-                        time.sleep(2)
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            time.sleep(0.1)
-
+                        current_screen = "main"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                
+                elif current_screen == "add_source_path":
+                    char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-"
+                    new_path = handle_text_input_logic(current_loot_source_path, "add_source_path", char_set)
+                    if new_path:
+                        if os.path.isdir(new_path):
+                            LOOT_SOURCES[current_loot_source_name] = new_path
+                            show_message(["Source added!", f"{current_loot_source_name}"], "lime")
+                            time.sleep(2)
+                            gather_loot()
+                        else:
+                            show_message(["Invalid Path!", "Not found."], "red")
+                            time.sleep(2)
+                    current_screen = "main"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                
+                time.sleep(0.1)
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as e:

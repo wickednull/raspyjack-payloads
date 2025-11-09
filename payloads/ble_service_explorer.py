@@ -1,4 +1,26 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **BLE Service Explorer**
+============================================
+This payload scans for Bluetooth Low Energy (BLE) devices, connects to them,
+and then lists their primary services. It provides an interactive way to
+discover what services are offered by nearby BLE devices.
+
+Features:
+- Scans for nearby BLE devices.
+- Connects to discovered devices to retrieve service information.
+- Displays a scrollable list of devices and their identified services on the LCD.
+- Graceful exit via KEY3 or Ctrl-C, ensuring Bluetooth is cleaned up.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start a new scan.
+    - KEY3: Exit Payload.
+- SCAN RESULTS SCREEN:
+    - UP/DOWN: Scroll through the list of devices and services.
+    - KEY3: Go back to the main screen (to rescan or exit).
+"""
+
 import sys
 import os
 import time
@@ -17,32 +39,65 @@ LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default() 
+WIDTH, HEIGHT = 128, 128
 
 running = True
 selected_index = 0
 results = []
 
+def run_bt_command(command_parts, error_message, display_error=True):
+    try:
+        result = subprocess.run(command_parts, shell=False, check=True, capture_output=True, text=True)
+        if result.stderr:
+            print(f"WARNING: {error_message} - STDERR: {result.stderr.strip()}", file=sys.stderr)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"ERROR: {error_message} - Command: {' '.join(command_parts)} - STDERR: {e.stderr.strip()}", file=sys.stderr)
+        if display_error:
+            draw_ui(message_lines=[f"ERROR: {error_message}", f"{e.stderr.strip()[:20]}"])
+            time.sleep(3)
+        return False
+    except FileNotFoundError:
+        print(f"ERROR: {error_message} - Command not found: {command_parts[0]}", file=sys.stderr)
+        if display_error:
+            draw_ui(message_lines=[f"ERROR: Command not found", f"{command_parts[0]}"])
+            time.sleep(3)
+        return False
+
 def cleanup(*_):
     global running
     if running:
         running = False
-        subprocess.run("bluetoothctl power off", shell=True, capture_output=True)
-        subprocess.run("bluetoothctl disconnect", shell=True, capture_output=True)
-        subprocess.run("bluetoothctl scan off", shell=True, capture_output=True)
-        subprocess.run("pkill -f bluetoothctl", shell=True, capture_output=True)
+        print("Cleaning up Bluetooth devices...", file=sys.stderr)
+        draw_ui(message_lines=["Cleaning up BLE..."])
+        run_bt_command(["bluetoothctl", "power", "off"], "Failed to power off Bluetooth", display_error=False)
+        run_bt_command(["bluetoothctl", "disconnect"], "Failed to disconnect Bluetooth", display_error=False)
+        run_bt_command(["bluetoothctl", "scan", "off"], "Failed to stop Bluetooth scan", display_error=False)
+        run_bt_command(["pkill", "-f", "bluetoothctl"], "Failed to kill bluetoothctl processes", display_error=False)
+        print("Bluetooth cleanup complete.", file=sys.stderr)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-def draw_ui(status_msg=None):
-    img = Image.new("RGB", (128, 128), "black")
+def draw_ui(status_msg=None, message_lines=None):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "BLE Service Explorer", font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
 
-    if status_msg:
+    if message_lines:
+        if isinstance(message_lines, str):
+            message_lines = [message_lines]
+        y_offset = (HEIGHT - len(message_lines) * 12) // 2
+        for line in message_lines:
+            bbox = d.textbbox((0, 0), line, font=FONT)
+            w = bbox[2] - bbox[0]
+            x = (WIDTH - w) // 2
+            d.text((x, y_offset), line, font=FONT, fill="yellow")
+            y_offset += 12
+    elif status_msg:
         d.text((10, 60), status_msg, font=FONT, fill="yellow")
-    else:
+    else: # Display scan results
         start_index = max(0, selected_index - 4)
         end_index = min(len(results), start_index + 8)
         y_pos = 25
@@ -53,19 +108,33 @@ def draw_ui(status_msg=None):
             d.text((5, y_pos), line, font=FONT, fill=color)
             y_pos += 11
 
-    d.text((5, 115), "OK=Scan | KEY3=Exit", font=FONT, fill="cyan")
+    d.text((5, 110), "OK=Scan | KEY3=Exit", font=FONT, fill="cyan")
     LCD.LCD_ShowImage(img, 0, 0)
 
 def run_scan():
     global results, selected_index
-    draw_ui("Scanning BLE...")
+    draw_ui(status_msg="Scanning BLE...")
     results = []
     selected_index = 0
     
     try:
-        scan_proc = subprocess.Popen(["bluetoothctl"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        # Explicit Bluetooth adapter initialization (already done in main)
+        # if not run_bt_command(["rfkill", "unblock", "bluetooth"], "Failed to unblock Bluetooth"): return
+        # if not run_bt_command(["bluetoothctl", "power", "on"], "Failed to power on Bluetooth"): return
+        # if not run_bt_command(["hciconfig", "hci0", "up"], "Failed to bring up HCI interface"): return
+
+        scan_proc = subprocess.Popen(
+            ["bluetoothctl"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            encoding='utf-8'
+        )
+        assert scan_proc.stdin and scan_proc.stdout
         scan_proc.stdin.write("scan on\n"); scan_proc.stdin.flush()
-        time.sleep(8)
+        time.sleep(8) # Scan for 8 seconds
         scan_proc.stdin.write("scan off\n"); scan_proc.stdin.flush()
         scan_proc.stdin.write("exit\n"); scan_proc.stdin.flush()
         out, _ = scan_proc.communicate(timeout=5)
@@ -83,14 +152,23 @@ def run_scan():
 
         for mac, name in devices.items():
             if not running: break
-            draw_ui(f"Checking {name[:10]}...")
+            draw_ui(status_msg=f"Checking {name[:10]}...")
             
-            conn_proc = subprocess.Popen(["bluetoothctl"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            conn_proc = subprocess.Popen(
+                ["bluetoothctl"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+                encoding='utf-8'
+            )
+            assert conn_proc.stdin
             conn_proc.stdin.write(f"connect {mac}\n"); conn_proc.stdin.flush()
-            time.sleep(4)
+            time.sleep(4) # Give time to connect
             
             conn_proc.stdin.write("info\n"); conn_proc.stdin.flush()
-            time.sleep(1)
+            time.sleep(1) # Give time to get info
             
             conn_proc.stdin.write("exit\n"); conn_proc.stdin.flush()
             out, _ = conn_proc.communicate(timeout=10)
@@ -108,18 +186,38 @@ def run_scan():
                             elif "180d" in uuid: results.append("  Heart Rate")
                             else: results.append(f"  {uuid[:8]}...")
             
+    except subprocess.TimeoutExpired as e:
+        results.append("Scan timed out!")
+        print(f"BLE scan timed out: {e}", file=sys.stderr)
+        draw_ui(message_lines=["Scan timed out!", f"{str(e)[:20]}"])
+        time.sleep(3)
     except Exception as e:
         results.append("Scan error!")
         print(f"BLE scan failed: {e}", file=sys.stderr)
+        draw_ui(message_lines=["Scan error!", f"{str(e)[:20]}"])
+        time.sleep(3)
 
 if __name__ == "__main__":
     try:
+        # Centralized Bluetooth initialization
+        draw_ui(message_lines=["Initializing BLE..."])
+        if not run_bt_command(["rfkill", "unblock", "bluetooth"], "Failed to unblock Bluetooth"):
+            raise SystemExit("Bluetooth initialization failed.")
+        if not run_bt_command(["bluetoothctl", "power", "on"], "Failed to power on Bluetooth"):
+            raise SystemExit("Bluetooth initialization failed.")
+        if not run_bt_command(["hciconfig", "hci0", "up"], "Failed to bring up HCI interface"):
+            raise SystemExit("Bluetooth initialization failed.")
+
         if subprocess.run("which bluetoothctl", shell=True, capture_output=True).returncode != 0:
-            draw_message("bluetoothctl not found!", "red")
+            draw_ui(message_lines=["bluetoothctl not found!"])
             time.sleep(5)
             raise SystemExit("bluetoothctl not found.")
+        if subprocess.run("which hciconfig", shell=True, capture_output=True).returncode != 0:
+            draw_ui(message_lines=["hciconfig not found!"])
+            time.sleep(5)
+            raise SystemExit("hciconfig not found.")
 
-        draw_ui("Press OK to scan")
+        draw_ui(status_msg="Press OK to scan")
         while running:
             if GPIO.input(PINS["KEY3"]) == 0:
                 cleanup()
@@ -127,25 +225,36 @@ if __name__ == "__main__":
             
             if GPIO.input(PINS["OK"]) == 0:
                 run_scan()
-                draw_ui()
+                draw_ui() # Display results
                 time.sleep(0.5)
-                while running:
-                    if GPIO.input(PINS["KEY3"]) == 0:
-                        break
-                    if GPIO.input(PINS["UP"]) == 0:
+                while running: # Loop for scrolling results
+                    btn = None
+                    for name, pin in PINS.items():
+                        if GPIO.input(pin) == 0:
+                            btn = name
+                            while GPIO.input(pin) == 0:
+                                time.sleep(0.05)
+                            break
+                    
+                    if btn == "KEY3":
+                        break # Exit results view
+                    if btn == "UP":
                         selected_index = (selected_index - 1) % len(results) if results else 0
                         draw_ui()
-                        time.sleep(0.2)
-                    elif GPIO.input(PINS["DOWN"]) == 0:
+                    elif btn == "DOWN":
                         selected_index = (selected_index + 1) % len(results) if results else 0
                         draw_ui()
-                        time.sleep(0.2)
                     time.sleep(0.05)
+                draw_ui(status_msg="Press OK to scan") # Return to main prompt
             
             time.sleep(0.1)
 
     except (KeyboardInterrupt, SystemExit):
         pass
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        draw_ui(message_lines=["An error occurred.", str(e)[:20]])
+        time.sleep(3)
     finally:
         cleanup()
         LCD.LCD_Clear()

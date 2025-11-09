@@ -1,4 +1,24 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Full System Cleanup**
+===========================================
+This payload performs a comprehensive cleanup of the RaspyJack's network
+configuration and running processes. It is designed to stop any active
+attack tools, reset network interfaces to their default managed mode,
+and flush iptables rules, ensuring the system returns to a clean state.
+
+Features:
+- Kills common attack-related processes (e.g., hostapd, dnsmasq, mitmdump).
+- Flushes all iptables rules.
+- Disables IP forwarding.
+- Resets Wi-Fi interfaces (wlan0, wlan1) to managed mode.
+- Restarts the DHCP client service.
+- Displays status messages on the LCD during cleanup.
+
+Usage:
+- This payload is designed to be executed directly.
+- No interactive controls after launch, it performs its function and exits.
+"""
 import sys
 import os
 import time
@@ -20,8 +40,18 @@ GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
+
+running = True
+
+def cleanup_handler(*_):
+    global running
+    running = False
+
+signal.signal(signal.SIGINT, cleanup_handler)
+signal.signal(signal.SIGTERM, cleanup_handler)
 
 def show_message(lines, color="lime"):
     img = Image.new("RGB", (128, 128), "black")

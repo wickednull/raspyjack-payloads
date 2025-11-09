@@ -1,4 +1,34 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Find HTTP Servers**
+=========================================
+This payload scans the local network for active HTTP/HTTPS servers
+(common ports like 80, 8080, 443, 8443). It performs a basic port scan
+on all hosts within the local subnet to identify machines running web services.
+
+Features:
+- Interactive UI for selecting the network interface to scan.
+- Allows editing of the target HTTP/HTTPS ports (default 80, 8080).
+- Scans all hosts in the local subnet for the specified ports.
+- Displays found HTTP/HTTPS server IP addresses and ports on the LCD.
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start scanning for HTTP/HTTPS servers.
+    - KEY1: Select network interface.
+    - KEY2: Edit target HTTP/HTTPS ports.
+    - KEY3: Exit Payload.
+- INTERFACE SELECTION SCREEN:
+    - UP/DOWN: Navigate interfaces.
+    - OK: Select interface.
+    - KEY3: Cancel selection.
+- PORTS INPUT SCREEN:
+    - UP/DOWN: Change character at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm ports.
+    - KEY3: Cancel input.
+"""
 import sys
 import os
 import time
@@ -258,29 +288,75 @@ if __name__ == "__main__":
             time.sleep(3)
             sys.exit(1)
 
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+
+        selected_interface = select_interface_menu()
+        if not selected_interface:
+            show_message(["No interface", "selected!", "Exiting..."], "red")
+            time.sleep(3)
+            sys.exit(1)
+
         while running:
-            draw_ui()
+            current_time = time.time()
             
-            if GPIO.input(PINS["KEY3"]) == 0:
-                cleanup()
-                break
-            
-            if GPIO.input(PINS["OK"]) == 0:
-                if not (scan_thread and scan_thread.is_alive()):
-                    scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
-                    scan_thread.start()
-                time.sleep(0.3)
-            
-            if not (scan_thread and scan_thread.is_alive()):
-                if GPIO.input(PINS["UP"]) == 0:
+            if current_screen == "main":
+                draw_ui("main")
+                
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    cleanup()
+                    break
+                
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    if not (scan_thread and scan_thread.is_alive()):
+                        scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
+                        scan_thread.start()
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                
+                if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     with ui_lock:
                         if http_servers: selected_index = (selected_index - 1) % len(http_servers)
-                    time.sleep(0.2)
-                elif GPIO.input(PINS["DOWN"]) == 0:
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     with ui_lock:
                         if http_servers: selected_index = (selected_index + 1) % len(http_servers)
-                    time.sleep(0.2)
-
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                
+                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    show_message(["Interface selection", "is now menu-driven."], "yellow")
+                    time.sleep(2)
+                    current_screen = "main"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                
+                if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    current_ports_input = ", ".join(map(str, HTTP_PORTS))
+                    current_screen = "ports_input"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            elif current_screen == "iface_input":
+                current_screen = "main"
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            elif current_screen == "ports_input":
+                char_set = "0123456789,"
+                new_ports = handle_text_input_logic(current_ports_input, "ports_input", char_set)
+                if new_ports:
+                    try:
+                        HTTP_PORTS = [int(p.strip()) for p in new_ports.split(',') if p.strip().isdigit()]
+                        if not HTTP_PORTS:
+                            HTTP_PORTS = [80, 8080]
+                    except ValueError:
+                        show_message(["Invalid Ports!", "Use comma-sep", "numbers."])
+                        time.sleep(3)
+                current_screen = "main"
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            
             time.sleep(0.1)
 
     except (KeyboardInterrupt, SystemExit):

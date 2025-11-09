@@ -1,4 +1,19 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Shutdown Device**
+======================================
+This payload provides a simple interface to safely shut down the RaspyJack device.
+It prompts the user for confirmation before executing the shutdown command.
+
+Features:
+- Prompts user for confirmation before shutting down.
+- Displays status messages on the LCD.
+- Graceful exit if shutdown is cancelled or interrupted.
+
+Controls:
+- OK: Confirm shutdown.
+- KEY3: Cancel shutdown.
+"""
 import sys
 import os
 import time
@@ -14,7 +29,17 @@ GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+
+running = True
+
+def cleanup_handler(*_):
+    global running
+    running = False
+
+signal.signal(signal.SIGINT, cleanup_handler)
+signal.signal(signal.SIGTERM, cleanup_handler)
 
 def show_message(lines, color="yellow"):
     img = Image.new("RGB", (128, 128), "black")
@@ -29,13 +54,19 @@ if __name__ == '__main__':
     try:
         show_message(["Shutdown device?", "", "Press OK to", "confirm."])
         
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+
         start_wait = time.time()
-        while time.time() - start_wait < 5.0:
-            if GPIO.input(PINS["KEY3"]) == 0:
+        while running and (time.time() - start_wait < 5.0):
+            current_time = time.time()
+            if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                last_button_press_time = current_time
                 show_message(["Aborted."])
                 time.sleep(2)
                 raise SystemExit
-            if GPIO.input(PINS["OK"]) == 0:
+            if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                last_button_press_time = current_time
                 show_message(["Shutting down..."])
                 time.sleep(1)
                 subprocess.run("shutdown -h now", shell=True)

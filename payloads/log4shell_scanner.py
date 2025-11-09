@@ -1,4 +1,38 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Log4Shell Scanner**
+=========================================
+This payload scans for Log4Shell (CVE-2021-44228) vulnerabilities in network
+hosts. It works by sending specially crafted HTTP requests with a JNDI payload
+in various headers (User-Agent, X-Api-Version, Referer) and then listening
+for DNS callbacks. If a DNS query is received from a target host, it indicates
+potential vulnerability.
+
+Features:
+- Scans local network for live hosts.
+- Sends HTTP requests with Log4Shell payloads to common web ports.
+- Sets up a local DNS listener to detect callbacks from vulnerable hosts.
+- Displays scan status and lists vulnerable hosts on the LCD.
+- Allows selection of network interface for scanning.
+- Allows editing of web ports to scan.
+- Saves a list of vulnerable hosts to a loot file.
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start/Re-run scan.
+    - KEY1: Edit web ports to scan.
+    - KEY3: Exit Payload.
+- PORTS INPUT SCREEN:
+    - UP/DOWN: Change character at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm ports.
+    - KEY3: Cancel input.
+- INTERFACE SELECTION SCREEN:
+    - UP/DOWN: Navigate interfaces.
+    - OK: Select interface.
+    - KEY3: Cancel selection.
+"""
 import sys
 import os
 import time
@@ -266,54 +300,56 @@ def run_scan(interface):
             scan_status = "Scan finished."
 
 if __name__ == "__main__":
-    current_screen = "main"
-    scan_thread = None
-    try:
-        requests.packages.urllib3.disable_warnings()
-
-        selected_interface = select_interface_menu()
-        if not selected_interface:
-            show_message(["No interface", "selected!", "Exiting..."])
-            time.sleep(3)
-            sys.exit(1)
-
-        scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
-        scan_thread.start()
-
-        while running:
-            if current_screen == "main":
-                draw_ui("main")
+            last_button_press_time = 0
+            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    
+            selected_interface = select_interface_menu()
+            if not selected_interface:
+                show_message(["No interface", "selected!", "Exiting..."])
+                time.sleep(3)
+                sys.exit(1)
+    
+            scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
+            scan_thread.start()
+    
+            while running:
+                current_time = time.time()
                 
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    cleanup()
-                    break
+                if current_screen == "main":
+                    draw_ui("main")
+                    
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        cleanup()
+                        break
+                    
+                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
+                        scan_thread.start()
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        current_ports_input = ", ".join(map(str, WEB_PORTS))
+                        current_screen = "ports_input"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["OK"]) == 0:
-                    scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
-                    scan_thread.start()
-                    time.sleep(0.3)
+                elif current_screen == "ports_input":
+                    char_set = "0123456789,"
+                    new_ports_str = handle_text_input_logic(current_ports_input, "ports_input", char_set)
+                    if new_ports_str:
+                        try:
+                            WEB_PORTS = [int(p.strip()) for p in new_ports_str.split(',') if p.strip().isdigit()]
+                            if not WEB_PORTS:
+                                WEB_PORTS = [80, 8080, 443, 8443]
+                        except ValueError:
+                            show_message(["Invalid Ports!", "Use comma-sep", "numbers."])
+                            time.sleep(3)
+                    current_screen = "main"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["KEY1"]) == 0:
-                    current_ports_input = ", ".join(map(str, WEB_PORTS))
-                    current_screen = "ports_input"
-                    time.sleep(0.3)
-            
-            elif current_screen == "ports_input":
-                char_set = "0123456789,"
-                new_ports_str = handle_text_input_logic(current_ports_input, "ports_input", char_set)
-                if new_ports_str:
-                    try:
-                        WEB_PORTS = [int(p.strip()) for p in new_ports_str.split(',') if p.strip().isdigit()]
-                        if not WEB_PORTS:
-                            WEB_PORTS = [80, 8080, 443, 8443]
-                    except ValueError:
-                        show_message(["Invalid Ports!", "Use comma-sep", "numbers."])
-                        time.sleep(3)
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            time.sleep(0.1)
-
+                time.sleep(0.1)
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as e:

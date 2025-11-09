@@ -1,4 +1,38 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Deauth Known Networks**
+=============================================
+This payload targets a specific client MAC address and attempts to deauthenticate
+it from any Wi-Fi network it tries to connect to, based on probe requests.
+When the client probes for a known network, the payload spoofs that network
+and deauthenticates the client, effectively preventing it from connecting
+to its preferred networks.
+
+Features:
+- Interactive UI for selecting the wireless interface.
+- Activates monitor mode on the selected interface.
+- Allows configuration of the target client MAC address.
+- Sniffs for probe requests from the target client.
+- Spoofs the probed network and sends deauthentication frames.
+- Displays status messages on the LCD.
+- Graceful exit via KEY3 or Ctrl-C, deactivating monitor mode.
+
+Controls:
+- INTERFACE SELECTION SCREEN:
+    - UP/DOWN: Navigate available wireless interfaces.
+    - OK: Select interface and activate monitor mode.
+    - KEY3: Cancel selection and exit.
+- MAIN CONFIGURATION SCREEN:
+    - UP/DOWN: Navigate configuration parameters (Target Client MAC).
+    - OK: Edit selected parameter.
+    - KEY2: Start attack.
+    - KEY3: Exit Payload.
+- MAC INPUT SCREEN:
+    - UP/DOWN: Change character at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm MAC.
+    - KEY3: Cancel input.
+"""
 import sys
 import os
 import time
@@ -24,6 +58,7 @@ GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
 
@@ -32,6 +67,8 @@ status_msg = "Press OK to start"
 probed_ssid = None
 attack_procs = {}
 wifi_manager = WiFiManager()
+current_mac_input = TARGET_CLIENT_MAC
+mac_input_cursor_pos = 0
 
 def cleanup(*_):
     global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
@@ -41,26 +78,49 @@ def cleanup(*_):
         except: pass
     
     if WIFI_INTERFACE and wifi_manager and ORIGINAL_WIFI_INTERFACE:
-        print(f"Deactivating monitor mode on {WIFI_INTERFACE} and restoring {ORIGINAL_WIFI_INTERFACE}...")
-        wifi_manager.deactivate_monitor_mode(WIFI_INTERFACE)
+        print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE} and restoring {ORIGINAL_WIFI_INTERFACE}...", file=sys.stderr)
+        success = wifi_manager.deactivate_monitor_mode(WIFI_INTERFACE)
+        if success:
+            print(f"Successfully deactivated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
+        else:
+            print(f"ERROR: Failed to deactivate monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-def draw_ui():
-    img = Image.new("RGB", (128, 128), "black")
+def draw_message(lines, color="yellow"):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ImageDraw.Draw(img)
+    y = 40
+    for line in lines:
+        bbox = d.textbbox((0, 0), line, font=FONT_TITLE)
+        w = bbox[2] - bbox[0]
+        x = (WIDTH - w) // 2
+        d.text((x, y), line, font=FONT_TITLE, fill=color)
+        y += 15
+    LCD.LCD_ShowImage(img, 0, 0)
+
+def draw_ui_main(params, selected_index):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "Known Net Deauth", font=FONT_TITLE, fill="#FFC300")
     d.line([(0, 22), (128, 22)], fill="#FFC300", width=1)
-    d.text((5, 30), f"Target: {TARGET_CLIENT_MAC}", font=FONT)
-    d.text((10, 50), status_msg, font=FONT, fill="yellow")
+
+    y_pos = 25
+    param_keys = list(params.keys())
+    for i, key in enumerate(param_keys):
+        color = "yellow" if i == selected_index else "white"
+        d.text((5, y_pos), f"{key}: {params[key]}", font=FONT, fill=color)
+        y_pos += 11
+    
+    d.text((5, 80), status_msg, font=FONT, fill="yellow")
     if probed_ssid:
-        d.text((10, 70), f"Probed: {probed_ssid}", font=FONT, fill="lime")
-    d.text((5, 115), "OK=Start | KEY3=Exit", font=FONT, fill="cyan")
+        d.text((5, 95), f"Probed: {probed_ssid}", font=FONT, fill="lime")
+    d.text((5, 115), "OK=Edit | KEY2=Start | KEY3=Exit", font=FONT, fill="cyan")
     LCD.LCD_ShowImage(img, 0, 0)
 
 def draw_ui_interface_selection(interfaces, current_selection):
-    img = Image.new("RGB", (128, 128), "black")
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "Select Interface", font=FONT_TITLE, fill="cyan")
     d.line([(0, 22), (128, 22)], fill="cyan", width=1)
@@ -79,39 +139,117 @@ def select_interface_menu():
     
     available_interfaces = [iface for iface in get_available_interfaces() if iface.startswith('wlan')]
     if not available_interfaces:
-        draw_message("No WiFi interfaces found!", "red")
+        draw_message(["No WiFi interfaces found!"], "red")
         time.sleep(3)
         return False
 
     current_menu_selection = 0
+    last_button_press_time = 0
+    BUTTON_DEBOUNCE_TIME = 0.2 # seconds
+
     while running:
+        current_time = time.time()
         draw_ui_interface_selection(available_interfaces, current_menu_selection)
         
-        if GPIO.input(PINS["UP"]) == 0:
+        if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             current_menu_selection = (current_menu_selection - 1 + len(available_interfaces)) % len(available_interfaces)
-            time.sleep(0.2)
-        elif GPIO.input(PINS["DOWN"]) == 0:
+            time.sleep(BUTTON_DEBOUNCE_TIME)
+        elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             current_menu_selection = (current_menu_selection + 1) % len(available_interfaces)
-            time.sleep(0.2)
-        elif GPIO.input(PINS["OK"]) == 0:
+            time.sleep(BUTTON_DEBOUNCE_TIME)
+        elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             selected_iface = available_interfaces[current_menu_selection]
-            draw_message(f"Activating monitor\nmode on {selected_iface}...", "yellow")
+            draw_message([f"Activating monitor", f"mode on {selected_iface}...", "yellow"])
+            print(f"Attempting to activate monitor mode on {selected_iface}...", file=sys.stderr)
             
             monitor_iface = wifi_manager.activate_monitor_mode(selected_iface)
             if monitor_iface:
                 WIFI_INTERFACE = monitor_iface
                 ORIGINAL_WIFI_INTERFACE = selected_iface
-                draw_message(f"Monitor mode active\non {WIFI_INTERFACE}", "lime")
+                draw_message([f"Monitor mode active", f"on {WIFI_INTERFACE}"], "lime")
+                print(f"Successfully activated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
                 time.sleep(2)
                 return True
             else:
-                draw_message(f"Failed to activate\nmonitor mode on {selected_iface}", "red")
+                draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
+                print(f"ERROR: wifi_manager.activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
                 time.sleep(3)
                 return False
-        elif GPIO.input(PINS["KEY3"]) == 0:
+        elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             return False
         
-        time.sleep(0.1)
+        time.sleep(0.05)
+
+def handle_mac_input_logic(initial_mac):
+    global current_mac_input, mac_input_cursor_pos
+    current_mac_input = initial_mac
+    mac_input_cursor_pos = len(initial_mac) - 1
+    
+    char_set = "0123456789abcdef:"
+    
+    while running:
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ImageDraw.Draw(img)
+        d.text((5, 5), "Enter Target MAC:", font=FONT_TITLE, fill="cyan")
+        d.line([(0, 22), (128, 22)], fill="cyan", width=1)
+
+        display_text = list(current_mac_input)
+        if mac_input_cursor_pos < len(display_text):
+            display_text[mac_input_cursor_pos] = '_'
+        d.text((5, 40), "".join(display_text[:17]), font=FONT_TITLE, fill="yellow")
+        d.text((5, 115), "UP/DOWN=Char | LEFT/RIGHT=Move | OK=Confirm", font=FONT, fill="cyan")
+        LCD.LCD_ShowImage(img, 0, 0)
+
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.2 # seconds
+        current_time = time.time()
+
+        btn = None
+        for name, pin in PINS.items():
+            if GPIO.input(pin) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                btn = name
+                last_button_press_time = current_time
+                break
+        
+        if btn == "KEY3":
+            return None
+        
+        if btn == "OK":
+            if len(current_mac_input) == 17 and all(c in char_set for c in current_mac_input):
+                return current_mac_input
+            else:
+                draw_message(["Invalid MAC!", "Try again."], "red")
+                time.sleep(2)
+                current_mac_input = initial_mac
+                mac_input_cursor_pos = len(initial_mac) - 1
+        
+        if btn == "LEFT":
+            mac_input_cursor_pos = max(0, mac_input_cursor_pos - 1)
+        elif btn == "RIGHT":
+            mac_input_cursor_pos = min(len(current_mac_input), mac_input_cursor_pos + 1)
+        elif btn == "UP" or btn == "DOWN":
+            if mac_input_cursor_pos < len(current_mac_input):
+                char_list = list(current_mac_input)
+                current_char = char_list[mac_input_cursor_pos]
+                
+                try:
+                    char_index = char_set.index(current_char)
+                    if btn == "UP":
+                        char_index = (char_index + 1) % len(char_set)
+                    else:
+                        char_index = (char_index - 1 + len(char_set)) % len(char_set)
+                    char_list[mac_input_cursor_pos] = char_set[char_index]
+                    current_mac_input = "".join(char_list)
+                except ValueError:
+                    char_list[mac_input_cursor_pos] = char_set[0]
+                    current_mac_input = "".join(char_list)
+        
+        time.sleep(0.05)
+    return None
 
 def packet_handler(pkt):
     global probed_ssid, status_msg
@@ -150,28 +288,70 @@ def run_attack():
     status_msg = "Attack finished."
 
 if __name__ == '__main__':
+    current_screen = "interface_select"
+    selected_param_index = 0
+    params = {
+        "Target MAC": TARGET_CLIENT_MAC
+    }
+    param_keys = list(params.keys())
+    
     try:
         for cmd in ["hostapd"]:
             if subprocess.run(f"which {cmd}", shell=True, capture_output=True).returncode != 0:
-                draw_message(f"{cmd} not found!", "red")
+                draw_message([f"{cmd} not found!"], "red")
                 time.sleep(3)
                 raise SystemExit(f"{cmd} not found.")
 
         if not select_interface_menu():
-            draw_message("No interface selected\nor monitor mode failed.", "red")
+            draw_message(["No interface selected", "or monitor mode failed."], "red")
             time.sleep(3)
             raise SystemExit("No interface selected or monitor mode failed.")
+        
+        current_screen = "main_config"
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
 
         while running:
-            draw_ui()
-            if GPIO.input(PINS["KEY3"]) == 0: cleanup(); break
-            if GPIO.input(PINS["OK"]) == 0:
-                threading.Thread(target=run_attack, daemon=True).start()
-                time.sleep(0.3)
-                while status_msg not in ["Handshake captured!", "Timeout reached.", "Attack failed!"]:
-                    if GPIO.input(PINS["KEY3"]) == 0: cleanup(); break
-                    time.sleep(1)
-            time.sleep(0.1)
+            current_time = time.time()
+            if current_screen == "main_config":
+                draw_ui_main(params, selected_param_index)
+                
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    cleanup()
+                    break
+                
+                if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    selected_param_index = (selected_param_index - 1) % len(param_keys)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    selected_param_index = (selected_param_index + 1) % len(param_keys)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    key = param_keys[selected_param_index]
+                    if key == "Target MAC":
+                        char_set = "0123456789abcdef:"
+                        new_mac = handle_mac_input_logic(params[key])
+                        if new_mac:
+                            params[key] = new_mac
+                            TARGET_CLIENT_MAC = new_mac
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                elif GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    threading.Thread(target=run_attack, daemon=True).start()
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                    while status_msg not in ["No probes found.", "Attack finished!"]:
+                        if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                            last_button_press_time = current_time
+                            cleanup()
+                            break
+                        time.sleep(0.1)
+            
+            time.sleep(0.05)
+
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:

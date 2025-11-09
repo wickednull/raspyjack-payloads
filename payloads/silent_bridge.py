@@ -39,6 +39,13 @@ def draw(text: str):
         d.text(pos, line, font=font, fill="#00FF00")
     lcd.LCD_ShowImage(img, 0, 0)
 
+def cleanup_handler(*_):
+    cleanup()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, cleanup_handler)
+signal.signal(signal.SIGTERM, cleanup_handler)
+
 def setup_gpio():
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(PINS["KEY3"], GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -107,7 +114,15 @@ try:
     sniffer, output = start_sniffer()
     draw("Sniffing traffic...\nPress KEY3 to stop")
 
-    wait_key3()
+    last_button_press_time = 0
+    BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+
+    while True:
+        current_time = time.time()
+        if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
+            break
+        time.sleep(0.1)
 
     draw("Stopping capture...")
     sniffer.terminate()

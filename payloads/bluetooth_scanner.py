@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Bluetooth Device Scanner**
+================================================
+This payload scans for classic Bluetooth devices (not BLE) and displays
+their MAC addresses and names on the LCD. It provides a simple way to
+discover nearby Bluetooth devices.
+
+Features:
+- Scans for classic Bluetooth devices using `bluetoothctl`.
+- Displays a scrollable list of discovered devices on the LCD.
+- Graceful exit via KEY3 or Ctrl-C, ensuring Bluetooth is cleaned up.
+
+Controls:
+- UP/DOWN: Scroll through the list of discovered devices.
+- OK: Rescan for devices.
+- KEY3: Exit Payload.
+"""
+
 import sys
 import os
 import time
@@ -29,34 +47,58 @@ FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bol
 
 running = True
 
+def run_bt_command(command_parts, error_message, display_error=True):
+    try:
+        result = subprocess.run(command_parts, shell=False, check=True, capture_output=True, text=True)
+        if result.stderr:
+            print(f"WARNING: {error_message} - STDERR: {result.stderr.strip()}", file=sys.stderr)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"ERROR: {error_message} - Command: {' '.join(command_parts)} - STDERR: {e.stderr.strip()}", file=sys.stderr)
+        if display_error:
+            draw_message([f"ERROR: {error_message}", f"{e.stderr.strip()[:20]}"], "red")
+            time.sleep(3)
+        return False
+    except FileNotFoundError:
+        print(f"ERROR: {error_message} - Command not found: {command_parts[0]}", file=sys.stderr)
+        if display_error:
+            draw_message([f"ERROR: Command not found", f"{command_parts[0]}"], "red")
+            time.sleep(3)
+        return False
+
 def cleanup(*_):
     global running
     if running:
         running = False
-        subprocess.run("bluetoothctl power off", shell=True, capture_output=True)
-        subprocess.run("bluetoothctl scan off", shell=True, capture_output=True)
-        subprocess.run("pkill -f bluetoothctl", shell=True, capture_output=True)
+        print("Cleaning up Bluetooth devices...", file=sys.stderr)
+        draw_message(["Cleaning up Bluetooth..."])
+        run_bt_command(["bluetoothctl", "power", "off"], "Failed to power off Bluetooth", display_error=False)
+        run_bt_command(["bluetoothctl", "scan", "off"], "Failed to stop Bluetooth scan", display_error=False)
+        run_bt_command(["pkill", "-f", "bluetoothctl"], "Failed to kill bluetoothctl processes", display_error=False)
+        print("Bluetooth cleanup complete.", file=sys.stderr)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-def draw_message(lines: List[str]) -> None:
+def draw_message(lines: List[str], color="yellow") -> None:
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
-    y = 30
+    
+    y_offset = (HEIGHT - len(lines) * 15) // 2 # Center vertically
+    
     for ln in lines:
         bbox = d.textbbox((0, 0), ln, font=FONT_TITLE)
-        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        w = bbox[2] - bbox[0]
         x = (WIDTH - w) // 2
-        d.text((x, y), ln, font=FONT_TITLE, fill="#00FF00")
-        y += h + 10
+        d.text((x, y_offset), ln, font=FONT_TITLE, fill=color)
+        y_offset += 15
     LCD.LCD_ShowImage(img, 0, 0)
 
 def draw_device_list(devices: List[Tuple[str, str]], selected_index: int):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
     
-    title = f"BT Scan ({len(devices)})")
+    title = f"BT Scan ({len(devices)})"
     d.text((5, 5), title, font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
 
@@ -83,6 +125,9 @@ SCAN_SECONDS = 10
 
 def discover_devices() -> List[Tuple[str, str]]:
     draw_message(["Scanning for", "Bluetooth devices...", f"({SCAN_SECONDS}s)"])
+
+    # Centralized Bluetooth initialization (already done in main)
+    # run_bt_command(["bluetoothctl", "power", "on"], "Failed to power on Bluetooth")
 
     proc = subprocess.Popen(
         ["bluetoothctl"],
@@ -111,6 +156,7 @@ def discover_devices() -> List[Tuple[str, str]]:
                     mac, name = m.group(1), m.group(2).strip()
                     if name != "n/a":
                         seen[mac] = name
+                draw_message([f"Scanning ({int(SCAN_SECONDS - (time.time() - start_time))}s)", f"Found: {len(seen)} devices"])
     finally:
         proc.stdin.write("scan off\n"); proc.stdin.flush()
         time.sleep(1)
@@ -118,51 +164,72 @@ def discover_devices() -> List[Tuple[str, str]]:
 
     return sorted(seen.items(), key=lambda t: (t[1].lower(), t[0]))
 
-if __name__ == "__main__":
-    try:
-        if subprocess.run("which bluetoothctl", shell=True, capture_output=True).returncode != 0:
-            draw_message(["bluetoothctl not found!", "Exiting..."])
-            time.sleep(3)
-            raise SystemExit("bluetoothctl not found.")
+class Payload:
+    def run(self):
+        try:
+            # Centralized Bluetooth initialization
+            draw_message(["Initializing Bluetooth..."])
+            if not run_bt_command(["rfkill", "unblock", "bluetooth"], "Failed to unblock Bluetooth"):
+                raise SystemExit("Bluetooth initialization failed.")
+            if not run_bt_command(["bluetoothctl", "power", "on"], "Failed to power on Bluetooth"):
+                raise SystemExit("Bluetooth initialization failed.")
+            if not run_bt_command(["hciconfig", "hci0", "up"], "Failed to bring up HCI interface"):
+                raise SystemExit("Bluetooth initialization failed.")
 
-        devices = discover_devices()
-        selected_index = 0
-        
-        if not running:
-            raise KeyboardInterrupt
+            if not run_bt_command(["which", "bluetoothctl"], "bluetoothctl not found"):
+                draw_message(["bluetoothctl not found!", "Exiting..."], "red")
+                time.sleep(3)
+                sys.exit(1)
 
-        draw_device_list(devices, selected_index)
+            devices = []
+            selected_index = 0
+            
+            last_button_press_time = 0
+            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
 
-        while running:
-            button_pressed = False
-            while not button_pressed and running:
-                if GPIO.input(PINS["KEY3"]) == 0:
+            draw_message(["Press OK to scan"])
+
+            while running:
+                current_time = time.time()
+
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     cleanup()
                     break
-                if GPIO.input(PINS["UP"]) == 0:
-                    selected_index = (selected_index - 1) % len(devices) if devices else 0
-                    button_pressed = True
-                elif GPIO.input(PINS["DOWN"]) == 0:
-                    selected_index = (selected_index + 1) % len(devices) if devices else 0
-                    button_pressed = True
-                elif GPIO.input(PINS["OK"]) == 0:
+                
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     devices = discover_devices()
                     selected_index = 0
-                    button_pressed = True
+                    if not running: break # Check if cleanup was called during scan
+                    draw_device_list(devices, selected_index)
+                    time.sleep(BUTTON_DEBOUNCE_TIME) # Debounce after OK press
+
+                if devices: # Only allow scrolling if devices are found
+                    if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        selected_index = (selected_index - 1) % len(devices)
+                        draw_device_list(devices, selected_index)
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        selected_index = (selected_index + 1) % len(devices)
+                        draw_device_list(devices, selected_index)
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                time.sleep(0.1)
+                time.sleep(0.05)
 
-            if button_pressed:
-                draw_device_list(devices, selected_index)
-                time.sleep(0.2)
+        except (KeyboardInterrupt, SystemExit):
+            pass
+        except Exception as e:
+            print(f"[ERROR] {e}", file=sys.stderr)
+            draw_message(["An error occurred.", str(e)[:20]], "red")
+            time.sleep(3)
+        finally:
+            LCD.LCD_Clear()
+            GPIO.cleanup()
+            print("Bluetooth Scanner payload finished.")
 
-    except (KeyboardInterrupt, SystemExit):
-        pass
-    except Exception as e:
-        print(f"[ERROR] {e}", file=sys.stderr)
-        draw_message(["An error occurred.", str(e)[:20]])
-        time.sleep(3)
-    finally:
-        LCD.LCD_Clear()
-        GPIO.cleanup()
-        print("Bluetooth Scanner payload finished.")
+if __name__ == "__main__":
+    payload = Payload()
+    payload.run()

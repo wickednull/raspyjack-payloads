@@ -49,8 +49,12 @@ def cleanup(*_):
                 pass
     
     if WIFI_INTERFACE and wifi_manager and ORIGINAL_WIFI_INTERFACE:
-        print(f"Deactivating monitor mode on {WIFI_INTERFACE} and restoring {ORIGINAL_WIFI_INTERFACE}...")
-        wifi_manager.deactivate_monitor_mode(WIFI_INTERFACE)
+        print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE} and restoring {ORIGINAL_WIFI_INTERFACE}...", file=sys.stderr)
+        success = wifi_manager.deactivate_monitor_mode(WIFI_INTERFACE)
+        if success:
+            print(f"Successfully deactivated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
+        else:
+            print(f"ERROR: Failed to deactivate monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -140,16 +144,19 @@ def select_interface_menu():
         elif GPIO.input(PINS["OK"]) == 0:
             selected_iface = available_interfaces[current_menu_selection]
             draw_message(f"Activating monitor\nmode on {selected_iface}...", "yellow")
+            print(f"Attempting to activate monitor mode on {selected_iface}...", file=sys.stderr)
             
             monitor_iface = wifi_manager.activate_monitor_mode(selected_iface)
             if monitor_iface:
                 WIFI_INTERFACE = monitor_iface
                 ORIGINAL_WIFI_INTERFACE = selected_iface
                 draw_message(f"Monitor mode active\non {WIFI_INTERFACE}", "lime")
+                print(f"Successfully activated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
                 time.sleep(2)
                 return True
             else:
-                draw_message(f"Failed to activate\nmonitor mode on {selected_iface}", "red")
+                draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
+                print(f"ERROR: wifi_manager.activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
                 time.sleep(3)
                 return False
         elif GPIO.input(PINS["KEY3"]) == 0:

@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Self-Destruct**
+=====================================
+This payload performs a destructive operation, deleting all collected loot
+and all other payloads from the RaspyJack device. This is an irreversible
+action intended for situations where sensitive data needs to be purged
+or the device needs to be reset to a minimal state.
+
+Features:
+- Prompts user for multiple confirmations before proceeding.
+- Deletes all files and subdirectories within the `loot` directory.
+- Deletes all other Python payloads from the `payloads` directory,
+  excluding itself.
+- Displays status messages on the LCD during the process.
+
+Controls:
+- OK: Confirm destructive actions.
+- KEY3: Abort self-destruct sequence.
+"""
 import sys
 import os
 import time
@@ -19,7 +38,17 @@ GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+
+running = True
+
+def cleanup_handler(*_):
+    global running
+    running = False
+
+signal.signal(signal.SIGINT, cleanup_handler)
+signal.signal(signal.SIGTERM, cleanup_handler)
 
 def show_message(lines, color="red"):
     img = Image.new("RGB", (128, 128), "black")
@@ -33,16 +62,23 @@ def show_message(lines, color="red"):
 def run_self_destruct():
     show_message(["!!! WARNING !!!", "Self-Destruct", "is irreversible.", "Press OK again", "to confirm."])
     
+    last_button_press_time = 0
+    BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+
     start_wait = time.time()
-    while time.time() - start_wait < 5.0:
-        if GPIO.input(PINS["KEY3"]) == 0:
+    while running and (time.time() - start_wait < 5.0):
+        current_time = time.time()
+        if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             show_message(["Aborted."])
             return
-        if GPIO.input(PINS["OK"]) == 0:
+        if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             break
         time.sleep(0.1)
     else:
-        show_message(["Aborted."])
+        if running: # Only show aborted if not interrupted by signal
+            show_message(["Aborted."])
         return
 
     show_message(["Deleting loot..."])

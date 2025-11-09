@@ -85,6 +85,8 @@ class FastWiFiSwitcher:
         self.button_states = {pin: 1 for pin in self.buttons.values()}
         self.last_press_time = {pin: 0 for pin in self.buttons.values()}
         
+        signal.signal(signal.SIGTERM, self.cleanup)
+        
         print("🚀 Fast WiFi Switcher initialized")
     
     def get_current(self):

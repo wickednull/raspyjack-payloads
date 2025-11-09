@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **ARP Scanner**
+====================================
+This payload performs an ARP scan on the local network to discover active hosts
+(IP and MAC addresses) and displays them on the 1.44-inch LCD.
+Discovered hosts are also saved to a loot file.
+
+Features:
+- Scans the local network for active devices using ARP requests.
+- Displays a scrollable list of discovered IP and MAC addresses.
+- Saves scan results to a timestamped loot file.
+- Automatically detects the best network interface for scanning.
+
+Controls:
+- OK: Start a new ARP scan.
+- UP/DOWN: Scroll through the list of discovered hosts.
+- KEY3: Exit Payload.
+"""
 import sys
 import os
 import time
@@ -10,6 +28,18 @@ import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from scapy.all import *
+from scapy.error import Scapy_Exception
+
+# WiFi Integration - Add dual interface support
+try:
+
+    sys.path.append('/root/Raspyjack/wifi/')
+    from wifi.raspyjack_integration import get_best_interface
+    WIFI_INTEGRATION_AVAILABLE = True
+except ImportError:
+    WIFI_INTEGRATION_AVAILABLE = False
+    def get_best_interface():
+        return "eth0" # Fallback
 
 PINS: dict[str, int] = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
@@ -28,7 +58,8 @@ FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bol
 
 RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
 LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "ARP_Scan")
-ETH_INTERFACE = "eth0"
+# Dynamically get the best interface
+NETWORK_INTERFACE = get_best_interface()
 running = True
 scan_thread = None
 discovered_hosts = []
@@ -42,21 +73,21 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-def get_network_range():
-    """Gets the network range (e.g., 192.168.1.0/24) for the eth0 interface."""
+def get_network_range(interface):
+    """Gets the network range (e.g., 192.168.1.0/24) for the given interface."""
     try:
-        output = subprocess.check_output(f"ip -o -4 addr show {ETH_INTERFACE} | awk '{{print $4}}'", shell=True).decode().strip()
+        output = subprocess.check_output(f"ip -o -4 addr show {interface} | awk '{{print $4}}'", shell=True).decode().strip()
         if not output:
             return None
         return output
     except Exception:
         return None
 
-def run_arp_scan(network_range):
+def run_arp_scan(network_range, interface):
     """Uses Scapy to perform an ARP scan and update the discovered_hosts list."""
     global discovered_hosts
     try:
-        ans, unans = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=network_range), timeout=5, iface=ETH_INTERFACE, verbose=0)
+        ans, unans = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=network_range), timeout=5, iface=interface, verbose=0)
         
         temp_hosts = []
         for sent, received in ans:
@@ -70,13 +101,13 @@ def run_arp_scan(network_range):
         print(f"Scapy ARP Scan failed: {e}", file=sys.stderr)
         with ui_lock:
             discovered_hosts = []
-            draw_ui(f"Scapy Error:\n{str(e)[:20]}")
+            draw_ui(f"Scapy Error:\n{str(e)[:20]}", interface)
             time.sleep(3)
     except Exception as e:
         print(f"ARP Scan failed: {e}", file=sys.stderr)
         with ui_lock:
             discovered_hosts = []
-            draw_ui(f"Scan Error:\n{str(e)[:20]}")
+            draw_ui(f"Scan Error:\n{str(e)[:20]}", interface)
             time.sleep(3)
 
 def save_loot():
@@ -87,11 +118,11 @@ def save_loot():
         for host in discovered_hosts:
             f.write(f"{host['ip']:<15} {host['mac']}\n")
 
-def draw_ui(status_msg=""):
+def draw_ui(status_msg="", interface=""):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
 
-    d.text((5, 5), "ARP Scanner (eth0)", font=FONT_TITLE, fill="#00FF00")
+    d.text((5, 5), f"ARP Scanner ({interface})", font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
 
     if status_msg:
@@ -124,14 +155,15 @@ def draw_ui(status_msg=""):
 
 if __name__ == "__main__":
     try:
-        network_range = get_network_range()
+        current_interface = NETWORK_INTERFACE
+        network_range = get_network_range(current_interface)
         if not network_range:
-            draw_ui("Error:\neth0 not connected\nor no IP address.")
+            draw_ui(f"Error:\n{current_interface} not connected\nor no IP address.", current_interface)
             time.sleep(5)
-            raise SystemExit("eth0 has no IP address or is not connected.")
+            raise SystemExit(f"{current_interface} has no IP address or is not connected.")
 
         while running:
-            draw_ui()
+            draw_ui(interface=current_interface)
             
             while running:
                 if GPIO.input(PINS["KEY3"]) == 0:
@@ -139,8 +171,8 @@ if __name__ == "__main__":
                     break
                 
                 if GPIO.input(PINS["OK"]) == 0:
-                    draw_ui("Scanning...")
-                    run_arp_scan(network_range)
+                    draw_ui("Scanning...", current_interface)
+                    run_arp_scan(network_range, current_interface)
                     selected_index = 0
                     break
                 
@@ -161,7 +193,7 @@ if __name__ == "__main__":
         pass
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)
-        draw_ui(f"CRITICAL ERROR:\n{str(e)[:20]}")
+        draw_ui(f"CRITICAL ERROR:\n{str(e)[:20]}", current_interface)
         time.sleep(3)
     finally:
         LCD.LCD_Clear()

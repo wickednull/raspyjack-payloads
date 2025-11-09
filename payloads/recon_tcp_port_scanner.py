@@ -1,4 +1,34 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **TCP Port Scanner**
+========================================
+This payload performs a basic TCP port scan on a target IP address to identify
+open ports. It attempts to establish a TCP connection to a list of specified
+ports and reports which ones are open.
+
+Features:
+- Interactive UI for entering the target IP address.
+- Interactive UI for entering a comma-separated list of ports to scan.
+- Scans specified ports and displays open ports on the LCD.
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start TCP port scan.
+    - KEY1: Edit target IP.
+    - KEY2: Edit ports to scan.
+    - KEY3: Exit Payload.
+- IP INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm IP.
+    - KEY3: Cancel input.
+- PORTS INPUT SCREEN:
+    - UP/DOWN: Change character at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm ports.
+    - KEY3: Cancel input.
+"""
 import sys
 import os
 import time
@@ -253,88 +283,98 @@ def run_scan():
     return open_ports
 
 if __name__ == '__main__':
-    current_screen = "main"
-    last_scan_results = []
-    try:
-        while running:
-            if current_screen == "main":
-                draw_ui("main")
+            last_button_press_time = 0
+            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    
+            while running:
+                current_time = time.time()
                 
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    cleanup()
-                    break
+                if current_screen == "main":
+                    draw_ui("main")
+                    
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        cleanup()
+                        break
+                    
+                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        last_scan_results = run_scan()
+                        current_screen = "results"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        current_ip_input = TARGET_IP
+                        current_screen = "ip_input"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        current_ports_input = ",".join(map(str, PORTS_TO_SCAN))
+                        current_screen = "ports_input"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["OK"]) == 0:
-                    last_scan_results = run_scan()
-                    current_screen = "results"
-                    time.sleep(0.3)
-                
-                if GPIO.input(PINS["KEY1"]) == 0:
-                    current_ip_input = TARGET_IP
-                    current_screen = "ip_input"
-                    time.sleep(0.3)
-                
-                if GPIO.input(PINS["KEY2"]) == 0:
-                    current_ports_input = ",".join(map(str, PORTS_TO_SCAN))
-                    current_screen = "ports_input"
-                    time.sleep(0.3)
-            
-            elif current_screen == "ip_input":
-                char_set = "0123456789."
-                new_ip = handle_ip_input_logic(current_ip_input)
-                if new_ip:
-                    TARGET_IP = new_ip
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            elif current_screen == "ports_input":
-                char_set = "0123456789,"
-                new_ports_str = handle_ports_input_logic(current_ports_input)
-                if new_ports_str:
-                    try:
-                        parsed_ports = [int(p.strip()) for p in new_ports_str.split(',') if p.strip().isdigit()]
-                        if all(1 <= p <= 65535 for p in parsed_ports):
-                            PORTS_TO_SCAN = parsed_ports
-                        else:
-                            show_message(["Invalid Port Range!", "1-65535 only."], "red")
-                            time.sleep(2)
-                    except ValueError:
-                        show_message(["Invalid Format!", "Use comma-sep", "numbers."], "red")
-                        time.sleep(2)
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            elif current_screen == "scanning":
-                draw_ui("scanning")
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    cleanup()
-                    break
-                if not (scan_thread and scan_thread.is_alive()):
-                    current_screen = "results"
-                time.sleep(0.1)
-            
-            elif current_screen == "results":
-                draw_ui("results")
-                if GPIO.input(PINS["KEY3"]) == 0:
+                elif current_screen == "ip_input":
+                    char_set = "0123456789."
+                    new_ip = handle_ip_input_logic(current_ip_input)
+                    if new_ip:
+                        TARGET_IP = new_ip
                     current_screen = "main"
-                    time.sleep(0.3)
-                if GPIO.input(PINS["OK"]) == 0:
-                    last_scan_results = run_scan()
-                    time.sleep(0.3)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["UP"]) == 0:
-                    with ui_lock:
-                        if open_ports: selected_index = (selected_index - 1) % len(open_ports)
-                    time.sleep(0.2)
-                elif GPIO.input(PINS["DOWN"]) == 0:
-                    with ui_lock:
-                        if open_ports: selected_index = (selected_index + 1) % len(open_ports)
-                    time.sleep(0.2)
+                elif current_screen == "ports_input":
+                    char_set = "0123456789,"
+                    new_ports_str = handle_ports_input_logic(current_ports_input)
+                    if new_ports_str:
+                        try:
+                            parsed_ports = [int(p.strip()) for p in new_ports_str.split(',') if p.strip().isdigit()]
+                            if all(1 <= p <= 65535 for p in parsed_ports):
+                                PORTS_TO_SCAN = parsed_ports
+                            else:
+                                show_message(["Invalid Port Range!", "1-65535 only."], "red")
+                                time.sleep(2)
+                        except ValueError:
+                            show_message(["Invalid Format!", "Use comma-sep", "numbers."], "red")
+                            time.sleep(2)
+                    current_screen = "main"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
+                elif current_screen == "scanning":
+                    draw_ui("scanning")
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        cleanup()
+                        break
+                    if not (scan_thread and scan_thread.is_alive()):
+                        current_screen = "results"
+                    time.sleep(0.1)
+                
+                elif current_screen == "results":
+                    draw_ui("results")
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        current_screen = "main"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        last_scan_results = run_scan()
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        with ui_lock:
+                            if open_ports: selected_index = (selected_index - 1) % len(open_ports)
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        with ui_lock:
+                            if open_ports: selected_index = (selected_index + 1) % len(open_ports)
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    time.sleep(0.1)
+    
                 time.sleep(0.1)
-
-            time.sleep(0.1)
-
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as e:

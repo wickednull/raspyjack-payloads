@@ -30,6 +30,8 @@ Discord limits a single upload to **≤ 8 MiB** for standard (non Nitro) accou
 import os, sys, io, zipfile, datetime, signal, textwrap
 from pathlib import Path          # path handling in an OS‑agnostic way
 
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+
 # ---------------------------------------------------------------------------
 # 1) Third‑party dependency – `requests`
 # ---------------------------------------------------------------------------

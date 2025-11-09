@@ -1,4 +1,24 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **PMKID Capture**
+=====================================
+This payload uses `hcxdumptool` to capture PMKID (Pairwise Master Key Identifier)
+hash values from nearby Wi-Fi access points. PMKID hashes can be cracked
+offline to recover the WPA/WPA2 passphrase. This attack is faster than
+traditional WPA handshake captures as it only requires a single EAPOL frame.
+
+Features:
+- Automatically sets the selected Wi-Fi interface to monitor mode.
+- Uses `hcxdumptool` to actively scan for and capture PMKID hashes.
+- Displays real-time status, including AP count and PMKID count, on the LCD.
+- Saves captured PMKID hashes to a .pcapng file for offline cracking.
+- Graceful exit via KEY3 or Ctrl-C, cleaning up `hcxdumptool` processes
+  and restoring the Wi-Fi interface to managed mode.
+
+Controls:
+- OK: Toggle PMKID capture (Start/Stop).
+- KEY3: Exit Payload.
+"""
 import sys
 import os
 import time

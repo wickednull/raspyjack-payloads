@@ -1,4 +1,28 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Internet Connectivity Check**
+==================================================
+This payload checks internet connectivity by pinging a user-defined list
+of hosts. It displays the results on the LCD, indicating whether each host
+is reachable and providing a summary of overall connectivity.
+
+Features:
+- Interactive UI to edit the list of hosts to check.
+- Pings each host and displays individual success/failure status.
+- Provides a summary "Internet OK" or "No Internet".
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Re-run the internet check.
+    - KEY1: Edit the list of hosts to check.
+    - KEY3: Exit Payload.
+- HOSTS INPUT SCREEN:
+    - UP/DOWN: Change character at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm host list.
+    - KEY3: Cancel input.
+"""
 import sys
 import os
 import time
@@ -181,35 +205,40 @@ def run_test():
     draw_ui("main", results=results, summary=summary)
 
 if __name__ == "__main__":
-    current_screen = "main"
-    try:
-        while running:
-            if current_screen == "main":
-                draw_ui("main", results=None, summary="Ready")
+            last_button_press_time = 0
+            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    
+            while running:
+                current_time = time.time()
                 
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    cleanup()
-                    break
+                if current_screen == "main":
+                    draw_ui("main", results=None, summary="Ready")
+                    
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        cleanup()
+                        break
+                    
+                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        run_test()
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        current_hosts_input = ", ".join(HOSTS_TO_CHECK)
+                        current_screen = "hosts_input"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["OK"]) == 0:
-                    run_test()
-                    time.sleep(0.3)
+                elif current_screen == "hosts_input":
+                    char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-, "
+                    new_hosts_str = handle_text_input_logic(current_hosts_input, "hosts_input", char_set)
+                    if new_hosts_str:
+                        HOSTS_TO_CHECK = [h.strip() for h in new_hosts_str.split(',') if h.strip()]
+                    current_screen = "main"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["KEY1"]) == 0:
-                    current_hosts_input = ", ".join(HOSTS_TO_CHECK)
-                    current_screen = "hosts_input"
-                    time.sleep(0.3)
-            
-            elif current_screen == "hosts_input":
-                char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-, "
-                new_hosts_str = handle_text_input_logic(current_hosts_input, "hosts_input", char_set)
-                if new_hosts_str:
-                    HOSTS_TO_CHECK = [h.strip() for h in new_hosts_str.split(',') if h.strip()]
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            time.sleep(0.1)
-
+                time.sleep(0.1)
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as e:

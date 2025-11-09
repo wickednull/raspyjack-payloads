@@ -1,4 +1,34 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Find FTP Servers**
+========================================
+This payload scans the local network for active FTP servers (port 21).
+It performs a basic port scan on all hosts within the local subnet to
+identify machines running an FTP service.
+
+Features:
+- Interactive UI for selecting the network interface to scan.
+- Allows editing of the target FTP port (default 21).
+- Scans all hosts in the local subnet for the specified port.
+- Displays found FTP server IP addresses on the LCD.
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start scanning for FTP servers.
+    - KEY1: Select network interface.
+    - KEY2: Edit target FTP port.
+    - KEY3: Exit Payload.
+- INTERFACE SELECTION SCREEN:
+    - UP/DOWN: Navigate interfaces.
+    - OK: Select interface.
+    - KEY3: Cancel selection.
+- PORT INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm port.
+    - KEY3: Cancel input.
+"""
 import sys
 import os
 import time
@@ -248,62 +278,70 @@ def run_scan(interface):
         with ui_lock: status_msg = "Scan Finished"
 
 if __name__ == "__main__":
-    current_screen = "main"
-    try:
-        selected_interface = select_interface_menu()
-        if not selected_interface:
-            show_message(["No interface", "selected!", "Exiting..."], "red")
-            time.sleep(3)
-            sys.exit(1)
-
-        while running:
-            if current_screen == "main":
-                draw_ui("main")
+            last_button_press_time = 0
+            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    
+            selected_interface = select_interface_menu()
+            if not selected_interface:
+                show_message(["No interface", "selected!", "Exiting..."], "red")
+                time.sleep(3)
+                sys.exit(1)
+    
+            while running:
+                current_time = time.time()
                 
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    cleanup()
-                    break
+                if current_screen == "main":
+                    draw_ui("main")
+                    
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        cleanup()
+                        break
+                    
+                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        if not (scan_thread and scan_thread.is_alive()):
+                            scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
+                            scan_thread.start()
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        with ui_lock:
+                            if ftp_servers: selected_index = (selected_index - 1) % len(ftp_servers)
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        with ui_lock:
+                            if ftp_servers: selected_index = (selected_index + 1) % len(ftp_servers)
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        show_message(["Interface selection", "is now menu-driven."], "yellow")
+                        time.sleep(2)
+                        current_screen = "main"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        current_port_input = str(FTP_PORT)
+                        current_screen = "port_input"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["OK"]) == 0:
-                    if not (scan_thread and scan_thread.is_alive()):
-                        scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
-                        scan_thread.start()
-                    time.sleep(0.3)
-                
-                if GPIO.input(PINS["UP"]) == 0:
-                    with ui_lock:
-                        if ftp_servers: selected_index = (selected_index - 1) % len(ftp_servers)
-                    time.sleep(0.2)
-                elif GPIO.input(PINS["DOWN"]) == 0:
-                    with ui_lock:
-                        if ftp_servers: selected_index = (selected_index + 1) % len(ftp_servers)
-                    time.sleep(0.2)
-                
-                if GPIO.input(PINS["KEY1"]) == 0:
-                    show_message(["Interface selection", "is now menu-driven."], "yellow")
-                    time.sleep(2)
+                elif current_screen == "iface_input":
                     current_screen = "main"
-                    time.sleep(0.3)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["KEY2"]) == 0:
-                    current_port_input = str(FTP_PORT)
-                    current_screen = "port_input"
-                    time.sleep(0.3)
-            
-            elif current_screen == "iface_input":
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            elif current_screen == "port_input":
-                char_set = "0123456789"
-                new_port = handle_text_input_logic(current_port_input, "port_input", char_set)
-                if new_port:
-                    FTP_PORT = int(new_port)
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            time.sleep(0.1)
-
+                elif current_screen == "port_input":
+                    char_set = "0123456789"
+                    new_port = handle_text_input_logic(current_port_input, "port_input", char_set)
+                    if new_port:
+                        FTP_PORT = int(new_port)
+                    current_screen = "main"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                
+                time.sleep(0.1)
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as e:

@@ -1,4 +1,37 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Persistent Reverse Shell (HID)**
+======================================================
+This payload uses a Human Interface Device (HID) attack to inject commands
+into a target Windows machine, establishing a persistent reverse shell.
+It first sets up a registry key for persistence and then attempts to
+download and execute a reverse shell executable from a specified listener.
+
+Features:
+- Interactive UI for entering the listener IP and Port.
+- Uses `hid_helper` to simulate keyboard input.
+- Injects PowerShell commands to create persistence and download/execute a shell.
+- Displays attack status on the LCD.
+- Checks if HID gadget is enabled.
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start HID attack.
+    - KEY1: Edit Listener IP.
+    - KEY2: Edit Listener Port.
+    - KEY3: Exit Payload.
+- IP INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm IP.
+    - KEY3: Cancel input.
+- PORT INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm Port.
+    - KEY3: Cancel input.
+"""
 import sys
 import os
 import time
@@ -18,6 +51,7 @@ GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
 
@@ -244,50 +278,56 @@ def run_attack():
         return False
 
 if __name__ == '__main__':
-    current_screen = "main"
-    try:
-        while running:
-            if current_screen == "main":
-                draw_ui("main")
+            last_button_press_time = 0
+            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    
+            while running:
+                current_time = time.time()
                 
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    cleanup()
-                    break
+                if current_screen == "main":
+                    draw_ui("main")
+                    
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        cleanup()
+                        break
+                    
+                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        if run_attack():
+                            time.sleep(3)
+                        current_screen = "main"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        current_ip_input = LISTENER_IP
+                        current_screen = "ip_input"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        current_port_input = LISTENER_PORT
+                        current_screen = "port_input"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["OK"]) == 0:
-                    if run_attack():
-                        time.sleep(3)
+                elif current_screen == "ip_input":
+                    char_set = "0123456789."
+                    new_ip = handle_ip_input_logic(current_ip_input, "ip_input", char_set)
+                    if new_ip:
+                        LISTENER_IP = new_ip
                     current_screen = "main"
-                    time.sleep(0.3)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["KEY1"]) == 0:
-                    current_ip_input = LISTENER_IP
-                    current_screen = "ip_input"
-                    time.sleep(0.3)
+                elif current_screen == "port_input":
+                    char_set = "0123456789"
+                    new_port = handle_port_input_logic(current_port_input, "port_input", char_set)
+                    if new_port:
+                        LISTENER_PORT = new_port
+                    current_screen = "main"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["KEY2"]) == 0:
-                    current_port_input = LISTENER_PORT
-                    current_screen = "port_input"
-                    time.sleep(0.3)
-            
-            elif current_screen == "ip_input":
-                char_set = "0123456789."
-                new_ip = handle_ip_input_logic(current_ip_input, "ip_input", char_set)
-                if new_ip:
-                    LISTENER_IP = new_ip
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            elif current_screen == "port_input":
-                char_set = "0123456789"
-                new_port = handle_port_input_logic(current_port_input, "port_input", char_set)
-                if new_port:
-                    LISTENER_PORT = new_port
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            time.sleep(0.1)
-            
+                time.sleep(0.1)            
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:

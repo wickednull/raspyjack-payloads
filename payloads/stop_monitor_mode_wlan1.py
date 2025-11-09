@@ -1,4 +1,21 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Stop Monitor Mode (wlan1)**
+=================================================
+This payload attempts to deactivate monitor mode on the specified Wi-Fi interface
+(defaulting to `wlan1`) and restore it to managed mode. This is useful after
+completing Wi-Fi reconnaissance or attacks that require monitor mode.
+
+Features:
+- Automatically attempts to put `wlan1` into managed mode.
+- Displays status messages on the LCD regarding the deactivation process.
+- Uses `WiFiManager` for robust interface management.
+- Graceful exit via Ctrl-C or SIGTERM.
+
+Controls:
+- This payload is designed to be executed directly.
+- No interactive controls after launch, it performs its function and exits.
+"""
 import sys
 import os
 import time
@@ -52,15 +69,18 @@ def main():
     draw_message(["Deactivating monitor", f"mode on {TARGET_INTERFACE_BASE}...", "Please wait."], "yellow")
 
     wifi_manager = WiFiManager()
+    print(f"Attempting to deactivate monitor mode on {TARGET_INTERFACE_BASE}...", file=sys.stderr)
     try:
         success = wifi_manager.deactivate_monitor_mode(TARGET_INTERFACE_BASE)
         if success:
             draw_message(["Monitor mode", "DEACTIVATED!", f"Interface: {TARGET_INTERFACE_BASE}"], "lime")
+            print(f"Successfully deactivated monitor mode on {TARGET_INTERFACE_BASE}", file=sys.stderr)
         else:
             draw_message(["ERROR:", "Failed to deactivate", "monitor mode!"], "red")
+            print(f"ERROR: wifi_manager.deactivate_monitor_mode failed for {TARGET_INTERFACE_BASE}", file=sys.stderr)
     except Exception as e:
         draw_message(["CRITICAL ERROR:", str(e)[:20]], "red")
-        print(f"Critical error: {e}", file=sys.stderr)
+        print(f"Critical error during monitor mode deactivation: {e}", file=sys.stderr)
     
     time.sleep(5)
 

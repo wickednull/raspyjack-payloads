@@ -1,4 +1,39 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Evil Twin Attack**
+========================================
+This payload sets up an Evil Twin attack, creating a fake Wi-Fi Access Point
+that mimics a legitimate one. It then uses a captive portal to trick users
+into providing credentials (e.g., Wi-Fi passwords, social media logins).
+
+Features:
+- Scans for nearby Wi-Fi networks to clone their SSID and channel.
+- Allows selection of a captive portal template (e.g., generic Wi-Fi login,
+  social media phishing pages).
+- Sets up `hostapd` for the fake AP, `dnsmasq` for DHCP and DNS spoofing,
+  and a PHP web server for the captive portal.
+- Monitors connected clients and captured credentials.
+- Displays current status, client count, and credential count on the LCD.
+- Graceful exit via KEY3 or Ctrl-C, cleaning up all attack services and
+  restoring the original network configuration.
+
+Controls:
+- MAIN MENU:
+    - KEY1: Scan for networks to clone.
+    - KEY3: Select captive portal template.
+    - OK: Start the Evil Twin attack.
+- NETWORK SELECTION:
+    - UP/DOWN: Navigate through scanned networks.
+    - OK: Select a network to clone.
+    - KEY3: Return to main menu.
+- PORTAL SELECTION:
+    - UP/DOWN: Navigate through available captive portal templates.
+    - OK: Select a template.
+    - KEY3: Return to main menu.
+- ATTACKING SCREEN:
+    - OK: Stop the attack.
+    - KEY3: Stop attack and exit payload.
+"""
 import sys
 import os
 import time
@@ -46,6 +81,8 @@ status_info = {
     "credentials": 0
 }
 ORIGINAL_WIFI_INTERFACE = None
+scroll_offset = 0
+VISIBLE_ITEMS = 5 # Number of HTML files visible on screen at once
 
 current_html_file = "wifi"
 html_files_list = []
@@ -53,6 +90,28 @@ html_file_index = 0
 
 scanned_networks = []
 selected_network_index = 0
+
+def run_command(command_parts, error_message, timeout=10, shell=False, check=False):
+    try:
+        if shell:
+            result = subprocess.run(command_parts, shell=True, check=check, capture_output=True, text=True, timeout=timeout)
+        else:
+            result = subprocess.run(command_parts, shell=False, check=check, capture_output=True, text=True, timeout=timeout)
+        if result.stderr:
+            print(f"WARNING: {error_message} - STDERR: {result.stderr.strip()}", file=sys.stderr)
+        return result.stdout, result.returncode == 0
+    except subprocess.CalledProcessError as e:
+        print(f"ERROR: {error_message} - Command: {command_parts} - STDERR: {e.stderr.strip()}", file=sys.stderr)
+        return e.stdout, False
+    except subprocess.TimeoutExpired:
+        print(f"ERROR: {error_message} - Command timed out: {command_parts}", file=sys.stderr)
+        return "", False
+    except FileNotFoundError:
+        print(f"ERROR: {error_message} - Command not found: {command_parts.split()[0]}", file=sys.stderr)
+        return "", False
+    except Exception as e:
+        print(f"CRITICAL ERROR during {error_message}: {e}", file=sys.stderr)
+        return "", False
 
 def cleanup(*_):
     global running
@@ -95,16 +154,24 @@ def draw_ui(screen_state="main", status: str = ""):
         if not html_files_list:
             d.text((5, 40), "No HTML files found!", font=FONT_UI, fill="red")
         else:
-            for i, file_name in enumerate(html_files_list):
-                display_name = file_name
-                if len(display_name) > 16:
-                    display_name = display_name[:13] + "..."
-                
-                text_color = "white"
-                if i == html_file_index:
-                    text_color = "lime"
-                    d.rectangle([(0, 25 + i*15), (128, 25 + (i+1)*15)], fill="blue")
-                d.text((5, 25 + i*15), display_name, font=FONT_UI, fill=text_color)
+            # Display scroll indicators if needed
+            if scroll_offset > 0:
+                d.text((60, 25), "^", font=FONT_UI, fill="white")
+            if scroll_offset + VISIBLE_ITEMS < len(html_files_list):
+                d.text((60, 100), "v", font=FONT_UI, fill="white")
+
+            for i in range(VISIBLE_ITEMS):
+                if scroll_offset + i < len(html_files_list):
+                    file_name = html_files_list[scroll_offset + i]
+                    display_name = file_name
+                    if len(display_name) > 16:
+                        display_name = display_name[:13] + "..."
+                    
+                    text_color = "white"
+                    if (scroll_offset + i) == html_file_index:
+                        text_color = "lime"
+                        d.rectangle([(0, 35 + i*15), (128, 35 + (i+1)*15)], fill="blue")
+                    d.text((5, 35 + i*15), display_name, font=FONT_UI, fill=text_color)
         d.text((5, 110), "UP/DOWN=Select | OK=Confirm", font=FONT_UI, fill="cyan")
     elif screen_state == "scan_networks":
         d.text((5, 5), "Scanning Networks...", font=FONT_TITLE, fill="yellow")
@@ -197,7 +264,7 @@ def scan_wifi_networks():
             WIFI_INTERFACE = ORIGINAL_WIFI_INTERFACE
 
 def handle_file_selection_logic():
-    global html_files_list, html_file_index, current_html_file, CAPTIVE_PORTAL_PATH, LOOT_FILE
+    global html_files_list, html_file_index, current_html_file, CAPTIVE_PORTAL_PATH, LOOT_FILE, scroll_offset
 
     html_files_list = [d for d in os.listdir(CAPTIVE_PORTAL_BASE_PATH) if os.path.isdir(os.path.join(CAPTIVE_PORTAL_BASE_PATH, d))]
     html_files_list.sort()
@@ -211,7 +278,12 @@ def handle_file_selection_logic():
         html_file_index = html_files_list.index(current_html_file)
     except ValueError:
         html_file_index = 0
-        current_html_file = html_files_list[0]
+    
+    # Adjust scroll_offset to ensure current_html_file is visible
+    if html_file_index < scroll_offset:
+        scroll_offset = html_file_index
+    elif html_file_index >= scroll_offset + VISIBLE_ITEMS:
+        scroll_offset = html_file_index - VISIBLE_ITEMS + 1
 
     while running:
         draw_ui("html_select")
@@ -225,9 +297,13 @@ def handle_file_selection_logic():
         
         if btn == "UP":
             html_file_index = (html_file_index - 1 + len(html_files_list)) % len(html_files_list)
+            if html_file_index < scroll_offset:
+                scroll_offset = html_file_index
             current_html_file = html_files_list[html_file_index]
         elif btn == "DOWN":
             html_file_index = (html_file_index + 1) % len(html_files_list)
+            if html_file_index >= scroll_offset + VISIBLE_ITEMS:
+                scroll_offset = html_file_index - VISIBLE_ITEMS + 1
             current_html_file = html_files_list[html_file_index]
         elif btn == "OK":
             CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, current_html_file)
@@ -398,17 +474,25 @@ if __name__ == "__main__":
             time.sleep(5)
             raise SystemExit(f"{dep_missing} not found")
 
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+
         while running:
+            current_time = time.time()
+            
             if current_screen == "main":
                 draw_ui("main")
-                if GPIO.input(PINS["KEY1"]) == 0:
+                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     current_screen = "scan_networks"
                     scan_wifi_networks()
-                    time.sleep(0.2)
-                elif GPIO.input(PINS["KEY3"]) == 0:
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     current_screen = "html_select"
-                    time.sleep(0.2)
-                elif GPIO.input(PINS["OK"]) == 0:
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     draw_message("Starting...")
                     if start_attack():
                         is_attacking = True
@@ -418,13 +502,14 @@ if __name__ == "__main__":
                         draw_message("Attack FAILED", "red")
                         time.sleep(3)
                         current_screen = "main"
-                    time.sleep(0.2)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
             elif current_screen == "scan_networks":
                 draw_ui("scan_networks")
                 btn = None
                 for name, pin in PINS.items():
-                    if GPIO.input(pin) == 0:
+                    if GPIO.input(pin) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                         btn = name
+                        last_button_press_time = current_time
                         while GPIO.input(pin) == 0:
                             time.sleep(0.05)
                         break
@@ -447,16 +532,18 @@ if __name__ == "__main__":
             elif current_screen == "html_select":
                 handle_file_selection_logic()
                 current_screen = "main"
-                time.sleep(0.2)
+                time.sleep(BUTTON_DEBOUNCE_TIME)
             elif current_screen == "attacking":
                 draw_ui("attacking", "ACTIVE")
-                if GPIO.input(PINS["OK"]) == 0:
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     draw_message("Stopping...")
                     cleanup()
                     is_attacking = False
                     current_screen = "main"
                     time.sleep(2)
-                elif GPIO.input(PINS["KEY3"]) == 0:
+                elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     cleanup()
                     break
             

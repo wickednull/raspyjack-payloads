@@ -1,4 +1,38 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **DoS: UDP Flood**
+======================================
+This payload performs a UDP Flood attack, a type of Denial of Service (DoS)
+that aims to overwhelm a target server or network by sending a large volume
+of UDP packets to random or specific ports. This can consume bandwidth and
+server resources, leading to service disruption.
+
+Features:
+- Interactive UI for entering target IP address and port.
+- Uses Scapy to craft and send spoofed UDP packets.
+- Displays current status (ACTIVE/STOPPED) and packet count on the LCD.
+- Graceful exit via KEY3 or Ctrl-C, ensuring the attack is stopped.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start UDP Flood.
+    - KEY1: Edit Target IP.
+    - KEY2: Edit Target Port.
+    - KEY3: Exit Payload.
+- IP INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm IP.
+    - KEY3: Cancel IP input.
+- PORT INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm Port.
+    - KEY3: Cancel Port input.
+- ATTACKING SCREEN:
+    - OK: Stop Attack.
+    - KEY3: Stop Attack and Exit.
+"""
 import sys
 import os
 import time
@@ -21,6 +55,7 @@ GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT_STATUS = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
 FONT = ImageFont.load_default()
@@ -230,58 +265,62 @@ def stop_attack():
 
 if __name__ == "__main__":
     try:
-        current_screen = "main"
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
 
         while running:
+            current_time = time.time()
+            
             if current_screen == "main":
                 draw_ui("main")
                 
-                if GPIO.input(PINS["KEY3"]) == 0:
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     cleanup()
                     break
                 
-                if GPIO.input(PINS["OK"]) == 0:
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     start_attack()
                     current_screen = "attacking"
-                    time.sleep(0.3)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["KEY1"]) == 0:
+                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     current_ip_input = TARGET_IP
                     current_screen = "ip_input"
-                    time.sleep(0.3)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["KEY2"]) == 0:
+                if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     current_port_input = str(TARGET_PORT)
                     current_screen = "port_input"
-                    time.sleep(0.3)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
             
             elif current_screen == "ip_input":
                 new_ip = handle_ip_input_logic(current_ip_input)
                 if new_ip:
                     TARGET_IP = new_ip
                 current_screen = "main"
-                time.sleep(0.3)
+                time.sleep(BUTTON_DEBOUNCE_TIME)
             
             elif current_screen == "port_input":
                 new_port = handle_port_input_logic(current_port_input)
                 if new_port:
-                    TARGET_PORT = int(new_port)
+                    TARGET_PORT = new_port
                 current_screen = "main"
-                time.sleep(0.3)
+                time.sleep(BUTTON_DEBOUNCE_TIME)
             
             elif current_screen == "attacking":
                 draw_ui("attacking", "ACTIVE")
-                if GPIO.input(PINS["KEY3"]) == 0:
+                if (GPIO.input(PINS["KEY3"]) == 0 or GPIO.input(PINS["OK"]) == 0) and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     stop_attack()
                     current_screen = "main"
-                    time.sleep(0.3)
-                if GPIO.input(PINS["OK"]) == 0:
-                    stop_attack()
-                    current_screen = "main"
-                    time.sleep(0.3)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 time.sleep(0.1)
 
-            time.sleep(0.1)
+            time.sleep(0.05)
 
     except (KeyboardInterrupt, SystemExit):
         pass

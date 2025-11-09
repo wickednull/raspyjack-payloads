@@ -1,4 +1,36 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **HTTP Header Viewer**
+==========================================
+This payload fetches and displays HTTP headers from a specified target IP
+address and port. It can be used for reconnaissance to gather information
+about web servers, such as server type, technologies used, and security
+configurations.
+
+Features:
+- Interactive UI for selecting the network interface.
+- Interactive UI for entering the target IP address and port.
+- Fetches HTTP headers using a HEAD request.
+- Displays headers on the LCD with scrolling capabilities.
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Fetch and display HTTP headers.
+    - KEY1: Select network interface.
+    - KEY2: Edit target IP and Port.
+    - KEY3: Exit Payload.
+- IP INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm IP.
+    - KEY3: Cancel input.
+- PORT INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm Port.
+    - KEY3: Cancel input.
+"""
 import sys
 import os
 import time
@@ -83,56 +115,110 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-def draw_ui(status_msg=None):
+def draw_ui(screen_state="main", status_msg=None):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "HTTP Header Viewer", font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
 
-    if status_msg:
-        d.text((10, 60), status_msg, font=FONT, fill="yellow")
-    else:
-        start_index = max(0, selected_index - 4)
-        end_index = min(len(headers), start_index + 8)
-        y_pos = 25
-        for i in range(start_index, end_index):
-            color = "yellow" if i == selected_index else "white"
-            line = headers[i]
-            if len(line) > 20: line = line[:19] + "..."
-            d.text((5, y_pos), line, font=FONT, fill=color)
-            y_pos += 11
+    if screen_state == "main":
+        if status_msg:
+            d.text((10, 60), status_msg, font=FONT, fill="yellow")
+        else:
+            start_index = max(0, selected_index - 4)
+            end_index = min(len(headers), start_index + 8)
+            y_pos = 25
+            for i in range(start_index, end_index):
+                color = "yellow" if i == selected_index else "white"
+                line = headers[i]
+                if len(line) > 20: line = line[:19] + "..."
+                d.text((5, y_pos), line, font=FONT, fill=color)
+                y_pos += 11
 
-    d.text((5, 115), "OK=Get | KEY3=Exit", font=FONT, fill="cyan")
+        d.text((5, 115), "OK=Get | KEY1=Edit Iface | KEY2=Edit IP/Port | KEY3=Exit", font=FONT, fill="cyan")
+    elif screen_state == "ip_input":
+        d.text((5, 30), "Enter Target IP:", font=FONT, fill="white")
+        display_ip = list(current_ip_input)
+        if ip_input_cursor_pos < len(display_ip):
+            display_ip[ip_input_cursor_pos] = '_'
+        d.text((5, 50), "".join(display_ip), font=FONT_TITLE, fill="yellow")
+        d.text((5, 115), "UP/DOWN=Digit | LEFT/RIGHT=Move | OK=Confirm", font=FONT, fill="cyan")
+    elif screen_state == "port_input":
+        d.text((5, 30), "Enter Target Port:", font=FONT, fill="white")
+        display_port = list(current_port_input)
+        if port_input_cursor_pos < len(display_port):
+            display_port[port_input_cursor_pos] = '_'
+        d.text((5, 50), "".join(display_port), font=FONT_TITLE, fill="yellow")
+        d.text((5, 115), "UP/DOWN=Digit | LEFT/RIGHT=Move | OK=Confirm", font=FONT, fill="cyan")
+    
     LCD.LCD_ShowImage(img, 0, 0)
 
-def get_headers(interface):
-    global headers, selected_index
-    draw_ui("Connecting...")
-    headers = []
-    selected_index = 0
+def handle_text_input_logic(initial_text, screen_state_name, char_set):
+    global current_ip_input, ip_input_cursor_pos, current_port_input, port_input_cursor_pos
     
-    try:
-        if set_raspyjack_interface(interface):
-            show_message([f"Interface {interface}", "activated."], "lime")
-            time.sleep(1)
-        else:
-            show_message([f"Failed to activate", f"{interface}."], "red")
-            return
+    if screen_state_name == "ip_input":
+        current_input_ref = current_ip_input
+        cursor_pos_ref = ip_input_cursor_pos
+    else:
+        current_input_ref = current_port_input
+        cursor_pos_ref = port_input_cursor_pos
 
-        import requests
-        url = f"http://{TARGET_IP}:{TARGET_PORT}"
-        resp = requests.head(url, timeout=5)
+    current_input_ref = initial_text
+    cursor_pos_ref = len(initial_text) - 1
+    
+    draw_ui(screen_state_name)
+    
+    while running:
+        btn = None
+        for name, pin in PINS.items():
+            if GPIO.input(pin) == 0:
+                btn = name
+                while GPIO.input(pin) == 0:
+                    time.sleep(0.05)
+                break
         
-        headers.append(f"Status: {resp.status_code}")
-        for key, value in resp.headers.items():
-            headers.append(f"{key}: {value}")
-
-    except Exception as e:
-        headers.append("Request failed!")
-        headers.append(str(e)[:20])
-        print(f"HTTP request failed: {e}", file=sys.stderr)
+        if btn == "KEY3":
+            return None
+        
+        if btn == "OK":
+            if current_input_ref:
+                return current_input_ref
+            else:
+                show_message(["Input cannot", "be empty!"], "red")
+                time.sleep(2)
+                current_input_ref = initial_text
+                cursor_pos_ref = len(initial_text) - 1
+                draw_ui(screen_state_name)
+        
+        if btn == "LEFT":
+            cursor_pos_ref = max(0, cursor_pos_ref - 1)
+            draw_ui(screen_state_name)
+        elif btn == "RIGHT":
+            cursor_pos_ref = min(len(current_input_ref), cursor_pos_ref + 1)
+            draw_ui(screen_state_name)
+        elif btn == "UP" or btn == "DOWN":
+            if cursor_pos_ref < len(current_input_ref):
+                char_list = list(current_input_ref)
+                current_char = char_list[cursor_pos_ref]
+                
+                try:
+                    char_index = char_set.index(current_char)
+                    if btn == "UP":
+                        char_index = (char_index + 1) % len(char_set)
+                    else:
+                        char_index = (char_index - 1 + len(char_set)) % len(char_set)
+                    char_list[cursor_pos_ref] = char_set[char_index]
+                    current_input_ref = "".join(char_list)
+                except ValueError:
+                    char_list[cursor_pos_ref] = char_set[0]
+                    current_input_ref = "".join(char_list)
+                draw_ui(screen_state_name)
+        
+        time.sleep(0.1)
+    return None
 
 if __name__ == '__main__':
+    current_screen = "main"
     try:
         import requests
     except ImportError:
@@ -146,32 +232,70 @@ if __name__ == '__main__':
         time.sleep(3)
         sys.exit(1)
 
-    draw_ui("Press OK to get")
+    draw_ui("main", "Press OK to get")
+    
+    last_button_press_time = 0
+    BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+
     while running:
-        if GPIO.input(PINS["KEY3"]) == 0:
-            cleanup()
-            break
+        current_time = time.time()
         
-        if GPIO.input(PINS["OK"]) == 0:
-            get_headers(selected_interface)
-            draw_ui()
-            time.sleep(0.5)
-            while running:
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    break
-                if GPIO.input(PINS["UP"]) == 0:
-                    selected_index = (selected_index - 1) % len(headers)
-                    draw_ui()
-                    time.sleep(0.2)
-                elif GPIO.input(PINS["DOWN"]) == 0:
-                    selected_index = (selected_index + 1) % len(headers)
-                    draw_ui()
-                    time.sleep(0.2)
-                time.sleep(0.05)
+        if current_screen == "main":
+            draw_ui("main")
+            
+            if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                last_button_press_time = current_time
+                cleanup()
+                break
+            
+            if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                last_button_press_time = current_time
+                get_headers(selected_interface)
+                draw_ui("main")
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+                while running:
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        break
+                    if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        selected_index = (selected_index - 1) % len(headers)
+                        draw_ui("main")
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        selected_index = (selected_index + 1) % len(headers)
+                        draw_ui("main")
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    time.sleep(0.05)
+            
+            if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                last_button_press_time = current_time
+                current_ip_input = TARGET_IP
+                current_screen = "ip_input"
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+            
+            if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                last_button_press_time = current_time
+                show_message(["Interface selection", "is now menu-driven."], "yellow")
+                time.sleep(2)
+                current_screen = "main"
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+        
+        elif current_screen == "ip_input":
+            char_set = "0123456789."
+            new_ip = handle_text_input_logic(current_ip_input, "ip_input", char_set)
+            if new_ip:
+                TARGET_IP = new_ip
+            current_screen = "port_input"
+            time.sleep(BUTTON_DEBOUNCE_TIME)
+        
+        elif current_screen == "port_input":
+            char_set = "0123456789"
+            new_port = handle_text_input_logic(current_port_input, "port_input", char_set)
+            if new_port:
+                TARGET_PORT = int(new_port)
+            current_screen = "main"
+            time.sleep(BUTTON_DEBOUNCE_TIME)
         
         time.sleep(0.1)
-
-    cleanup()
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("HTTP Header payload finished.")

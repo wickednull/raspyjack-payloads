@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Process Killer (HID)**
+============================================
+This payload performs a Human Interface Device (HID) attack to inject commands
+into a target Windows machine, attempting to terminate common Antivirus (AV)
+and Endpoint Detection and Response (EDR) processes. It uses `taskkill`
+commands via PowerShell.
+
+Features:
+- Uses `hid_helper` to simulate keyboard input.
+- Injects PowerShell commands to kill a predefined list of processes.
+- Displays attack status on the LCD.
+- Checks if HID gadget is enabled.
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- This payload is designed to be executed directly.
+- KEY3: Exit Payload (if running in a loop or waiting for user input).
+"""
 import sys
 import os
 import time
@@ -15,17 +34,37 @@ PROCESSES_TO_KILL = [
     "bdagent.exe", "mbam.exe", "SentinelAgent.exe", "CylanceSvc.exe"
 ]
 
+PINS = { "KEY3": 16 } # Only KEY3 is used for exit
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(PINS["KEY3"], GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+LCD = LCD_1in44.LCD()
+LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
+FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+FONT = ImageFont.load_default()
+
+running = True
+
+def cleanup(*_):
+    global running
+    running = False
+
+signal.signal(signal.SIGINT, cleanup)
+signal.signal(signal.SIGTERM, cleanup)
+
 def show_message(lines, color="lime"):
-    LCD = LCD_1in44.LCD()
-    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-    image = Image.new("RGB", (128, 128), "BLACK")
-    draw = ImageDraw.Draw(image)
-    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ImageDraw.Draw(img)
+    font = FONT_TITLE
     y = 40
     for line in lines:
-        draw.text((10, y), line, font=font, fill=color)
-        y += 15
-    LCD.LCD_ShowImage(image, 0, 0)
+        bbox = d.textbbox((0, 0), line, font=font)
+        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        x = (WIDTH - w) // 2
+        d.text((x, y), line, font=font, fill=color)
+        y += h + 5
+    LCD.LCD_ShowImage(img, 0, 0)
 
 def run_attack():
     show_message(["HID Attack:", "Process Killer"])
@@ -60,7 +99,6 @@ if __name__ == '__main__':
         run_attack()
         time.sleep(3)
     finally:
-        LCD = LCD_1in44.LCD()
         LCD.LCD_Clear()
         GPIO.cleanup()
         print("Process Killer payload finished.")

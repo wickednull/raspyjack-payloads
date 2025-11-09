@@ -1,4 +1,28 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **ICMP Ping Sweep**
+=======================================
+This payload performs an ICMP ping sweep on the local network to discover
+live hosts. It sends ICMP echo requests to all possible IP addresses within
+the local subnet and identifies which hosts respond, indicating they are
+active on the network.
+
+Features:
+- Interactive UI for selecting the network interface to scan.
+- Scans all hosts in the local subnet using ICMP echo requests.
+- Displays a list of live hosts found on the LCD.
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start ICMP ping sweep.
+    - KEY1: Select network interface.
+    - KEY3: Exit Payload.
+- INTERFACE SELECTION SCREEN:
+    - UP/DOWN: Navigate interfaces.
+    - OK: Select interface.
+    - KEY3: Cancel selection.
+"""
 import sys
 import os
 import time
@@ -230,50 +254,56 @@ def run_scan(interface):
         print(f"Ping Sweep failed: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
-    current_screen = "main"
-    try:
-        selected_interface = select_interface_menu()
-        if not selected_interface:
-            show_message(["No interface", "selected!", "Exiting..."], "red")
-            time.sleep(3)
-            sys.exit(1)
-
-        while running:
-            if current_screen == "main":
-                draw_ui("main")
+            last_button_press_time = 0
+            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    
+            selected_interface = select_interface_menu()
+            if not selected_interface:
+                show_message(["No interface", "selected!", "Exiting..."], "red")
+                time.sleep(3)
+                sys.exit(1)
+    
+            while running:
+                current_time = time.time()
                 
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    cleanup()
-                    break
+                if current_screen == "main":
+                    draw_ui("main")
+                    
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        cleanup()
+                        break
+                    
+                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        if not (scan_thread and scan_thread.is_alive()):
+                            scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
+                            scan_thread.start()
+                        current_screen = "scanning"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        show_message(["Interface selection", "is now menu-driven."], "yellow")
+                        time.sleep(2)
+                        current_screen = "main"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["OK"]) == 0:
+                elif current_screen == "iface_input":
+                    current_screen = "main"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                
+                elif current_screen == "scanning":
+                    draw_ui("scanning")
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        cleanup()
+                        break
                     if not (scan_thread and scan_thread.is_alive()):
-                        scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
-                        scan_thread.start()
-                    current_screen = "scanning"
-                    time.sleep(0.3)
-                
-                if GPIO.input(PINS["KEY1"]) == 0:
-                    show_message(["Interface selection", "is now menu-driven."], "yellow")
-                    time.sleep(2)
-                    current_screen = "main"
-                    time.sleep(0.3)
-            
-            elif current_screen == "iface_input":
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            elif current_screen == "scanning":
-                draw_ui("scanning")
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    cleanup()
-                    break
-                if not (scan_thread and scan_thread.is_alive()):
-                    current_screen = "main"
+                        current_screen = "main"
+                    time.sleep(0.1)
+    
                 time.sleep(0.1)
-
-            time.sleep(0.1)
-
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as e:

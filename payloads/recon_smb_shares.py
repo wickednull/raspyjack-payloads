@@ -1,4 +1,34 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **SMB Share Scanner**
+=========================================
+This payload scans a target IP address for accessible Server Message Block (SMB)
+shares. It uses the `smbclient` utility to list shares, which can reveal
+valuable information about network resources and potential data exfiltration
+points.
+
+Features:
+- Interactive UI for selecting the network interface.
+- Interactive UI for entering the target IP address.
+- Uses `smbclient` to enumerate SMB shares.
+- Displays found shares on the LCD with scrolling capabilities.
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start scanning for SMB shares.
+    - KEY1: Edit target IP.
+    - KEY3: Exit Payload.
+- IP INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm IP.
+    - KEY3: Cancel input.
+- INTERFACE SELECTION SCREEN:
+    - UP/DOWN: Navigate interfaces.
+    - OK: Select interface.
+    - KEY3: Cancel selection.
+"""
 import sys
 import os
 import time
@@ -229,50 +259,63 @@ def run_scan(interface):
         print(f"smbclient scan failed: {e}", file=sys.stderr)
 
 if __name__ == '__main__':
-    current_screen = "main"
-    try:
-        if subprocess.run("which smbclient", shell=True, capture_output=True).returncode != 0:
-            show_message(["ERROR:", "smbclient", "not found!"], "red")
-            time.sleep(3)
-            sys.exit(1)
-
-        while running:
-            if current_screen == "main":
-                draw_ui("main")
+            last_button_press_time = 0
+            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    
+            if subprocess.run("which smbclient", shell=True, capture_output=True).returncode != 0:
+                show_message(["ERROR:", "smbclient", "not found!"], "red")
+                time.sleep(3)
+                sys.exit(1)
+    
+            selected_interface = select_interface_menu()
+            if not selected_interface:
+                show_message(["No interface", "selected!", "Exiting..."], "red")
+                time.sleep(3)
+                sys.exit(1)
+    
+            while running:
+                current_time = time.time()
                 
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    cleanup()
-                    break
+                if current_screen == "main":
+                    draw_ui("main")
+                    
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        cleanup()
+                        break
+                    
+                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        run_scan(selected_interface)
+                        current_screen = "main"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        if shares:
+                            selected_index = (selected_index - 1) % len(shares)
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        if shares:
+                            selected_index = (selected_index + 1) % len(shares)
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        current_ip_input = TARGET_IP
+                        current_screen = "ip_input"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["OK"]) == 0:
-                    run_scan()
+                elif current_screen == "ip_input":
+                    char_set = "0123456789."
+                    new_ip = handle_ip_input_logic(current_ip_input)
+                    if new_ip:
+                        TARGET_IP = new_ip
                     current_screen = "main"
-                    time.sleep(0.3)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["UP"]) == 0:
-                    if shares:
-                        selected_index = (selected_index - 1) % len(shares)
-                    time.sleep(0.2)
-                elif GPIO.input(PINS["DOWN"]) == 0:
-                    if shares:
-                        selected_index = (selected_index + 1) % len(shares)
-                    time.sleep(0.2)
-                
-                if GPIO.input(PINS["KEY1"]) == 0:
-                    current_ip_input = TARGET_IP
-                    current_screen = "ip_input"
-                    time.sleep(0.3)
-            
-            elif current_screen == "ip_input":
-                char_set = "0123456789."
-                new_ip = handle_ip_input_logic(current_ip_input)
-                if new_ip:
-                    TARGET_IP = new_ip
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            time.sleep(0.1)
-
+                time.sleep(0.1)
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as e:

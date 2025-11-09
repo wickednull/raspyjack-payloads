@@ -1,4 +1,26 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Update Dependencies**
+===========================================
+This payload automates the installation and update of all necessary system
+packages and Python libraries required for RaspyJack's functionality.
+It also compiles and installs `hcxdumptool` from source.
+
+Features:
+- Updates APT package lists.
+- Installs a comprehensive list of APT packages.
+- Upgrades pip and installs required Python packages.
+- Clones, compiles, and installs `hcxdumptool` from its GitHub repository.
+- Provides instructions for enabling USB HID Gadget functionality.
+
+Usage:
+- This script *must* be run as root: `sudo python3 update_dependencies.py`
+- It is designed to be executed directly and is non-interactive.
+
+Important:
+- After running this script, you may need to reboot your RaspyJack for
+  all changes (especially HID Gadget) to take effect.
+"""
 import sys
 import os
 import time
@@ -29,6 +51,15 @@ APT_DEPS = [
     "dnsutils"
 ]
 PIP_DEPS = ["qrcode[pil]", "requests", "zero-hid"]
+
+running = True
+
+def cleanup(*_):
+    global running
+    running = False
+
+signal.signal(signal.SIGINT, cleanup)
+signal.signal(signal.SIGTERM, cleanup)
 
 def show_message(lines, color="lime"):
     for line in lines:

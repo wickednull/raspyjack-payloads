@@ -1,4 +1,29 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **WiFi Probe Sniffer**
+==========================================
+This payload passively sniffs for Wi-Fi probe requests, which are sent by
+devices searching for known networks. By capturing these, you can identify
+SSIDs that devices have previously connected to, potentially revealing
+information about their owners or their network habits.
+
+Features:
+- Interactive UI for selecting the wireless interface.
+- Activates monitor mode on the selected interface.
+- Captures and displays SSIDs from probe requests in real-time.
+- Saves captured SSIDs to a loot file (`probed_ssids.txt`).
+- Allows scrolling through the list of captured SSIDs.
+- Graceful exit via KEY3 or Ctrl-C, deactivating monitor mode.
+
+Controls:
+- INTERFACE SELECTION SCREEN:
+    - UP/DOWN: Navigate available wireless interfaces.
+    - OK: Select interface and activate monitor mode.
+    - KEY3: Cancel selection and exit.
+- MAIN SCREEN:
+    - UP/DOWN: Scroll through captured SSIDs.
+    - KEY3: Exit Payload (stops sniffing and deactivates monitor mode).
+"""
 import sys
 import os
 import time
@@ -46,8 +71,12 @@ def cleanup(*_):
         running = False
     
     if WIFI_INTERFACE and wifi_manager and ORIGINAL_WIFI_INTERFACE:
-        print(f"Deactivating monitor mode on {WIFI_INTERFACE} and restoring {ORIGINAL_WIFI_INTERFACE}...")
-        wifi_manager.deactivate_monitor_mode(WIFI_INTERFACE)
+        print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE} and restoring {ORIGINAL_WIFI_INTERFACE}...", file=sys.stderr)
+        success = wifi_manager.deactivate_monitor_mode(WIFI_INTERFACE)
+        if success:
+            print(f"Successfully deactivated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
+        else:
+            print(f"ERROR: Failed to deactivate monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -68,43 +97,54 @@ def draw_ui_interface_selection(interfaces, current_selection):
     LCD.LCD_ShowImage(img, 0, 0)
 
 def select_interface_menu():
-    global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE, status_msg
+    global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
     
     available_interfaces = [iface for iface in get_available_interfaces() if iface.startswith('wlan')]
     if not available_interfaces:
-        draw_message("No WiFi interfaces found!", "red")
+        draw_message(["No WiFi interfaces found!"], "red")
         time.sleep(3)
         return False
 
     current_menu_selection = 0
+    last_button_press_time = 0
+    BUTTON_DEBOUNCE_TIME = 0.2 # seconds
+
     while running:
+        current_time = time.time()
         draw_ui_interface_selection(available_interfaces, current_menu_selection)
         
-        if GPIO.input(PINS["UP"]) == 0:
+        if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             current_menu_selection = (current_menu_selection - 1 + len(available_interfaces)) % len(available_interfaces)
-            time.sleep(0.2)
-        elif GPIO.input(PINS["DOWN"]) == 0:
+            time.sleep(BUTTON_DEBOUNCE_TIME)
+        elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             current_menu_selection = (current_menu_selection + 1) % len(available_interfaces)
-            time.sleep(0.2)
-        elif GPIO.input(PINS["OK"]) == 0:
+            time.sleep(BUTTON_DEBOUNCE_TIME)
+        elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             selected_iface = available_interfaces[current_menu_selection]
-            draw_message(f"Activating monitor\nmode on {selected_iface}...", "yellow")
+            draw_message([f"Activating monitor", f"mode on {selected_iface}..."], "yellow")
+            print(f"Attempting to activate monitor mode on {selected_iface}...", file=sys.stderr)
             
             monitor_iface = wifi_manager.activate_monitor_mode(selected_iface)
             if monitor_iface:
                 WIFI_INTERFACE = monitor_iface
                 ORIGINAL_WIFI_INTERFACE = selected_iface
-                draw_message(f"Monitor mode active\non {WIFI_INTERFACE}", "lime")
+                draw_message([f"Monitor mode active", f"on {WIFI_INTERFACE}"], "lime")
+                print(f"Successfully activated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
                 time.sleep(2)
                 return True
             else:
-                draw_message(f"Failed to activate\nmonitor mode on {selected_iface}", "red")
+                draw_message(["ERROR:", "Failed to activate", "monitor mode!"], "red")
+                print(f"ERROR: wifi_manager.activate_monitor_mode failed for {selected_iface}", file=sys.stderr)
                 time.sleep(3)
                 return False
-        elif GPIO.input(PINS["KEY3"]) == 0:
+        elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            last_button_press_time = current_time
             return False
         
-        time.sleep(0.1)
+        time.sleep(0.05)
 
 def packet_handler(pkt):
     if pkt.haslayer(Dot11ProbeReq):
@@ -152,33 +192,42 @@ def draw_ui():
 if __name__ == "__main__":
     try:
         if not select_interface_menu():
-            draw_message("No interface selected\nor monitor mode failed.", "red")
+            draw_message(["No interface selected", "or monitor mode failed."], "red")
             time.sleep(3)
             raise SystemExit("No interface selected or monitor mode failed.")
 
         sniff_thread = threading.Thread(target=sniffer_worker, daemon=True)
         sniff_thread.start()
 
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+
         while running:
+            current_time = time.time()
             draw_ui()
             
             button_pressed = False
             start_wait = time.time()
             while time.time() - start_wait < 1.0 and not button_pressed:
-                if GPIO.input(PINS["KEY3"]) == 0:
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     cleanup()
                     break
                 
-                if GPIO.input(PINS["UP"]) == 0:
+                if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     with ui_lock:
                         if probed_ssids:
                             selected_index = (selected_index - 1) % len(probed_ssids)
                     button_pressed = True
-                elif GPIO.input(PINS["DOWN"]) == 0:
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     with ui_lock:
                         if probed_ssids:
                             selected_index = (selected_index + 1) % len(probed_ssids)
                     button_pressed = True
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
                 time.sleep(0.05)
             
@@ -189,13 +238,13 @@ if __name__ == "__main__":
         pass
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)
-        draw_message(f"ERROR:\n{str(e)[:20]}", "red")
+        draw_message([f"ERROR:", f"{str(e)[:20]}"], "red")
         time.sleep(3)
     finally:
         cleanup()
         if sniff_thread:
             sniff_thread.join(timeout=1)
-        draw_message("Cleaning up...")
+        draw_message(["Cleaning up..."])
         time.sleep(1)
         LCD.LCD_Clear()
         GPIO.cleanup()

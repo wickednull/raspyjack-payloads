@@ -1,4 +1,38 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **Filesystem Decryptor**
+============================================
+This payload is designed to decrypt files that have been encrypted using a
+simple XOR cipher, typically used in ransomware simulations or educational
+contexts. It allows the user to specify a target directory and the XOR key
+used for encryption/decryption.
+
+Features:
+- Interactive UI for entering the target directory path.
+- Interactive UI for entering the XOR key (0-255).
+- Scans the specified directory for files with a ".locked" extension.
+- Decrypts ".locked" files using the provided XOR key and restores their
+  original filenames.
+- Displays status messages on the LCD.
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start decryption.
+    - KEY1: Edit Sandbox Directory.
+    - KEY2: Edit XOR Key.
+    - KEY3: Exit Payload.
+- DIRECTORY INPUT SCREEN:
+    - UP/DOWN: Change character at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm directory.
+    - KEY3: Cancel input.
+- KEY INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm key.
+    - KEY3: Cancel input.
+"""
 import sys
 import os
 import time
@@ -18,6 +52,7 @@ GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
 
@@ -232,47 +267,53 @@ def run_decryption():
     time.sleep(3)
 
 if __name__ == '__main__':
-    current_screen = "main"
-    try:
-        while running:
-            if current_screen == "main":
-                draw_ui("main")
+            last_button_press_time = 0
+            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    
+            while running:
+                current_time = time.time()
                 
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    cleanup()
-                    break
+                if current_screen == "main":
+                    draw_ui("main")
+                    
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        cleanup()
+                        break
+                    
+                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        run_decryption()
+                        current_screen = "main"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        current_dir_input = SANDBOX_DIR
+                        current_screen = "dir_input"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        current_key_input = str(XOR_KEY)
+                        current_screen = "key_input"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["OK"]) == 0:
-                    run_decryption()
+                elif current_screen == "dir_input":
+                    new_dir = handle_dir_input_logic(current_dir_input)
+                    if new_dir:
+                        SANDBOX_DIR = new_dir
                     current_screen = "main"
-                    time.sleep(0.3)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["KEY1"]) == 0:
-                    current_dir_input = SANDBOX_DIR
-                    current_screen = "dir_input"
-                    time.sleep(0.3)
+                elif current_screen == "key_input":
+                    new_key = handle_key_input_logic(current_key_input)
+                    if new_key is not None:
+                        XOR_KEY = new_key
+                    current_screen = "main"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["KEY2"]) == 0:
-                    current_key_input = str(XOR_KEY)
-                    current_screen = "key_input"
-                    time.sleep(0.3)
-            
-            elif current_screen == "dir_input":
-                new_dir = handle_dir_input_logic(current_dir_input)
-                if new_dir:
-                    SANDBOX_DIR = new_dir
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            elif current_screen == "key_input":
-                new_key = handle_key_input_logic(current_key_input)
-                if new_key is not None:
-                    XOR_KEY = new_key
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            time.sleep(0.1)
-            
+                time.sleep(0.1)            
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:

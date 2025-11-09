@@ -1,4 +1,36 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **DNS Zone Transfer Recon**
+==============================================
+This payload attempts to perform a DNS zone transfer (AXFR) against a target
+domain's name servers. A successful zone transfer can reveal a wealth of
+information about a domain's infrastructure, including hostnames, IP addresses,
+and other sensitive records, which can be valuable for reconnaissance.
+
+Features:
+- Interactive UI for entering the target domain.
+- Automatically discovers name servers for the target domain.
+- Attempts zone transfer from each discovered name server.
+- Displays scan status and success/failure on the LCD.
+- Saves successful zone transfer results to a loot file.
+- Allows selection of the network interface to use for the scan.
+- Graceful exit via KEY3 or Ctrl-C.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start DNS zone transfer scan.
+    - KEY1: Edit target domain.
+    - KEY3: Exit Payload.
+- DOMAIN INPUT SCREEN:
+    - UP/DOWN: Change character at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm domain.
+    - KEY3: Cancel input.
+- INTERFACE SELECTION SCREEN:
+    - UP/DOWN: Navigate interfaces.
+    - OK: Select interface.
+    - KEY3: Cancel selection.
+"""
 import sys
 import os
 import time
@@ -238,59 +270,64 @@ def run_scan(interface):
         print(f"AXFR Scan failed: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
-    current_screen = "main"
-    scan_thread = None
-    try:
-        if subprocess.run("which host", shell=True, capture_output=True).returncode != 0:
-            show_message(["ERROR:", "host tool", "not found!"], "red")
-            time.sleep(3)
-            sys.exit(1)
-
-        selected_interface = select_interface_menu()
-        if not selected_interface:
-            show_message(["No interface", "selected!", "Exiting..."], "red")
-            time.sleep(3)
-            sys.exit(1)
-
-        while running:
-            if current_screen == "main":
-                draw_ui("main")
+            last_button_press_time = 0
+            BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+    
+            if subprocess.run("which host", shell=True, capture_output=True).returncode != 0:
+                show_message(["ERROR:", "host tool", "not found!"], "red")
+                time.sleep(3)
+                sys.exit(1)
+    
+            selected_interface = select_interface_menu()
+            if not selected_interface:
+                show_message(["No interface", "selected!", "Exiting..."], "red")
+                time.sleep(3)
+                sys.exit(1)
+    
+            while running:
+                current_time = time.time()
                 
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    cleanup()
-                    break
+                if current_screen == "main":
+                    draw_ui("main")
+                    
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        cleanup()
+                        break
+                    
+                    if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        if not (scan_thread and scan_thread.is_alive()):
+                            scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
+                            scan_thread.start()
+                        current_screen = "scanning"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
+                    
+                    if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        current_domain_input = TARGET_DOMAIN
+                        current_screen = "domain_input"
+                        time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["OK"]) == 0:
-                    if not (scan_thread and scan_thread.is_alive()):
-                        scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
-                        scan_thread.start()
-                    current_screen = "scanning"
-                    time.sleep(0.3)
-                
-                if GPIO.input(PINS["KEY1"]) == 0:
-                    current_domain_input = TARGET_DOMAIN
-                    current_screen = "domain_input"
-                    time.sleep(0.3)
-            
-            elif current_screen == "domain_input":
-                char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-"
-                new_domain = handle_text_input_logic(current_domain_input, "domain_input", char_set)
-                if new_domain:
-                    TARGET_DOMAIN = new_domain
-                current_screen = "main"
-                time.sleep(0.3)
-            
-            elif current_screen == "scanning":
-                draw_ui("scanning")
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    cleanup()
-                    break
-                if not (scan_thread and scan_thread.is_alive()):
+                elif current_screen == "domain_input":
+                    char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-"
+                    new_domain = handle_text_input_logic(current_domain_input, "domain_input", char_set)
+                    if new_domain:
+                        TARGET_DOMAIN = new_domain
                     current_screen = "main"
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                
+                elif current_screen == "scanning":
+                    draw_ui("scanning")
+                    if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        cleanup()
+                        break
+                    if not (scan_thread and scan_thread.is_alive()):
+                        current_screen = "main"
+                    time.sleep(0.1)
+    
                 time.sleep(0.1)
-
-            time.sleep(0.1)
-
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as e:

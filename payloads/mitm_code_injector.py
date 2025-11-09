@@ -1,4 +1,38 @@
 #!/usr/bin/env python3
+"""
+RaspyJack *payload* – **MITM Code Injector**
+==========================================
+This payload performs a Man-in-the-Middle (MITM) attack to inject custom
+JavaScript code into HTTP responses. It uses `arpspoof` to redirect traffic
+and `mitmproxy` with a custom script to modify web content on the fly.
+
+Features:
+- Interactive UI for selecting the network interface and target IP.
+- Uses `arpspoof` to perform ARP poisoning between the target and gateway.
+- Uses `mitmproxy` with a Python addon to inject JavaScript into HTML responses.
+- Displays attack status and injection count on the LCD.
+- Graceful exit via KEY3 or Ctrl-C, cleaning up all attack processes,
+  restoring ARP tables, and resetting iptables/IP forwarding.
+
+Controls:
+- MAIN SCREEN:
+    - OK: Start MITM attack.
+    - KEY1: Edit network interface.
+    - KEY2: Edit target IP.
+    - KEY3: Exit Payload.
+- INTERFACE INPUT SCREEN:
+    - UP/DOWN: Change character at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm interface.
+    - KEY3: Cancel input.
+- IP INPUT SCREEN:
+    - UP/DOWN: Change digit at cursor position.
+    - LEFT/RIGHT: Move cursor.
+    - OK: Confirm IP.
+    - KEY3: Cancel input.
+- ATTACKING SCREEN:
+    - KEY3: Stop attack and exit.
+"""
 import sys
 import os
 import time
@@ -262,28 +296,37 @@ if __name__ == "__main__":
         import requests
         requests.packages.urllib3.disable_warnings()
 
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
+
         while running:
+            current_time = time.time()
+            
             if current_screen == "main":
                 draw_ui("main")
                 
-                if GPIO.input(PINS["KEY3"]) == 0:
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     cleanup()
                     break
                 
-                if GPIO.input(PINS["OK"]) == 0:
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     if run_attack():
                         current_screen = "attacking"
-                    time.sleep(0.3)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["KEY1"]) == 0:
+                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     current_interface_input = ETH_INTERFACE
                     current_screen = "iface_input"
-                    time.sleep(0.3)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
                 
-                if GPIO.input(PINS["KEY2"]) == 0:
+                if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     current_ip_input = TARGET_IP
                     current_screen = "ip_input"
-                    time.sleep(0.3)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
             
             elif current_screen == "iface_input":
                 char_set = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -291,7 +334,7 @@ if __name__ == "__main__":
                 if new_iface:
                     ETH_INTERFACE = new_iface
                 current_screen = "main"
-                time.sleep(0.3)
+                time.sleep(BUTTON_DEBOUNCE_TIME)
             
             elif current_screen == "ip_input":
                 char_set = "0123456789."
@@ -299,7 +342,7 @@ if __name__ == "__main__":
                 if new_ip:
                     TARGET_IP = new_ip
                 current_screen = "main"
-                time.sleep(0.3)
+                time.sleep(BUTTON_DEBOUNCE_TIME)
             
             elif current_screen == "attacking":
                 if os.path.exists("/tmp/raspyjack_injector.log"):
@@ -307,7 +350,8 @@ if __name__ == "__main__":
                         injection_count = len(f.readlines())
                 draw_ui("attacking")
                 
-                if GPIO.input(PINS["KEY3"]) == 0:
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
                     cleanup()
                     break
                 time.sleep(0.1)
