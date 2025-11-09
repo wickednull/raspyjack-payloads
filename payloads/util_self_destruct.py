@@ -1,34 +1,19 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **Utility: Self-Destruct**
-==================================================
-A highly destructive payload that performs a "scorched earth" cleanup.
-It is designed to remove all traces of activity from the RaspyJack.
-
-This script will:
-1.  DELETE the entire contents of the `/root/Raspyjack/loot/` directory.
-2.  DELETE all other custom payloads in this directory (excluding itself).
-
-**!!! EXTREME WARNING !!!**
-There is NO confirmation prompt. Running this payload is IRREVERSIBLE.
-All captured loot and custom payloads will be permanently deleted.
-Use with absolute caution.
-"""
-
-import os, sys, subprocess, signal, time
+import os
+import time
+import signal
+import subprocess
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
-# --- CONFIGURATION ---
-LOOT_DIR = "/root/Raspyjack/loot/"
-PAYLOADS_DIR = "/root/Raspyjack/payloads/"
+RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
+LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot")
+PAYLOADS_DIR = os.path.join(RASPYJACK_DIR, "payloads")
 SELF_NAME = os.path.basename(__file__)
 
-# --- GPIO & LCD ---
 PINS = { "OK": 13, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -36,7 +21,6 @@ LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 
-# --- Main ---
 def show_message(lines, color="red"):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
@@ -47,7 +31,6 @@ def show_message(lines, color="red"):
     LCD.LCD_ShowImage(img, 0, 0)
 
 def run_self_destruct():
-    # Final, final warning on the LCD
     show_message(["!!! WARNING !!!", "Self-Destruct", "is irreversible.", "Press OK again", "to confirm."])
     
     start_wait = time.time()
@@ -56,16 +39,15 @@ def run_self_destruct():
             show_message(["Aborted."])
             return
         if GPIO.input(PINS["OK"]) == 0:
-            # Confirmed
             break
         time.sleep(0.1)
-    else: # 5 seconds passed without confirmation
+    else:
         show_message(["Aborted."])
         return
 
     show_message(["Deleting loot..."])
     if os.path.isdir(LOOT_DIR):
-        subprocess.run(f"rm -rf {LOOT_DIR}*", shell=True)
+        subprocess.run(f"rm -rf {LOOT_DIR}/*", shell=True)
     time.sleep(1)
 
     show_message(["Deleting other", "payloads..."])

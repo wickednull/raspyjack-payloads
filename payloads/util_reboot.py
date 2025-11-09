@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-import sys
-sys.path.append('/root/Raspyjack/wifi/')
-"""
-RaspyJack *payload* – **Utility: Reboot Device**
-=================================================
-A simple utility payload that reboots the RaspyJack device.
-"""
-
-import os, sys, subprocess, time
+import os
+import time
+import signal
+import subprocess
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
-# --- GPIO & LCD ---
 PINS = { "OK": 13, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -23,7 +16,6 @@ LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 
-# --- Main ---
 def show_message(lines, color="yellow"):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
@@ -47,7 +39,7 @@ if __name__ == '__main__':
                 show_message(["Rebooting now..."])
                 time.sleep(1)
                 subprocess.run("reboot", shell=True)
-                time.sleep(5) # Give time for reboot command to execute
+                time.sleep(5)
                 break
             time.sleep(0.1)
             

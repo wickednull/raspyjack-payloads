@@ -1,44 +1,35 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **Recon: Simple TCP Port Scanner**
-=========================================================
-A simple, fast TCP port scanner written in pure Python. This tool is
-useful for quickly checking for open ports on a single target without
-the overhead of Nmap.
-
-It attempts to connect to a range of ports on a target IP and reports
-which ones are open.
-"""
-
-import os, sys, subprocess, signal, time, threading, socket
+import os
+import time
+import signal
+import subprocess
+import threading
+import socket
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
-# ---------------------------- Third‑party libs ----------------------------
-try:
-    import RPi.GPIO as GPIO
-    import LCD_1in44, LCD_Config
-    from PIL import Image, ImageDraw, ImageFont
-    HARDWARE_LIBS_AVAILABLE = True
-except ImportError:
-    HARDWARE_LIBS_AVAILABLE = False
-    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
+import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
+from PIL import Image, ImageDraw, ImageFont
 
-# --- CONFIGURATION ---
-TARGET_IP = "192.168.1.1" # Will be configurable
-# Common ports to scan
-PORTS_TO_SCAN = [21, 22, 23, 25, 53, 80, 110, 139, 443, 445, 3389, 8080] # Will be configurable
-
-# --- Globals & Shutdown ---
+TARGET_IP = "192.168.1.1"
+PORTS_TO_SCAN = [21, 22, 23, 25, 53, 80, 110, 139, 443, 445, 3389, 8080]
 running = True
 scan_thread = None
 open_ports = []
 ui_lock = threading.Lock()
 status_msg = "Press OK to scan"
-current_ip_input = TARGET_IP # Initial value for IP input
+current_ip_input = TARGET_IP
 ip_input_cursor_pos = 0
-current_ports_input = ",".join(map(str, PORTS_TO_SCAN)) # Initial value for ports input
+current_ports_input = ",".join(map(str, PORTS_TO_SCAN))
 ports_input_cursor_pos = 0
+
+PINS: dict[str, int] = { "OK": 13, "KEY3": 16, "KEY1": 21, "KEY2": 20, "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26 }
+GPIO.setmode(GPIO.BCM)
+for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+LCD = LCD_1in44.LCD()
+LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+FONT = ImageFont.load_default()
 
 def cleanup(*_):
     global running
@@ -47,15 +38,10 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# --- UI ---
 def show_message(lines, color="lime"):
-    if not HARDWARE_LIBS_AVAILABLE:
-        for line in lines:
-            print(line)
-        return
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-    font = FONT_TITLE # Use FONT_TITLE for messages
+    font = FONT_TITLE
     y = 40
     for line in lines:
         bbox = d.textbbox((0, 0), line, font=font)
@@ -66,15 +52,7 @@ def show_message(lines, color="lime"):
     LCD.LCD_ShowImage(img, 0, 0)
 
 def draw_ui(screen_state="main"):
-    if not HARDWARE_LIBS_AVAILABLE:
-        print(f"UI State: {screen_state}")
-        if screen_state == "main":
-            print(f"Target IP: {TARGET_IP}")
-            print(f"Ports: {','.join(map(str, PORTS_TO_SCAN))}")
-            print(f"Status: {status_msg}")
-        return
-
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "TCP Port Scanner", font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
@@ -106,7 +84,7 @@ def draw_ui(screen_state="main"):
     elif screen_state == "results":
         d.text((5, 25), f"Open Ports: {len(open_ports)}", font=FONT, fill="yellow")
         y_pos = 40
-        for port in open_ports[-7:]: # Show last 7 found
+        for port in open_ports[-7:]:
             d.text((10, y_pos), f"Port {port} is open", font=FONT, fill="white")
             y_pos += 11
         d.text((5, 115), "OK=Scan | KEY3=Exit", font=FONT, fill="cyan")
@@ -116,7 +94,7 @@ def draw_ui(screen_state="main"):
 def handle_ip_input_logic(initial_ip):
     global current_ip_input, ip_input_cursor_pos
     current_ip_input = initial_ip
-    ip_input_cursor_pos = len(initial_ip) - 1 # Start cursor at end
+    ip_input_cursor_pos = len(initial_ip) - 1
     
     draw_ui("ip_input")
     
@@ -125,22 +103,21 @@ def handle_ip_input_logic(initial_ip):
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel IP input
+        if btn == "KEY3":
             return None
         
-        if btn == "OK": # Confirm IP
-            # Validate IP format
+        if btn == "OK":
             parts = current_ip_input.split('.')
             if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
                 return current_ip_input
             else:
                 show_message(["Invalid IP!", "Try again."], "red")
                 time.sleep(2)
-                current_ip_input = initial_ip # Reset to initial
+                current_ip_input = initial_ip
                 ip_input_cursor_pos = len(initial_ip) - 1
                 draw_ui("ip_input")
         
@@ -159,12 +136,11 @@ def handle_ip_input_logic(initial_ip):
                     digit = int(current_char)
                     if btn == "UP":
                         digit = (digit + 1) % 10
-                    else: # DOWN
+                    else:
                         digit = (digit - 1 + 10) % 10
                     char_list[ip_input_cursor_pos] = str(digit)
                     current_ip_input = "".join(char_list)
                 elif current_char == '.':
-                    # Cannot change dot, move cursor
                     if btn == "UP":
                         ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
                     else:
@@ -181,21 +157,21 @@ def handle_ports_input_logic(initial_ports_str):
     
     draw_ui("ports_input")
     
-    char_set = "0123456789," # Digits and comma for ports
+    char_set = "0123456789,"
     
     while running:
         btn = None
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel input
+        if btn == "KEY3":
             return None
         
-        if btn == "OK": # Confirm input
+        if btn == "OK":
             if current_ports_input:
                 try:
                     ports = [int(p.strip()) for p in current_ports_input.split(',') if p.strip().isdigit()]
@@ -235,19 +211,18 @@ def handle_ports_input_logic(initial_ports_str):
                     char_index = char_set.index(current_char)
                     if btn == "UP":
                         char_index = (char_index + 1) % len(char_set)
-                    else: # DOWN
+                    else:
                         char_index = (char_index - 1 + len(char_set)) % len(char_set)
                     char_list[ports_input_cursor_pos] = char_set[char_index]
                     current_ports_input = "".join(char_list)
-                except ValueError: # If current char is not in char_set
-                    char_list[ports_input_cursor_pos] = char_set[0] # Default to first char
+                except ValueError:
+                    char_list[ports_input_cursor_pos] = char_set[0]
                     current_ports_input = "".join(char_list)
                 draw_ui("ports_input")
         
         time.sleep(0.1)
     return None
 
-# --- Scanner ---
 def run_scan():
     global open_ports, status_msg, TARGET_IP, PORTS_TO_SCAN
     with ui_lock:
@@ -277,102 +252,98 @@ def run_scan():
     
     return open_ports
 
-# --- Main Loop ---
-if not HARDWARE_LIBS_AVAILABLE:
-    print("ERROR: Hardware libraries (RPi.GPIO, LCD drivers, PIL) are not available. Cannot run TCP Port Scanner.", file=sys.stderr)
-    sys.exit(1)
-
-current_screen = "main"
-last_scan_results = []
-try:
-    while running:
-        if current_screen == "main":
-            draw_ui("main")
+if __name__ == '__main__':
+    current_screen = "main"
+    last_scan_results = []
+    try:
+        while running:
+            if current_screen == "main":
+                draw_ui("main")
+                
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    cleanup()
+                    break
+                
+                if GPIO.input(PINS["OK"]) == 0:
+                    last_scan_results = run_scan()
+                    current_screen = "results"
+                    time.sleep(0.3)
+                
+                if GPIO.input(PINS["KEY1"]) == 0:
+                    current_ip_input = TARGET_IP
+                    current_screen = "ip_input"
+                    time.sleep(0.3)
+                
+                if GPIO.input(PINS["KEY2"]) == 0:
+                    current_ports_input = ",".join(map(str, PORTS_TO_SCAN))
+                    current_screen = "ports_input"
+                    time.sleep(0.3)
             
-            if GPIO.input(PINS["KEY3"]) == 0:
-                cleanup()
-                break
-            
-            if GPIO.input(PINS["OK"]) == 0:
-                last_scan_results = run_scan()
-                current_screen = "results"
-                time.sleep(0.3) # Debounce
-            
-            if GPIO.input(PINS["KEY1"]) == 0: # Edit Target IP
-                current_ip_input = TARGET_IP
-                current_screen = "ip_input"
-                time.sleep(0.3) # Debounce
-            
-            if GPIO.input(PINS["KEY2"]) == 0: # Edit Ports to Scan
-                current_ports_input = ",".join(map(str, PORTS_TO_SCAN))
-                current_screen = "ports_input"
-                time.sleep(0.3) # Debounce
-        
-        elif current_screen == "ip_input":
-            char_set = "0123456789."
-            new_ip = handle_ip_input_logic(current_ip_input)
-            if new_ip:
-                TARGET_IP = new_ip
-            current_screen = "main"
-            time.sleep(0.3) # Debounce
-        
-        elif current_screen == "ports_input":
-            char_set = "0123456789,"
-            new_ports_str = handle_ports_input_logic(current_ports_input)
-            if new_ports_str:
-                try:
-                    parsed_ports = [int(p.strip()) for p in new_ports_str.split(',') if p.strip().isdigit()]
-                    if all(1 <= p <= 65535 for p in parsed_ports):
-                        PORTS_TO_SCAN = parsed_ports
-                    else:
-                        show_message(["Invalid Port Range!", "1-65535 only."], "red")
-                        time.sleep(2)
-                except ValueError:
-                    show_message(["Invalid Format!", "Use comma-sep", "numbers."], "red")
-                    time.sleep(2)
-            current_screen = "main"
-            time.sleep(0.3) # Debounce
-        
-        elif current_screen == "scanning":
-            draw_ui("scanning")
-            if GPIO.input(PINS["KEY3"]) == 0:
-                cleanup()
-                break
-            if not (scan_thread and scan_thread.is_alive()): # Scan finished
-                current_screen = "results"
-            time.sleep(0.1)
-        
-        elif current_screen == "results":
-            draw_ui("results")
-            if GPIO.input(PINS["KEY3"]) == 0:
+            elif current_screen == "ip_input":
+                char_set = "0123456789."
+                new_ip = handle_ip_input_logic(current_ip_input)
+                if new_ip:
+                    TARGET_IP = new_ip
                 current_screen = "main"
-                time.sleep(0.3) # Debounce
-            if GPIO.input(PINS["OK"]) == 0:
-                last_scan_results = run_scan()
-                time.sleep(0.3) # Debounce
+                time.sleep(0.3)
             
-            if GPIO.input(PINS["UP"]) == 0:
-                with ui_lock:
-                    if open_ports: selected_index = (selected_index - 1) % len(open_ports)
-                time.sleep(0.2)
-            elif GPIO.input(PINS["DOWN"]) == 0:
-                with ui_lock:
-                    if open_ports: selected_index = (selected_index + 1) % len(open_ports)
-                time.sleep(0.2)
+            elif current_screen == "ports_input":
+                char_set = "0123456789,"
+                new_ports_str = handle_ports_input_logic(current_ports_input)
+                if new_ports_str:
+                    try:
+                        parsed_ports = [int(p.strip()) for p in new_ports_str.split(',') if p.strip().isdigit()]
+                        if all(1 <= p <= 65535 for p in parsed_ports):
+                            PORTS_TO_SCAN = parsed_ports
+                        else:
+                            show_message(["Invalid Port Range!", "1-65535 only."], "red")
+                            time.sleep(2)
+                    except ValueError:
+                        show_message(["Invalid Format!", "Use comma-sep", "numbers."], "red")
+                        time.sleep(2)
+                current_screen = "main"
+                time.sleep(0.3)
             
+            elif current_screen == "scanning":
+                draw_ui("scanning")
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    cleanup()
+                    break
+                if not (scan_thread and scan_thread.is_alive()):
+                    current_screen = "results"
+                time.sleep(0.1)
+            
+            elif current_screen == "results":
+                draw_ui("results")
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    current_screen = "main"
+                    time.sleep(0.3)
+                if GPIO.input(PINS["OK"]) == 0:
+                    last_scan_results = run_scan()
+                    time.sleep(0.3)
+                
+                if GPIO.input(PINS["UP"]) == 0:
+                    with ui_lock:
+                        if open_ports: selected_index = (selected_index - 1) % len(open_ports)
+                    time.sleep(0.2)
+                elif GPIO.input(PINS["DOWN"]) == 0:
+                    with ui_lock:
+                        if open_ports: selected_index = (selected_index + 1) % len(open_ports)
+                    time.sleep(0.2)
+                
+                time.sleep(0.1)
+
             time.sleep(0.1)
 
-        time.sleep(0.1)
-
-except (KeyboardInterrupt, SystemExit):
-    pass
-except Exception as e:
-    print(f"[ERROR] {e}", file=sys.stderr)
-    show_message(["CRITICAL ERROR:", str(e)[:20]], "red")
-    time.sleep(3)
-finally:
-    if scan_thread and scan_thread.is_alive():
-        scan_thread.join(timeout=1)
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("TCP Port Scanner payload finished.")
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        show_message(["CRITICAL ERROR:", str(e)[:20]], "red")
+        time.sleep(3)
+    finally:
+        if scan_thread and scan_thread.is_alive():
+            scan_thread.join(timeout=1)
+        LCD.LCD_Clear()
+        GPIO.cleanup()
+        print("TCP Port Scanner payload finished.")

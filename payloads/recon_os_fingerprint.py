@@ -1,59 +1,37 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **Recon: Passive OS Fingerprinting**
-===========================================================
-A passive OS fingerprinting tool that makes an educated guess about a
-target's operating system based on its TCP/IP stack characteristics.
+import os
+import time
+import signal
+import subprocess
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
+from PIL import Image, ImageDraw, ImageFont
+from scapy.all import *
+conf.verb = 0
+from wifi.raspyjack_integration import get_available_interfaces, set_raspyjack_interface
+from wifi.wifi_manager import WiFiManager
 
-This payload sends a single TCP SYN packet to an open port and analyzes
-the TTL (Time To Live) and TCP Window Size of the SYN/ACK response. These
-values are often characteristic of a particular OS.
-"""
-
-import os, sys, subprocess, signal, time
-# ---------------------------- Third‑party libs ----------------------------
-try:
-    import RPi.GPIO as GPIO
-    import LCD_1in44, LCD_Config
-    from PIL import Image, ImageDraw, ImageFont
-    HARDWARE_LIBS_AVAILABLE = True
-except ImportError:
-    HARDWARE_LIBS_AVAILABLE = False
-    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
-
-try:
-    from scapy.all import *
-    conf.verb = 0
-except ImportError:
-    sys.exit(1)
-
-# --- CONFIGURATION ---
-try:
-    sys.path.append('/root/Raspyjack/wifi/')
-    from wifi.raspyjack_integration import get_available_interfaces, set_raspyjack_interface
-    from wifi.wifi_manager import WiFiManager
-    WIFI_INTEGRATION = True
-    wifi_manager = WiFiManager()
-    print("✅ WiFi integration loaded - dynamic interface support enabled")
-except ImportError as e:
-    print(f"⚠️  WiFi integration not available: {e}")
-    WIFI_INTEGRATION = False
-    wifi_manager = None # Ensure wifi_manager is None if import fails
-
-TARGET_IP = "192.168.1.1" # Will be configurable
-TARGET_PORT = 80 # An open port on the target, will be configurable
-
-# --- Globals & Shutdown ---
+TARGET_IP = "192.168.1.1"
+TARGET_PORT = 80
 running = True
-current_ip_input = TARGET_IP # Initial value for IP input
-ip_input_cursor_pos = 0 # Cursor position for IP input
-current_port_input = str(TARGET_PORT) # Initial value for Port input
-port_input_cursor_pos = 0 # Cursor position for Port input
+current_ip_input = TARGET_IP
+ip_input_cursor_pos = 0
+current_port_input = str(TARGET_PORT)
+port_input_cursor_pos = 0
+wifi_manager = WiFiManager()
+
+PINS: dict[str, int] = { "OK": 13, "KEY3": 16, "KEY1": 21, "KEY2": 20, "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26 }
+GPIO.setmode(GPIO.BCM)
+for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+LCD = LCD_1in44.LCD()
+LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+FONT = ImageFont.load_default()
 
 def draw_ui_interface_selection(interfaces, current_selection):
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "Select Interface", font=FONT_TITLE, fill="cyan")
     d.line([(0, 22), (128, 22)], fill="cyan", width=1)
@@ -68,14 +46,9 @@ def draw_ui_interface_selection(interfaces, current_selection):
     LCD.LCD_ShowImage(img, 0, 0)
 
 def select_interface_menu():
-    global ETH_INTERFACE, status_msg
+    global status_msg
     
-    if not WIFI_INTEGRATION or not wifi_manager:
-        show_message(["WiFi integration", "not available!"], "red")
-        time.sleep(3)
-        return None # Return None if integration is not available
-
-    available_interfaces = get_available_interfaces() # Get all available interfaces
+    available_interfaces = get_available_interfaces()
     if not available_interfaces:
         show_message(["No network", "interfaces found!"], "red")
         time.sleep(3)
@@ -85,7 +58,7 @@ def select_interface_menu():
     while running:
         draw_ui_interface_selection(available_interfaces, current_menu_selection)
         
-        if GPIO.input(PINS["KEY3"]) == 0: # Cancel
+        if GPIO.input(PINS["KEY3"]) == 0:
             return None
         
         if GPIO.input(PINS["UP"]) == 0:
@@ -109,15 +82,10 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# --- UI ---
 def show_message(lines, color="lime"):
-    if not HARDWARE_LIBS_AVAILABLE:
-        for line in lines:
-            print(line)
-        return
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-    font = FONT_TITLE # Use FONT_TITLE for messages
+    font = FONT_TITLE
     y = 40
     for line in lines:
         bbox = d.textbbox((0, 0), line, font=font)
@@ -128,17 +96,7 @@ def show_message(lines, color="lime"):
     LCD.LCD_ShowImage(img, 0, 0)
 
 def draw_ui(screen_state="main", scan_results=None):
-    if not HARDWARE_LIBS_AVAILABLE:
-        print(f"UI State: {screen_state}")
-        if screen_state == "main":
-            print(f"Target IP: {TARGET_IP}")
-            print(f"Target Port: {TARGET_PORT}")
-            if scan_results:
-                for line in scan_results:
-                    print(line)
-        return
-
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "Passive OS Fingerprint", font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
@@ -179,7 +137,7 @@ def draw_ui(screen_state="main", scan_results=None):
 def handle_ip_input_logic(initial_ip):
     global current_ip_input, ip_input_cursor_pos
     current_ip_input = initial_ip
-    ip_input_cursor_pos = len(initial_ip) - 1 # Start cursor at end
+    ip_input_cursor_pos = len(initial_ip) - 1
     
     draw_ui("ip_input")
     
@@ -188,22 +146,21 @@ def handle_ip_input_logic(initial_ip):
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel IP input
+        if btn == "KEY3":
             return None
         
-        if btn == "OK": # Confirm IP
-            # Validate IP format
+        if btn == "OK":
             parts = current_ip_input.split('.')
             if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
                 return current_ip_input
             else:
                 show_message(["Invalid IP!", "Try again."], "red")
                 time.sleep(2)
-                current_ip_input = initial_ip # Reset to initial
+                current_ip_input = initial_ip
                 ip_input_cursor_pos = len(initial_ip) - 1
                 draw_ui("ip_input")
         
@@ -222,12 +179,11 @@ def handle_ip_input_logic(initial_ip):
                     digit = int(current_char)
                     if btn == "UP":
                         digit = (digit + 1) % 10
-                    else: # DOWN
+                    else:
                         digit = (digit - 1 + 10) % 10
                     char_list[ip_input_cursor_pos] = str(digit)
                     current_ip_input = "".join(char_list)
                 elif current_char == '.':
-                    # Cannot change dot, move cursor
                     if btn == "UP":
                         ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
                     else:
@@ -249,20 +205,20 @@ def handle_port_input_logic(initial_port):
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel Port input
+        if btn == "KEY3":
             return None
         
-        if btn == "OK": # Confirm Port
+        if btn == "OK":
             if current_port_input.isdigit() and 1 <= int(current_port_input) <= 65535:
                 return current_port_input
             else:
                 show_message(["Invalid Port!", "Try again."], "red")
                 time.sleep(2)
-                current_port_input = initial_port # Reset to initial
+                current_port_input = initial_port
                 port_input_cursor_pos = len(initial_port) - 1
                 draw_ui("port_input")
         
@@ -281,7 +237,7 @@ def handle_port_input_logic(initial_port):
                     digit = int(current_char)
                     if btn == "UP":
                         digit = (digit + 1) % 10
-                    else: # DOWN
+                    else:
                         digit = (digit - 1 + 10) % 10
                     char_list[port_input_cursor_pos] = str(digit)
                     current_port_input = "".join(char_list)
@@ -290,7 +246,6 @@ def handle_port_input_logic(initial_port):
         time.sleep(0.1)
     return None
 
-# --- Scanner ---
 def run_scan(interface):
     global TARGET_IP, TARGET_PORT
     
@@ -298,24 +253,21 @@ def run_scan(interface):
     scan_results = []
     
     try:
-        # Set the selected interface as the primary interface for routing
-        if WIFI_INTEGRATION and set_raspyjack_interface(interface):
+        if set_raspyjack_interface(interface):
             show_message([f"Interface {interface}", "activated."], "lime")
             time.sleep(1)
         else:
             show_message([f"Failed to activate", f"{interface}."], "red")
             return []
 
-        # Send a SYN packet and wait for a SYN/ACK response
         p = IP(dst=TARGET_IP)/TCP(dport=int(TARGET_PORT), flags='S')
         resp = sr1(p, timeout=3, verbose=0, iface=interface)
         
-        if resp and resp.haslayer(TCP) and resp[TCP].flags == 'SA': # SYN/ACK
+        if resp and resp.haslayer(TCP) and resp[TCP].flags == 'SA':
             ttl = resp[IP].ttl
             window_size = resp[TCP].window
             
             os_guess = "Unknown"
-            # Simple TTL-based guessing
             if ttl <= 64:
                 os_guess = "Linux / Unix"
             elif ttl <= 128:
@@ -341,95 +293,74 @@ def run_scan(interface):
     
     return scan_results
 
-# --- Main Loop ---
-if not HARDWARE_LIBS_AVAILABLE:
-    print("ERROR: Hardware libraries (RPi.GPIO, LCD drivers, PIL) are not available. Cannot run Passive OS Fingerprinting.", file=sys.stderr)
-    sys.exit(1)
-
-current_screen = "main"
-last_scan_results = []
-try:
-    # Check for scapy dependency
+if __name__ == '__main__':
+    current_screen = "main"
+    last_scan_results = []
     try:
-        from scapy.all import *
-    except ImportError:
-        show_message(["ERROR:", "Scapy not found!"], "red")
-        time.sleep(3)
-        sys.exit(1)
-
-    selected_interface = None
-    if WIFI_INTEGRATION:
         selected_interface = select_interface_menu()
         if not selected_interface:
             show_message(["No interface", "selected!", "Exiting..."], "red")
             time.sleep(3)
             sys.exit(1)
-    else:
-        # Fallback if WIFI_INTEGRATION is not available
-        selected_interface = "eth0" # Default to eth0 if no dynamic selection
-        show_message([f"Using default:", f"{selected_interface}"], "lime")
-        time.sleep(2)
 
-    while running:
-        if current_screen == "main":
-            draw_ui("main", scan_results=last_scan_results)
+        while running:
+            if current_screen == "main":
+                draw_ui("main", scan_results=last_scan_results)
+                
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    cleanup()
+                    break
+                
+                if GPIO.input(PINS["OK"]) == 0:
+                    last_scan_results = run_scan(selected_interface)
+                    current_screen = "results"
+                    time.sleep(0.3)
+                
+                if GPIO.input(PINS["KEY1"]) == 0:
+                    current_ip_input = TARGET_IP
+                    current_screen = "ip_input"
+                    time.sleep(0.3)
+                
+                if GPIO.input(PINS["KEY2"]) == 0:
+                    current_port_input = str(TARGET_PORT)
+                    current_screen = "port_input"
+                    time.sleep(0.3)
             
-            if GPIO.input(PINS["KEY3"]) == 0:
-                cleanup()
-                break
-            
-            if GPIO.input(PINS["OK"]) == 0:
-                last_scan_results = run_scan(selected_interface)
-                current_screen = "results"
-                time.sleep(0.3) # Debounce
-            
-            if GPIO.input(PINS["KEY1"]) == 0: # Edit Target IP
-                current_ip_input = TARGET_IP
-                current_screen = "ip_input"
-                time.sleep(0.3) # Debounce
-            
-            if GPIO.input(PINS["KEY2"]) == 0: # Edit Target Port
-                current_port_input = str(TARGET_PORT)
-                current_screen = "port_input"
-                time.sleep(0.3) # Debounce
-        
-        elif current_screen == "ip_input":
-            char_set = "0123456789."
-            new_ip = handle_ip_input_logic(current_ip_input)
-            if new_ip:
-                TARGET_IP = new_ip
-            current_screen = "main"
-            time.sleep(0.3) # Debounce
-        
-        elif current_screen == "port_input":
-            char_set = "0123456789"
-            new_port = handle_port_input_logic(current_port_input)
-            if new_port:
-                TARGET_PORT = int(new_port)
-            current_screen = "main"
-            time.sleep(0.3) # Debounce
-        
-        elif current_screen == "results":
-            draw_ui("results", scan_results=last_scan_results)
-            if GPIO.input(PINS["KEY3"]) == 0:
+            elif current_screen == "ip_input":
+                char_set = "0123456789."
+                new_ip = handle_ip_input_logic(current_ip_input)
+                if new_ip:
+                    TARGET_IP = new_ip
                 current_screen = "main"
-                time.sleep(0.3) # Debounce
-            if GPIO.input(PINS["OK"]) == 0:
-                last_scan_results = run_scan(selected_interface)
-                time.sleep(0.3) # Debounce
+                time.sleep(0.3)
+            
+            elif current_screen == "port_input":
+                char_set = "0123456789"
+                new_port = handle_port_input_logic(current_port_input)
+                if new_port:
+                    TARGET_PORT = int(new_port)
+                current_screen = "main"
+                time.sleep(0.3)
+            
+            elif current_screen == "results":
+                draw_ui("results", scan_results=last_scan_results)
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    current_screen = "main"
+                    time.sleep(0.3)
+                if GPIO.input(PINS["OK"]) == 0:
+                    last_scan_results = run_scan(selected_interface)
+                    time.sleep(0.3)
+                time.sleep(0.1)
+
             time.sleep(0.1)
 
-        time.sleep(0.1)
-
-except (KeyboardInterrupt, SystemExit):
-    pass
-except Exception as e:
-    print(f"[ERROR] {e}", file=sys.stderr)
-    show_message(["CRITICAL ERROR:", str(e)[:20]], "red")
-    time.sleep(3)
-finally:
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("OS Fingerprint payload finished.")
-
-
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        show_message(["CRITICAL ERROR:", str(e)[:20]], "red")
+        time.sleep(3)
+    finally:
+        LCD.LCD_Clear()
+        GPIO.cleanup()
+        print("OS Fingerprint payload finished.")

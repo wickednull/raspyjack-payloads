@@ -1,29 +1,22 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **Utility: System Info**
-===============================================
-A simple utility payload that displays key system metrics on the LCD,
-including CPU load, memory usage, disk space, and IP address.
-"""
-
-import os, sys, subprocess, signal, time
+import os
+import time
+import signal
+import subprocess
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
-# --- GPIO & LCD ---
 PINS = { "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-FONT = ImageFont.load_default()
+FONT = ImageFont.load_default() 
 
-# --- Main ---
 def get_info():
     info = {}
     try:
@@ -68,7 +61,7 @@ if __name__ == '__main__':
             draw_ui(system_info)
             
             start_wait = time.time()
-            while time.time() - start_wait < 5.0: # Refresh every 5 seconds
+            while time.time() - start_wait < 5.0:
                 if GPIO.input(PINS["KEY3"]) == 0:
                     raise SystemExit
                 time.sleep(0.1)

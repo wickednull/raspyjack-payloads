@@ -1,26 +1,18 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **Utility: Spoof MAC Address (eth0)**
-============================================================
-A utility payload to change the MAC address of the `eth0` interface.
-This is useful for evading MAC-based filtering or for impersonating
-another device on the network.
-"""
-
-import os, sys, subprocess, signal, time
+import os
+import time
+import signal
+import subprocess
+import random
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
-# --- CONFIGURATION ---
 INTERFACE = "eth0"
-# Set to "RANDOM" to generate a random MAC, or specify one.
 NEW_MAC = "RANDOM" 
 
-# --- GPIO & LCD ---
 PINS = { "OK": 13, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -29,7 +21,6 @@ LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
 
-# --- Main ---
 def show_message(lines, color="lime"):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
@@ -43,15 +34,10 @@ def run_spoof():
     show_message(["Spoofing MAC...", f"on {INTERFACE}"])
     
     try:
-        # Get original MAC to restore it later if needed
-        # original_mac = subprocess.check_output(f"cat /sys/class/net/{INTERFACE}/address", shell=True).decode().strip()
-        
         mac_to_set = NEW_MAC
         if mac_to_set == "RANDOM":
-            import random
             mac_to_set = f"02:00:00:{random.randint(0, 255):02x}:{random.randint(0, 255):02x}:{random.randint(0, 255):02x}"
 
-        # Use macchanger tool
         command = f"ifconfig {INTERFACE} down; macchanger -m {mac_to_set} {INTERFACE}; ifconfig {INTERFACE} up"
         
         proc = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
@@ -77,8 +63,6 @@ if __name__ == '__main__':
             time.sleep(5)
             
     finally:
-        # Note: This payload doesn't restore the original MAC automatically.
-        # A reboot or another payload would be needed.
         LCD.LCD_Clear()
         GPIO.cleanup()
         print("MAC Spoof payload finished.")

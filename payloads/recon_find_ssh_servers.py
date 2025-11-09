@@ -1,90 +1,42 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **Recon: Find SSH Servers**
-==================================================
-A simple reconnaissance payload that scans the local network to find
-hosts with the SSH port (22) open.
-"""
+import os
+import time
+import signal
+import subprocess
+import threading
+import socket
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
+from PIL import Image, ImageDraw, ImageFont
+from wifi.raspyjack_integration import get_available_interfaces
+from wifi.wifi_manager import WiFiManager
 
-import os, sys, subprocess, signal, time, threading, socket
-# ---------------------------- Third‑party libs ----------------------------
-try:
-    import RPi.GPIO as GPIO
-    import LCD_1in44, LCD_Config
-    from PIL import Image, ImageDraw, ImageFont
-    HARDWARE_LIBS_AVAILABLE = True
-except ImportError:
-    HARDWARE_LIBS_AVAILABLE = False
-    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
+PINS: dict[str, int] = { "OK": 13, "KEY3": 16, "KEY1": 21, "KEY2": 20, "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26 }
+GPIO.setmode(GPIO.BCM)
+for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+LCD = LCD_1in44.LCD()
+LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+FONT = ImageFont.load_default()
 
-# ---------------------------------------------------------------------------
-# 1) GPIO mapping (BCM)
-# ---------------------------------------------------------------------------
-PINS: dict[str, int] = { "OK": 13, "KEY3": 16, "KEY1": 21, "KEY2": 20 } # Added KEY1, KEY2 for config
-
-# ---------------------------------------------------------------------------
-# 2) GPIO & LCD initialisation
-# ---------------------------------------------------------------------------
-if HARDWARE_LIBS_AVAILABLE:
-    GPIO.setmode(GPIO.BCM)
-    for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    LCD = LCD_1in44.LCD()
-    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-    FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-    FONT = ImageFont.load_default()
-else:
-    # Dummy objects if hardware libs are not available
-    class DummyLCD:
-        def LCD_Init(self, *args): pass
-        def LCD_Clear(self): pass
-        def LCD_ShowImage(self, *args): pass
-    LCD = DummyLCD()
-    WIDTH, HEIGHT = 128, 128
-    class DummyGPIO:
-        def setmode(self, *args): pass
-        def setup(self, *args): pass
-        def input(self, pin): return 1 # Simulate no button pressed
-        def cleanup(self): pass
-    GPIO = DummyGPIO()
-    class DummyImageFont:
-        def truetype(self, *args, **kwargs): return None
-        def load_default(self): return None
-    ImageFont = DummyImageFont()
-    FONT_TITLE = ImageFont.load_default() # Fallback to default font
-    FONT = ImageFont.load_default() # Fallback to default font
-
-# --- CONFIGURATION ---
-try:
-    sys.path.append('/root/Raspyjack/wifi/')
-    from wifi.raspyjack_integration import get_available_interfaces
-    from wifi.wifi_manager import WiFiManager
-    WIFI_INTEGRATION = True
-    wifi_manager = WiFiManager()
-    print("✅ WiFi integration loaded - dynamic interface support enabled")
-except ImportError as e:
-    print(f"⚠️  WiFi integration not available: {e}")
-    WIFI_INTEGRATION = False
-    wifi_manager = None # Ensure wifi_manager is None if import fails
-
-SSH_PORT = 22 # Will be configurable
-ETH_INTERFACE = "eth0" # Will be configurable
-
-# --- Globals & Shutdown ---
+SSH_PORT = 22
+ETH_INTERFACE = "eth0"
 running = True
 scan_thread = None
 ssh_servers = []
 ui_lock = threading.Lock()
 status_msg = "Press OK to scan"
 selected_index = 0
-current_interface_input = ETH_INTERFACE # For interface input
+current_interface_input = ETH_INTERFACE
 interface_input_cursor_pos = 0
-current_port_input = str(SSH_PORT) # For port input
+current_port_input = str(SSH_PORT)
 port_input_cursor_pos = 0
+wifi_manager = WiFiManager()
 
 def draw_ui_interface_selection(interfaces, current_selection):
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "Select Interface", font=FONT_TITLE, fill="cyan")
     d.line([(0, 22), (128, 22)], fill="cyan", width=1)
@@ -101,12 +53,7 @@ def draw_ui_interface_selection(interfaces, current_selection):
 def select_interface_menu():
     global ETH_INTERFACE, status_msg
     
-    if not WIFI_INTEGRATION or not wifi_manager:
-        show_message(["WiFi integration", "not available!"], "red")
-        time.sleep(3)
-        return None # Return None if integration is not available
-
-    available_interfaces = get_available_interfaces() # Get all available interfaces
+    available_interfaces = get_available_interfaces()
     if not available_interfaces:
         show_message(["No network", "interfaces found!"], "red")
         time.sleep(3)
@@ -116,7 +63,7 @@ def select_interface_menu():
     while running:
         draw_ui_interface_selection(available_interfaces, current_menu_selection)
         
-        if GPIO.input(PINS["KEY3"]) == 0: # Cancel
+        if GPIO.input(PINS["KEY3"]) == 0:
             return None
         
         if GPIO.input(PINS["UP"]) == 0:
@@ -140,15 +87,10 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# --- UI ---
 def show_message(lines, color="lime"):
-    if not HARDWARE_LIBS_AVAILABLE:
-        for line in lines:
-            print(line)
-        return
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-    font = FONT_TITLE # Use FONT_TITLE for messages
+    font = FONT_TITLE
     y = 40
     for line in lines:
         bbox = d.textbbox((0, 0), line, font=font)
@@ -159,15 +101,7 @@ def show_message(lines, color="lime"):
     LCD.LCD_ShowImage(img, 0, 0)
 
 def draw_ui(screen_state="main"):
-    if not HARDWARE_LIBS_AVAILABLE:
-        print(f"UI State: {screen_state}")
-        if screen_state == "main":
-            print(f"Interface: {ETH_INTERFACE}")
-            print(f"SSH Port: {SSH_PORT}")
-            print(f"Status: {status_msg}")
-        return
-
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "Find SSH Servers", font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
@@ -207,14 +141,14 @@ def draw_ui(screen_state="main"):
     LCD.LCD_ShowImage(img, 0, 0)
 
 def handle_text_input_logic(initial_text, screen_state_name, char_set):
-    global current_interface_input, interface_input_cursor_pos, current_port_input, port_input_cursor_pos
+    global current_interface_input, interface_input_cursor_pos, current_port_input, ports_input_cursor_pos
     
     if screen_state_name == "iface_input":
         current_input_ref = current_interface_input
         cursor_pos_ref = interface_input_cursor_pos
-    else: # port_input
+    else:
         current_input_ref = current_port_input
-        cursor_pos_ref = port_input_cursor_pos
+        cursor_pos_ref = ports_input_cursor_pos
 
     current_input_ref = initial_text
     cursor_pos_ref = len(initial_text) - 1
@@ -226,15 +160,15 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel input
+        if btn == "KEY3":
             return None
         
-        if btn == "OK": # Confirm input
-            if current_input_ref: # Basic validation
+        if btn == "OK":
+            if current_input_ref:
                 return current_input_ref
             else:
                 show_message(["Input cannot", "be empty!"], "red")
@@ -258,28 +192,26 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
                     char_index = char_set.index(current_char)
                     if btn == "UP":
                         char_index = (char_index + 1) % len(char_set)
-                    else: # DOWN
+                    else:
                         char_index = (char_index - 1 + len(char_set)) % len(char_set)
                     char_list[cursor_pos_ref] = char_set[char_index]
                     current_input_ref = "".join(char_list)
-                except ValueError: # If current char is not in char_set
-                    char_list[cursor_pos_ref] = char_set[0] # Default to first char
+                except ValueError:
+                    char_list[cursor_pos_ref] = char_set[0]
                     current_input_ref = "".join(char_list)
                 draw_ui(screen_state_name)
         
         time.sleep(0.1)
     return None
 
-# --- Scanner ---
 def run_scan(interface):
-    global ssh_servers, status_msg, selected_index, ETH_INTERFACE, SSH_PORT
+    global ssh_servers, status_msg, selected_index
     with ui_lock:
         status_msg = "Scanning network..."
         ssh_servers = []
         selected_index = 0
 
     try:
-        # Check if interface exists and has IP
         try:
             ip_output = subprocess.check_output(f"ip -o -4 addr show {interface}", shell=True).decode()
             if "inet " not in ip_output:
@@ -315,83 +247,72 @@ def run_scan(interface):
     if running:
         with ui_lock: status_msg = "Scan Finished"
 
-# --- Main Loop ---
-if not HARDWARE_LIBS_AVAILABLE:
-    print("ERROR: Hardware libraries (RPi.GPIO, LCD drivers, PIL) are not available. Cannot run Find SSH Servers.", file=sys.stderr)
-    sys.exit(1)
-
-current_screen = "main"
-try:
-    selected_interface = None
-    if WIFI_INTEGRATION:
+if __name__ == "__main__":
+    current_screen = "main"
+    try:
         selected_interface = select_interface_menu()
         if not selected_interface:
             show_message(["No interface", "selected!", "Exiting..."], "red")
             time.sleep(3)
             sys.exit(1)
-    else:
-        # Fallback if WIFI_INTEGRATION is not available
-        selected_interface = "eth0" # Default to eth0 if no dynamic selection
-        show_message([f"Using default:", f"{selected_interface}"], "lime")
-        time.sleep(2)
 
-    while running:
-        if current_screen == "main":
-            draw_ui("main")
+        while running:
+            if current_screen == "main":
+                draw_ui("main")
+                
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    cleanup()
+                    break
+                
+                if GPIO.input(PINS["OK"]) == 0:
+                    if not (scan_thread and scan_thread.is_alive()):
+                        scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
+                        scan_thread.start()
+                    time.sleep(0.3)
+                
+                if GPIO.input(PINS["UP"]) == 0:
+                    with ui_lock:
+                        if ssh_servers: selected_index = (selected_index - 1) % len(ssh_servers)
+                    time.sleep(0.2)
+                elif GPIO.input(PINS["DOWN"]) == 0:
+                    with ui_lock:
+                        if ssh_servers: selected_index = (selected_index + 1) % len(ssh_servers)
+                    time.sleep(0.2)
+                
+                if GPIO.input(PINS["KEY1"]) == 0:
+                    show_message(["Interface selection", "is now menu-driven."], "yellow")
+                    time.sleep(2)
+                    current_screen = "main"
+                    time.sleep(0.3)
+                
+                if GPIO.input(PINS["KEY2"]) == 0:
+                    current_port_input = str(SSH_PORT)
+                    current_screen = "port_input"
+                    time.sleep(0.3)
             
-            if GPIO.input(PINS["KEY3"]) == 0:
-                cleanup()
-                break
-            
-            if GPIO.input(PINS["OK"]) == 0:
-                if not (scan_thread and scan_thread.is_alive()):
-                    scan_thread = threading.Thread(target=run_scan, args=(selected_interface,), daemon=True)
-                    scan_thread.start()
+            elif current_screen == "iface_input":
+                current_screen = "main"
                 time.sleep(0.3)
             
-            if GPIO.input(PINS["UP"]) == 0:
-                with ui_lock:
-                    if ssh_servers: selected_index = (selected_index - 1) % len(ssh_servers)
-                time.sleep(0.2)
-            elif GPIO.input(PINS["DOWN"]) == 0:
-                with ui_lock:
-                    if ssh_servers: selected_index = (selected_index + 1) % len(ssh_servers)
-                time.sleep(0.2)
-            
-            if GPIO.input(PINS["KEY1"]) == 0: # Edit Interface (now handled by menu)
-                show_message(["Interface selection", "is now menu-driven."], "yellow")
-                time.sleep(2)
+            elif current_screen == "port_input":
+                char_set = "0123456789"
+                new_port = handle_text_input_logic(current_port_input, "port_input", char_set)
+                if new_port:
+                    SSH_PORT = int(new_port)
                 current_screen = "main"
-                time.sleep(0.3) # Debounce
+                time.sleep(0.3)
             
-            if GPIO.input(PINS["KEY2"]) == 0: # Edit Port
-                current_port_input = str(SSH_PORT)
-                current_screen = "port_input"
-                time.sleep(0.3) # Debounce
-        
-        elif current_screen == "iface_input": # This screen is no longer needed
-            current_screen = "main"
-            time.sleep(0.3) # Debounce
-        
-        elif current_screen == "port_input":
-            char_set = "0123456789"
-            new_port = handle_text_input_logic(current_port_input, "port_input", char_set)
-            if new_port:
-                SSH_PORT = int(new_port)
-            current_screen = "main"
-            time.sleep(0.3) # Debounce
-        
-        time.sleep(0.1)
+            time.sleep(0.1)
 
-except (KeyboardInterrupt, SystemExit):
-    pass
-except Exception as e:
-    print(f"[ERROR] {e}", file=sys.stderr)
-    show_message(["CRITICAL ERROR:", str(e)[:20]], "red")
-    time.sleep(3)
-finally:
-    if scan_thread and scan_thread.is_alive():
-        scan_thread.join(timeout=1)
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("Find SSH Servers payload finished.")
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        show_message(["CRITICAL ERROR:", str(e)[:20]], "red")
+        time.sleep(3)
+    finally:
+        if scan_thread and scan_thread.is_alive():
+            scan_thread.join(timeout=1)
+        LCD.LCD_Clear()
+        GPIO.cleanup()
+        print("Find SSH Servers payload finished.")

@@ -1,38 +1,21 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **Attack: Nmap Vuln Scan**
-==================================================
-A convenience payload that launches a dedicated Nmap vulnerability scan
-against a target. This uses the `--script vuln` argument to run all
-scripts in Nmap's "vuln" category.
-
-This is a "fire-and-forget" scan that saves its output to a loot file.
-"""
-
-import os, sys, subprocess, signal, time, threading
+import os
+import time
+import signal
+import subprocess
+import threading
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from wifi.raspyjack_integration import get_available_interfaces
+from wifi.wifi_manager import WiFiManager
 
-# --- CONFIGURATION ---
-try:
-    sys.path.append('/root/Raspyjack/wifi/')
-    from wifi.raspyjack_integration import get_available_interfaces
-    from wifi.wifi_manager import WiFiManager
-    WIFI_INTEGRATION = True
-    wifi_manager = WiFiManager()
-    print("✅ WiFi integration loaded - dynamic interface support enabled")
-except ImportError as e:
-    print(f"⚠️  WiFi integration not available: {e}")
-    WIFI_INTEGRATION = False
-    wifi_manager = None # Ensure wifi_manager is None if import fails
+RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
+TARGET_IP = "192.168.1.1"
+LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "Nmap_Vuln")
 
-TARGET_IP = "192.168.1.1" # Default IP, will be configurable
-LOOT_DIR = "/root/Raspyjack/loot/Nmap_Vuln/"
-
-# --- GPIO & LCD ---
 PINS = { "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -41,24 +24,21 @@ LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
 
-# --- Globals & Shutdown ---
 running = True
 scan_thread = None
 status_msg = "Press OK to scan"
-current_ip_input = "192.168.1.1" # Initial value for IP input
-ip_input_cursor_pos = 0 # Cursor position for IP input
-ip_input_segment = 0 # Which segment of the IP (0-3) is being edited
+current_ip_input = "192.168.1.1"
+ip_input_cursor_pos = 0
+ip_input_segment = 0
+wifi_manager = WiFiManager()
 
 def cleanup(*_):
     global running
     running = False
-    # In a real scenario, you might want to kill the nmap process
-    # but for a fire-and-forget script, we let it finish.
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# --- UI ---
 def draw_ui(screen_state="main"):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
@@ -96,12 +76,7 @@ def draw_ui_interface_selection(interfaces, current_selection):
 def select_interface_menu():
     global WIFI_INTERFACE, status_msg
     
-    if not WIFI_INTEGRATION or not wifi_manager:
-        draw_message("WiFi integration not available!", "red")
-        time.sleep(3)
-        return None # Return None if integration is not available
-
-    available_interfaces = get_available_interfaces() # Get all available interfaces
+    available_interfaces = get_available_interfaces()
     if not available_interfaces:
         draw_message("No network interfaces found!", "red")
         time.sleep(3)
@@ -111,7 +86,7 @@ def select_interface_menu():
     while running:
         draw_ui_interface_selection(available_interfaces, current_menu_selection)
         
-        if GPIO.input(PINS["KEY3"]) == 0: # Cancel
+        if GPIO.input(PINS["KEY3"]) == 0:
             return None
         
         if GPIO.input(PINS["UP"]) == 0:
@@ -132,7 +107,7 @@ def handle_ip_input():
     global current_ip_input, ip_input_cursor_pos, ip_input_segment
     
     ip_segments = current_ip_input.split('.')
-    if len(ip_segments) != 4: # Reset if invalid format
+    if len(ip_segments) != 4:
         ip_segments = ["192", "168", "1", "1"]
         current_ip_input = ".".join(ip_segments)
     
@@ -143,15 +118,14 @@ def handle_ip_input():
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel IP input
+        if btn == "KEY3":
             return False
         
-        if btn == "OK": # Confirm IP
-            # Validate IP format
+        if btn == "OK":
             parts = current_ip_input.split('.')
             if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
                 return True
@@ -159,7 +133,7 @@ def handle_ip_input():
                 draw_ui("ip_input")
                 draw_message("Invalid IP!\nTry again.")
                 time.sleep(2)
-                current_ip_input = "192.168.1.1" # Reset to default
+                current_ip_input = "192.168.1.1"
                 ip_input_cursor_pos = 0
                 ip_input_segment = 0
                 draw_ui("ip_input")
@@ -179,12 +153,11 @@ def handle_ip_input():
                     digit = int(current_char)
                     if btn == "UP":
                         digit = (digit + 1) % 10
-                    else: # DOWN
+                    else:
                         digit = (digit - 1 + 10) % 10
                     char_list[ip_input_cursor_pos] = str(digit)
                     current_ip_input = "".join(char_list)
                 elif current_char == '.':
-                    # Cannot change dot, move cursor
                     if btn == "UP":
                         ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
                     else:
@@ -194,7 +167,6 @@ def handle_ip_input():
         time.sleep(0.1)
     return False
 
-# --- Scanner ---
 def run_scan(target_ip, interface):
     global status_msg
     
@@ -206,7 +178,7 @@ def run_scan(target_ip, interface):
     
     try:
         command = f"nmap -e {interface} --script vuln -oN {output_file} {target_ip}"
-        subprocess.run(command, shell=True, check=True, timeout=600) # 10 minute timeout
+        subprocess.run(command, shell=True, check=True, timeout=600)
         status_msg = "Scan complete!"
     except subprocess.TimeoutExpired:
         status_msg = "Scan timed out!"
@@ -214,57 +186,51 @@ def run_scan(target_ip, interface):
         status_msg = "Scan failed!"
         print(f"Nmap scan failed: {e}", file=sys.stderr)
 
-# --- Main Loop ---
-try:
-    if subprocess.run("which nmap", shell=True, capture_output=True).returncode != 0:
-        status_msg = "nmap not found!"
-        draw_ui()
-        time.sleep(3)
-        raise SystemExit("`nmap` command not found.")
+if __name__ == "__main__":
+    try:
+        if subprocess.run("which nmap", shell=True, capture_output=True).returncode != 0:
+            status_msg = "nmap not found!"
+            draw_ui()
+            time.sleep(3)
+            raise SystemExit("`nmap` command not found.")
 
-    selected_interface = None
-    if WIFI_INTEGRATION:
         selected_interface = select_interface_menu()
         if not selected_interface:
             draw_message("No interface selected!", "red")
             time.sleep(3)
             raise SystemExit("No interface selected for scan.")
-    else:
-        # Fallback if WIFI_INTEGRATION is not available
-        selected_interface = "eth0" # Default to eth0 if no dynamic selection
 
-    current_screen = "main" # State variable for the main loop
+        current_screen = "main"
 
-    while running:
-        if current_screen == "main":
-            draw_ui("main")
+        while running:
+            if current_screen == "main":
+                draw_ui("main")
+                
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    cleanup()
+                    break
+                
+                if GPIO.input(PINS["OK"]) == 0:
+                    current_screen = "ip_input"
+                    time.sleep(0.3)
             
-            if GPIO.input(PINS["KEY3"]) == 0:
-                cleanup()
-                break
-            
-            if GPIO.input(PINS["OK"]) == 0:
-                # Transition to IP input screen
-                current_screen = "ip_input"
-                time.sleep(0.3) # Debounce
-        
-        elif current_screen == "ip_input":
-            if handle_ip_input(): # If IP input is confirmed
-                TARGET_IP = current_ip_input # Update global TARGET_IP
-                if not (scan_thread and scan_thread.is_alive()):
-                    scan_thread = threading.Thread(target=run_scan, args=(TARGET_IP, selected_interface,), daemon=True)
-                    scan_thread.start()
-                current_screen = "main" # Go back to main screen after starting scan
-            else: # If IP input is cancelled
-                current_screen = "main"
-            time.sleep(0.3) # Debounce
+            elif current_screen == "ip_input":
+                if handle_ip_input():
+                    TARGET_IP = current_ip_input
+                    if not (scan_thread and scan_thread.is_alive()):
+                        scan_thread = threading.Thread(target=run_scan, args=(TARGET_IP, selected_interface,), daemon=True)
+                        scan_thread.start()
+                    current_screen = "main"
+                else:
+                    current_screen = "main"
+                time.sleep(0.3)
 
-        time.sleep(0.1)
+            time.sleep(0.1)
 
-except (KeyboardInterrupt, SystemExit):
-    pass
-finally:
-    cleanup()
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("Nmap Vuln Scan payload finished.")
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        cleanup()
+        LCD.LCD_Clear()
+        GPIO.cleanup()
+        print("Nmap Vuln Scan payload finished.")

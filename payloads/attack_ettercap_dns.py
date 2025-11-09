@@ -1,72 +1,32 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **Attack: Ettercap DNS Spoofing**
-========================================================
-An alternative implementation of a DNS spoofing attack using the powerful
-`ettercap` tool. This payload automates the process of running ettercap
-in graphical mode to perform ARP poisoning and then spoof DNS replies.
+import os
+import time
+import signal
+import subprocess
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
+from PIL import Image, ImageDraw, ImageFont
 
-**NOTE:** This payload is designed to launch `ettercap` and requires user
-interaction with the `ettercap` interface itself, which is not displayed
-on the LCD. It's a launcher for a more complex tool.
-"""
+PINS: dict[str, int] = {
+    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
+    "KEY1": 21, "KEY2": 20, "KEY3": 16,
+}
 
-import os, sys, subprocess, signal, time
+GPIO.setmode(GPIO.BCM)
+for pin in PINS.values():
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-# ---------------------------- Third‑party libs ----------------------------
-try:
-    import RPi.GPIO as GPIO
-    import LCD_1in44, LCD_Config
-    from PIL import Image, ImageDraw, ImageFont
-    HARDWARE_LIBS_AVAILABLE = True
-except ImportError:
-    HARDWARE_LIBS_AVAILABLE = False
-    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
+LCD = LCD_1in44.LCD()
+LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
+FONT = ImageFont.load_default()
+FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 
-# --- CONFIGURATION ---
 ETH_INTERFACE = "eth0"
 
-# 2) GPIO & LCD initialisation
-# ---------------------------------------------------------------------------
-if HARDWARE_LIBS_AVAILABLE:
-    GPIO.setmode(GPIO.BCM)
-    for pin in PINS.values():
-        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-    LCD = LCD_1in44.LCD()
-    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-    WIDTH, HEIGHT = 128, 128
-    FONT = ImageFont.load_default()
-    FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-else:
-    # Dummy objects if hardware libs are not available
-    class DummyLCD:
-        def LCD_Init(self, *args): pass
-        def LCD_Clear(self): pass
-        def LCD_ShowImage(self, *args): pass
-    LCD = DummyLCD()
-    WIDTH, HEIGHT = 128, 128
-    class DummyGPIO:
-        def setmode(self, *args): pass
-        def setup(self, *args): pass
-        def input(self, pin): return 1 # Simulate no button pressed
-        def cleanup(self): pass
-    GPIO = DummyGPIO()
-    class DummyImageFont:
-        def truetype(self, *args, **kwargs): return None
-        def load_default(self): return None
-    ImageFont = DummyImageFont()
-    FONT_TITLE = None # Fallback to None if ImageFont is a dummy
-    FONT = None # Fallback to None if ImageFont is a dummy
-
-# --- Main ---
 def show_message(lines, color="lime"):
-    if not HARDWARE_LIBS_AVAILABLE:
-        for line in lines:
-            print(f"[{color.upper()}] {line}")
-        return
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
     y = 40
@@ -82,16 +42,9 @@ def run_attack():
         show_message(["ERROR:", "ettercap", "not found!"], "red")
         return
 
-    # This command launches ettercap in graphical mode, which will not be visible.
-    # It's intended to be run in an environment where the user can see the desktop.
-    # For a headless device, a text-only command would be used.
-    # TODO: Implement actual DNS spoofing configuration for text mode.
-    command = f"ettercap -Tq -i {ETH_INTERFACE}" # -Tq for text mode, quiet
+    command = f"ettercap -Tq -i {ETH_INTERFACE}"
     
     try:
-        # We don't wait for this to finish, it's a launcher
-        # For actual DNS spoofing, you'd need to configure ettercap with a filter file and hosts.
-        # Example: ettercap -Tq -i {ETH_INTERFACE} -F /path/to/dns_spoof.filter -M arp:remote /<target_ip>/
         subprocess.Popen(command, shell=True)
         show_message(["Ettercap", "launched in text", "mode. Needs config."])
     except Exception as e:

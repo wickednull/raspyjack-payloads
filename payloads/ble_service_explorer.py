@@ -1,51 +1,39 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **Recon: BLE Service Explorer**
-======================================================
-A Bluetooth Low Energy reconnaissance tool that provides a quick,
-high-level overview of the services offered by nearby devices.
-
-This payload scans for BLE devices and, for each one found, attempts a
-quick connection to discover and list only its primary services. This is
-faster than a full characteristic scan and is useful for quickly mapping
-out the capabilities of surrounding BLE devices.
-"""
-
-import os, sys, subprocess, signal, time, re
+import os
+import time
+import signal
+import subprocess
+import re
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
-# --- GPIO & LCD ---
-PINS = { "OK": 13, "KEY3": 16 }
+PINS = { "OK": 13, "KEY3": 16, "UP": 6, "DOWN": 19}
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-FONT = ImageFont.load_default()
+FONT = ImageFont.load_default() 
 
-# --- Globals & Shutdown ---
 running = True
 selected_index = 0
-results = [] # List of strings to display
+results = []
 
 def cleanup(*_):
     global running
     if running:
         running = False
-        # Explicitly stop bluetoothctl scanning and disconnect
         subprocess.run("bluetoothctl power off", shell=True, capture_output=True)
         subprocess.run("bluetoothctl disconnect", shell=True, capture_output=True)
         subprocess.run("bluetoothctl scan off", shell=True, capture_output=True)
-        subprocess.run("pkill -f bluetoothctl", shell=True, capture_output=True) # Aggressive kill if needed
+        subprocess.run("pkill -f bluetoothctl", shell=True, capture_output=True)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# --- UI ---
 def draw_ui(status_msg=None):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
@@ -68,7 +56,6 @@ def draw_ui(status_msg=None):
     d.text((5, 115), "OK=Scan | KEY3=Exit", font=FONT, fill="cyan")
     LCD.LCD_ShowImage(img, 0, 0)
 
-# --- Scanner ---
 def run_scan():
     global results, selected_index
     draw_ui("Scanning BLE...")
@@ -76,7 +63,6 @@ def run_scan():
     selected_index = 0
     
     try:
-        # 1. Scan for devices
         scan_proc = subprocess.Popen(["bluetoothctl"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         scan_proc.stdin.write("scan on\n"); scan_proc.stdin.flush()
         time.sleep(8)
@@ -95,16 +81,14 @@ def run_scan():
             results.append("No devices found.")
             return
 
-        # 2. Connect to each device and get services
         for mac, name in devices.items():
             if not running: break
             draw_ui(f"Checking {name[:10]}...")
             
             conn_proc = subprocess.Popen(["bluetoothctl"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
             conn_proc.stdin.write(f"connect {mac}\n"); conn_proc.stdin.flush()
-            time.sleep(4) # Give time to connect
+            time.sleep(4)
             
-            # Check if connection was successful
             conn_proc.stdin.write("info\n"); conn_proc.stdin.flush()
             time.sleep(1)
             
@@ -113,13 +97,11 @@ def run_scan():
             
             if "Connected: yes" in out:
                 results.append(f"DEV: {name[:12]}")
-                # Find primary services
                 for line in out.split('\n'):
                     if "Primary" in line:
                         uuid_match = re.search(r"([0-9a-f-]{36})", line)
                         if uuid_match:
                             uuid = uuid_match.group(1)
-                            # Try to find common names for UUIDs
                             if "1800" in uuid: results.append("  Generic Access")
                             elif "1801" in uuid: results.append("  Generic Attribute")
                             elif "180f" in uuid: results.append("  Battery Service")
@@ -130,44 +112,42 @@ def run_scan():
         results.append("Scan error!")
         print(f"BLE scan failed: {e}", file=sys.stderr)
 
-# --- Main Loop ---
-try:
-    # Dependency check for bluetoothctl
-    if subprocess.run("which bluetoothctl", shell=True, capture_output=True).returncode != 0:
-        draw_message("bluetoothctl not found!", "red")
-        time.sleep(5)
-        raise SystemExit("bluetoothctl not found.")
+if __name__ == "__main__":
+    try:
+        if subprocess.run("which bluetoothctl", shell=True, capture_output=True).returncode != 0:
+            draw_message("bluetoothctl not found!", "red")
+            time.sleep(5)
+            raise SystemExit("bluetoothctl not found.")
 
-    draw_ui("Press OK to scan")
-    while running:
-        if GPIO.input(PINS["KEY3"]) == 0:
-            cleanup()
-            break
-        
-        if GPIO.input(PINS["OK"]) == 0:
-            run_scan()
-            draw_ui()
-            time.sleep(0.5)
-            # Enter viewing mode
-            while running:
-                if GPIO.input(PINS["KEY3"]) == 0:
-                    break
-                if GPIO.input(PINS["UP"]) == 0:
-                    selected_index = (selected_index - 1) % len(results) if results else 0
-                    draw_ui()
-                    time.sleep(0.2)
-                elif GPIO.input(PINS["DOWN"]) == 0:
-                    selected_index = (selected_index + 1) % len(results) if results else 0
-                    draw_ui()
-                    time.sleep(0.2)
-                time.sleep(0.05)
-        
-        time.sleep(0.1)
+        draw_ui("Press OK to scan")
+        while running:
+            if GPIO.input(PINS["KEY3"]) == 0:
+                cleanup()
+                break
+            
+            if GPIO.input(PINS["OK"]) == 0:
+                run_scan()
+                draw_ui()
+                time.sleep(0.5)
+                while running:
+                    if GPIO.input(PINS["KEY3"]) == 0:
+                        break
+                    if GPIO.input(PINS["UP"]) == 0:
+                        selected_index = (selected_index - 1) % len(results) if results else 0
+                        draw_ui()
+                        time.sleep(0.2)
+                    elif GPIO.input(PINS["DOWN"]) == 0:
+                        selected_index = (selected_index + 1) % len(results) if results else 0
+                        draw_ui()
+                        time.sleep(0.2)
+                    time.sleep(0.05)
+            
+            time.sleep(0.1)
 
-except (KeyboardInterrupt, SystemExit):
-    pass
-finally:
-    cleanup()
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("BLE Service Explorer payload finished.")
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        cleanup()
+        LCD.LCD_Clear()
+        GPIO.cleanup()
+        print("BLE Service Explorer payload finished.")

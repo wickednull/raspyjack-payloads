@@ -1,41 +1,79 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **Recon: SNMP Walk**
-===========================================
-A reconnaissance tool that performs an SNMP (Simple Network Management
-Protocol) walk on a target device using a common community string.
-
-If a device has a default or guessable community string (like "public"),
-an SNMP walk can dump a huge amount of information, including network
-interfaces, routing tables, system uptime, and much more.
-"""
-
-import os, sys, subprocess, signal, time
+import os
+import time
+import signal
+import subprocess
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
-# ---------------------------- Third‑party libs ----------------------------
-try:
-    import RPi.GPIO as GPIO
-    import LCD_1in44, LCD_Config
-    from PIL import Image, ImageDraw, ImageFont
-    HARDWARE_LIBS_AVAILABLE = True
-except ImportError:
-    HARDWARE_LIBS_AVAILABLE = False
-    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
+import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
+from PIL import Image, ImageDraw, ImageFont
+from wifi.raspyjack_integration import get_available_interfaces, set_raspyjack_interface
+from wifi.wifi_manager import WiFiManager
 
-# --- CONFIGURATION ---
-TARGET_IP = "192.168.1.1" # Will be configurable
-COMMUNITY_STRING = "public" # Will be configurable
+PINS: dict[str, int] = { "OK": 13, "KEY3": 16, "KEY1": 21, "KEY2": 20, "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26 }
+GPIO.setmode(GPIO.BCM)
+for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+LCD = LCD_1in44.LCD()
+LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+FONT = ImageFont.load_default() 
 
-# --- Globals & Shutdown ---
+TARGET_IP = "192.168.1.1"
+COMMUNITY_STRING = "public"
 running = True
 selected_index = 0
 results = []
-current_ip_input = TARGET_IP # Initial value for IP input
+current_ip_input = TARGET_IP
 ip_input_cursor_pos = 0
-current_community_input = COMMUNITY_STRING # Initial value for community string input
+current_community_input = COMMUNITY_STRING
 community_input_cursor_pos = 0
+wifi_manager = WiFiManager()
+
+def draw_ui_interface_selection(interfaces, current_selection):
+    img = Image.new("RGB", (128, 128), "black")
+    d = ImageDraw.Draw(img)
+    d.text((5, 5), "Select Interface", font=FONT_TITLE, fill="cyan")
+    d.line([(0, 22), (128, 22)], fill="cyan", width=1)
+
+    y_pos = 25
+    for i, iface in enumerate(interfaces):
+        color = "yellow" if i == current_selection else "white"
+        d.text((5, y_pos), iface, font=FONT, fill=color)
+        y_pos += 11
+    
+    d.text((5, 115), "UP/DOWN=Select | OK=Confirm", font=FONT, fill="cyan")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+def select_interface_menu():
+    global status_msg
+    
+    available_interfaces = get_available_interfaces()
+    if not available_interfaces:
+        show_message(["No network", "interfaces found!"], "red")
+        time.sleep(3)
+        return None
+
+    current_menu_selection = 0
+    while running:
+        draw_ui_interface_selection(available_interfaces, current_menu_selection)
+        
+        if GPIO.input(PINS["KEY3"]) == 0:
+            return None
+        
+        if GPIO.input(PINS["UP"]) == 0:
+            current_menu_selection = (current_menu_selection - 1 + len(available_interfaces)) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["DOWN"]) == 0:
+            current_menu_selection = (current_menu_selection + 1) % len(available_interfaces)
+            time.sleep(0.2)
+        elif GPIO.input(PINS["OK"]) == 0:
+            selected_iface = available_interfaces[current_menu_selection]
+            show_message([f"Selected:", f"{selected_iface}"], "lime")
+            time.sleep(1)
+            return selected_iface
+        
+        time.sleep(0.1)
 
 def cleanup(*_):
     global running
@@ -44,15 +82,10 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# --- UI ---
 def show_message(lines, color="lime"):
-    if not HARDWARE_LIBS_AVAILABLE:
-        for line in lines:
-            print(line)
-        return
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-    font = FONT_TITLE # Use FONT_TITLE for messages
+    font = FONT_TITLE
     y = 40
     for line in lines:
         bbox = d.textbbox((0, 0), line, font=font)
@@ -63,13 +96,6 @@ def show_message(lines, color="lime"):
     LCD.LCD_ShowImage(img, 0, 0)
 
 def draw_ui(screen_state="main"):
-    if not HARDWARE_LIBS_AVAILABLE:
-        print(f"UI State: {screen_state}")
-        if screen_state == "main":
-            print(f"Target IP: {TARGET_IP}")
-            print(f"Community String: {COMMUNITY_STRING}")
-        return
-
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "SNMP Walk", font=FONT_TITLE, fill="#00FF00")
@@ -116,7 +142,7 @@ def draw_ui(screen_state="main"):
 def handle_ip_input_logic(initial_ip):
     global current_ip_input, ip_input_cursor_pos
     current_ip_input = initial_ip
-    ip_input_cursor_pos = len(initial_ip) - 1 # Start cursor at end
+    ip_input_cursor_pos = len(initial_ip) - 1
     
     draw_ui("ip_input")
     
@@ -125,22 +151,21 @@ def handle_ip_input_logic(initial_ip):
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel IP input
+        if btn == "KEY3":
             return None
         
-        if btn == "OK": # Confirm IP
-            # Validate IP format
+        if btn == "OK":
             parts = current_ip_input.split('.')
             if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
                 return current_ip_input
             else:
                 show_message(["Invalid IP!", "Try again."], "red")
                 time.sleep(2)
-                current_ip_input = initial_ip # Reset to initial
+                current_ip_input = initial_ip
                 ip_input_cursor_pos = len(initial_ip) - 1
                 draw_ui("ip_input")
         
@@ -159,12 +184,11 @@ def handle_ip_input_logic(initial_ip):
                     digit = int(current_char)
                     if btn == "UP":
                         digit = (digit + 1) % 10
-                    else: # DOWN
+                    else:
                         digit = (digit - 1 + 10) % 10
                     char_list[ip_input_cursor_pos] = str(digit)
                     current_ip_input = "".join(char_list)
                 elif current_char == '.':
-                    # Cannot change dot, move cursor
                     if btn == "UP":
                         ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
                     else:
@@ -190,15 +214,15 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
                 btn = name
-                while GPIO.input(pin) == 0: # Debounce
+                while GPIO.input(pin) == 0:
                     time.sleep(0.05)
                 break
         
-        if btn == "KEY3": # Cancel input
+        if btn == "KEY3":
             return None
         
-        if btn == "OK": # Confirm input
-            if current_input_ref: # Basic validation
+        if btn == "OK":
+            if current_input_ref:
                 return current_input_ref
             else:
                 show_message(["Input cannot", "be empty!"], "red")
@@ -222,19 +246,18 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
                     char_index = char_set.index(current_char)
                     if btn == "UP":
                         char_index = (char_index + 1) % len(char_set)
-                    else: # DOWN
+                    else:
                         char_index = (char_index - 1 + len(char_set)) % len(char_set)
                     char_list[cursor_pos_ref] = char_set[char_index]
                     current_input_ref = "".join(char_list)
-                except ValueError: # If current char is not in char_set
-                    char_list[cursor_pos_ref] = char_set[0] # Default to first char
+                except ValueError:
+                    char_list[cursor_pos_ref] = char_set[0]
                     current_input_ref = "".join(char_list)
                 draw_ui(screen_state_name)
         
         time.sleep(0.1)
     return None
 
-# --- Scanner ---
 def run_scan():
     global results, selected_index, TARGET_IP, COMMUNITY_STRING
     draw_ui("scanning")
@@ -242,17 +265,13 @@ def run_scan():
     selected_index = 0
     
     try:
-        # Use snmpwalk to query the device
         command = f"snmpwalk -v2c -c {COMMUNITY_STRING} {TARGET_IP}"
         proc = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
         
         if proc.returncode == 0 and proc.stdout:
-            # For this payload, we'll just show the first few interesting lines
-            # A full walk can be thousands of lines long
             lines = proc.stdout.strip().split('\n')
             for line in lines:
                 if "sysDescr" in line or "sysName" in line or "ifDescr" in line:
-                    # Clean up the output for display
                     clean_line = line.split(' = ')[-1].replace('"', '')
                     results.append(clean_line)
             
@@ -260,9 +279,8 @@ def run_scan():
                 results.append("Walk complete.")
                 results.append("No common info found.")
             
-            # Save full loot
-            os.makedirs("/root/Raspyjack/loot/SNMP/", exist_ok=True)
-            loot_file = f"/root/Raspyjack/loot/SNMP/{TARGET_IP}_walk.txt"
+            os.makedirs(os.path.join(RASPYJACK_DIR, "loot", "SNMP"), exist_ok=True)
+            loot_file = os.path.join(RASPYJACK_DIR, "loot", "SNMP", f"{TARGET_IP}_walk.txt")
             with open(loot_file, "w") as f:
                 f.write(f"Zone transfer results for {TARGET_IP} from {COMMUNITY_STRING}\n\n")
                 f.write(proc.stdout)
@@ -281,104 +299,99 @@ def run_scan():
     
     return results
 
-# --- Main Loop ---
-if not HARDWARE_LIBS_AVAILABLE:
-    print("ERROR: Hardware libraries (RPi.GPIO, LCD drivers, PIL) are not available. Cannot run SNMP Walk.", file=sys.stderr)
-    sys.exit(1)
+if __name__ == '__main__':
+    current_screen = "main"
+    last_scan_results = []
+    try:
+        if subprocess.run("which snmpwalk", shell=True, capture_output=True).returncode != 0:
+            show_message(["ERROR:", "snmpwalk", "not found!"], "red")
+            time.sleep(3)
+            sys.exit(1)
 
-current_screen = "main"
-last_scan_results = []
-try:
-    if subprocess.run("which snmpwalk", shell=True, capture_output=True).returncode != 0:
-        show_message(["ERROR:", "snmpwalk", "not found!"], "red")
-        time.sleep(3)
-        sys.exit(1)
-
-    while running:
-        if current_screen == "main":
-            draw_ui("main")
+        while running:
+            if current_screen == "main":
+                draw_ui("main")
+                
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    cleanup()
+                    break
+                
+                if GPIO.input(PINS["OK"]) == 0:
+                    last_scan_results = run_scan()
+                    current_screen = "results"
+                    time.sleep(0.3)
+                
+                if GPIO.input(PINS["UP"]) == 0:
+                    if last_scan_results:
+                        selected_index = (selected_index - 1) % len(last_scan_results)
+                    time.sleep(0.2)
+                elif GPIO.input(PINS["DOWN"]) == 0:
+                    if last_scan_results:
+                        selected_index = (selected_index + 1) % len(last_scan_results)
+                    time.sleep(0.2)
+                
+                if GPIO.input(PINS["KEY1"]) == 0:
+                    current_ip_input = TARGET_IP
+                    current_screen = "ip_input"
+                    time.sleep(0.3)
+                
+                if GPIO.input(PINS["KEY2"]) == 0:
+                    current_community_input = COMMUNITY_STRING
+                    current_screen = "community_input"
+                    time.sleep(0.3)
             
-            if GPIO.input(PINS["KEY3"]) == 0:
-                cleanup()
-                break
-            
-            if GPIO.input(PINS["OK"]) == 0:
-                last_scan_results = run_scan()
-                current_screen = "results"
-                time.sleep(0.3) # Debounce
-            
-            if GPIO.input(PINS["UP"]) == 0:
-                if last_scan_results:
-                    selected_index = (selected_index - 1) % len(last_scan_results)
-                time.sleep(0.2)
-            elif GPIO.input(PINS["DOWN"]) == 0:
-                if last_scan_results:
-                    selected_index = (selected_index + 1) % len(last_scan_results)
-                time.sleep(0.2)
-            
-            if GPIO.input(PINS["KEY1"]) == 0: # Edit Target IP
-                current_ip_input = TARGET_IP
-                current_screen = "ip_input"
-                time.sleep(0.3) # Debounce
-            
-            if GPIO.input(PINS["KEY2"]) == 0: # Edit Community String
-                current_community_input = COMMUNITY_STRING
-                current_screen = "community_input"
-                time.sleep(0.3) # Debounce
-        
-        elif current_screen == "ip_input":
-            char_set = "0123456789."
-            new_ip = handle_ip_input_logic(current_ip_input)
-            if new_ip:
-                TARGET_IP = new_ip
-            current_screen = "main"
-            time.sleep(0.3) # Debounce
-        
-        elif current_screen == "community_input":
-            char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?"
-            new_community = handle_text_input_logic(current_community_input, "community_input", char_set)
-            if new_community:
-                COMMUNITY_STRING = new_community
-            current_screen = "main"
-            time.sleep(0.3) # Debounce
-        
-        elif current_screen == "scanning":
-            draw_ui("scanning")
-            if GPIO.input(PINS["KEY3"]) == 0:
-                cleanup()
-                break
-            # No explicit stop for snmpwalk, it will finish or timeout
-            time.sleep(0.1)
-        
-        elif current_screen == "results":
-            draw_ui("results", scan_results=last_scan_results)
-            if GPIO.input(PINS["KEY3"]) == 0:
+            elif current_screen == "ip_input":
+                char_set = "0123456789."
+                new_ip = handle_ip_input_logic(current_ip_input)
+                if new_ip:
+                    TARGET_IP = new_ip
                 current_screen = "main"
-                time.sleep(0.3) # Debounce
-            if GPIO.input(PINS["OK"]) == 0:
-                last_scan_results = run_scan()
-                time.sleep(0.3) # Debounce
+                time.sleep(0.3)
             
-            if GPIO.input(PINS["UP"]) == 0:
-                if last_scan_results:
-                    selected_index = (selected_index - 1) % len(last_scan_results)
-                time.sleep(0.2)
-            elif GPIO.input(PINS["DOWN"]) == 0:
-                if last_scan_results:
-                    selected_index = (selected_index + 1) % len(last_scan_results)
-                time.sleep(0.2)
+            elif current_screen == "community_input":
+                char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?"
+                new_community = handle_text_input_logic(current_community_input, "community_input", char_set)
+                if new_community:
+                    COMMUNITY_STRING = new_community
+                current_screen = "main"
+                time.sleep(0.3)
             
+            elif current_screen == "scanning":
+                draw_ui("scanning")
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    cleanup()
+                    break
+                time.sleep(0.1)
+            
+            elif current_screen == "results":
+                draw_ui("results", scan_results=last_scan_results)
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    current_screen = "main"
+                    time.sleep(0.3)
+                if GPIO.input(PINS["OK"]) == 0:
+                    last_scan_results = run_scan()
+                    time.sleep(0.3)
+                
+                if GPIO.input(PINS["UP"]) == 0:
+                    if last_scan_results:
+                        selected_index = (selected_index - 1) % len(last_scan_results)
+                    time.sleep(0.2)
+                elif GPIO.input(PINS["DOWN"]) == 0:
+                    if last_scan_results:
+                        selected_index = (selected_index + 1) % len(last_scan_results)
+                    time.sleep(0.2)
+                
+                time.sleep(0.1)
+
             time.sleep(0.1)
 
-        time.sleep(0.1)
-
-except (KeyboardInterrupt, SystemExit):
-    pass
-except Exception as e:
-    print(f"[ERROR] {e}", file=sys.stderr)
-    show_message(["CRITICAL ERROR:", str(e)[:20]], "red")
-    time.sleep(3)
-finally:
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("SNMP Walk payload finished.")
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        show_message(["CRITICAL ERROR:", str(e)[:20]], "red")
+        time.sleep(3)
+    finally:
+        LCD.LCD_Clear()
+        GPIO.cleanup()
+        print("SNMP Walk payload finished.")

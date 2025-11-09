@@ -1,51 +1,37 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **Recon: Simple UDP Port Scanner**
-=========================================================
-A simple UDP port scanner. This is more complex than TCP scanning, as
-UDP is a connectionless protocol.
-
-This payload sends a UDP packet to each port in a list. If it receives
-an ICMP "port unreachable" error, the port is considered closed. If no
-response is received after a timeout, the port is considered "open" or
-"filtered".
-"""
-
-import os, sys, subprocess, signal, time, threading
+import os
+import time
+import signal
+import subprocess
+import threading
+import socket
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
-# ---------------------------- Third‑party libs ----------------------------
-try:
-    import RPi.GPIO as GPIO
-    import LCD_1in44, LCD_Config
-    from PIL import Image, ImageDraw, ImageFont
-    HARDWARE_LIBS_AVAILABLE = True
-except ImportError:
-    HARDWARE_LIBS_AVAILABLE = False
-    print("WARNING: RPi.GPIO or LCD drivers not available. UI will not function.", file=sys.stderr)
+import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
+from PIL import Image, ImageDraw, ImageFont
+from scapy.all import *
+conf.verb = 0
 
-try:
-    from scapy.all import *
-    conf.verb = 0
-except ImportError:
-    sys.exit(1)
-
-# --- CONFIGURATION ---
-TARGET_IP = "192.168.1.1" # Will be configurable
-# Common UDP ports
-PORTS_TO_SCAN = [53, 67, 68, 123, 161, 162, 500] # Will be configurable
-
-# --- Globals & Shutdown ---
+TARGET_IP = "192.168.1.1"
+PORTS_TO_SCAN = [53, 67, 68, 123, 161, 162, 500]
 running = True
 scan_thread = None
 open_ports = []
 ui_lock = threading.Lock()
 status_msg = "Press OK to scan"
-current_ip_input = TARGET_IP # Initial value for IP input
+current_ip_input = TARGET_IP
 ip_input_cursor_pos = 0
-current_ports_input = ",".join(map(str, PORTS_TO_SCAN)) # Initial value for ports input
+current_ports_input = ",".join(map(str, PORTS_TO_SCAN))
 ports_input_cursor_pos = 0
+
+PINS: dict[str, int] = { "OK": 13, "KEY3": 16, "KEY1": 21, "KEY2": 20, "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26 }
+GPIO.setmode(GPIO.BCM)
+for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+LCD = LCD_1in44.LCD()
+LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+FONT = ImageFont.load_default()
 
 def cleanup(*_):
     global running
@@ -54,15 +40,10 @@ def cleanup(*_):
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# --- UI ---
 def show_message(lines, color="lime"):
-    if not HARDWARE_LIBS_AVAILABLE:
-        for line in lines:
-            print(line)
-        return
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-    font = FONT_TITLE # Use FONT_TITLE for messages
+    font = FONT_TITLE
     y = 40
     for line in lines:
         bbox = d.textbbox((0, 0), line, font=font)
@@ -73,15 +54,7 @@ def show_message(lines, color="lime"):
     LCD.LCD_ShowImage(img, 0, 0)
 
 def draw_ui(screen_state="main"):
-    if not HARDWARE_LIBS_AVAILABLE:
-        print(f"UI State: {screen_state}")
-        if screen_state == "main":
-            print(f"Target IP: {TARGET_IP}")
-            print(f"Ports: {','.join(map(str, PORTS_TO_SCAN))}")
-            print(f"Status: {status_msg}")
-        return
-
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
     d.text((5, 5), "UDP Port Scanner", font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
@@ -120,7 +93,6 @@ def draw_ui(screen_state="main"):
     
     LCD.LCD_ShowImage(img, 0, 0)
 
-# --- Scanner ---
 def run_scan():
     global open_ports, status_msg
     with ui_lock:
@@ -133,21 +105,16 @@ def run_scan():
             status_msg = f"Scanning Port: {port}"
         
         try:
-            # Send a UDP packet to the target port
             p = IP(dst=TARGET_IP)/UDP(dport=port)
-            # Wait for a response for 2 seconds
             resp = sr1(p, timeout=2, verbose=0)
             
             if resp is None:
-                # No response -> port is open or filtered
                 with ui_lock:
                     if port not in open_ports:
                         open_ports.append(port)
             elif resp.haslayer(ICMP) and resp[ICMP].type == 3 and resp[ICMP].code == 3:
-                # ICMP "port unreachable" -> port is closed
                 pass
             else:
-                # Some other response -> port is open
                 with ui_lock:
                     if port not in open_ports:
                         open_ports.append(port)
@@ -158,27 +125,27 @@ def run_scan():
     with ui_lock:
         status_msg = "Scan Finished"
 
-# --- Main Loop ---
-try:
-    while running:
-        draw_ui()
-        
-        if GPIO.input(PINS["KEY3"]) == 0:
-            cleanup()
-            break
-        
-        if GPIO.input(PINS["OK"]) == 0:
-            if not (scan_thread and scan_thread.is_alive()):
-                scan_thread = threading.Thread(target=run_scan, daemon=True)
-                scan_thread.start()
-            time.sleep(0.3)
+if __name__ == '__main__':
+    try:
+        while running:
+            draw_ui()
+            
+            if GPIO.input(PINS["KEY3"]) == 0:
+                cleanup()
+                break
+            
+            if GPIO.input(PINS["OK"]) == 0:
+                if not (scan_thread and scan_thread.is_alive()):
+                    scan_thread = threading.Thread(target=run_scan, daemon=True)
+                    scan_thread.start()
+                time.sleep(0.3)
 
-        time.sleep(0.1)
+            time.sleep(0.1)
 
-except (KeyboardInterrupt, SystemExit):
-    pass
-finally:
-    cleanup()
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("UDP Port Scanner payload finished.")
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        cleanup()
+        LCD.LCD_Clear()
+        GPIO.cleanup()
+        print("UDP Port Scanner payload finished.")

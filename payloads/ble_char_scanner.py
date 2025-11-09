@@ -1,46 +1,21 @@
 #!/usr/bin/env python3
 import sys
-sys.path.append('/root/Raspyjack/')
-"""
-RaspyJack *payload* – **BLE Service & Characteristic Scanner**
-==============================================================
-An advanced Bluetooth Low Energy (BLE) reconnaissance tool that scans for
-devices, connects to a selected target, and enumerates all of its GATT
-services and characteristics. It also attempts to read the value of
-each characteristic.
-
-This is a crucial active recon step for BLE hacking.
-
-Features:
-1.  Uses `bluetoothctl` for scanning, connecting, and attribute discovery.
-2.  Provides a UI to select a target BLE device.
-3.  Displays a scrollable list of all services, characteristics, and descriptors.
-4.  Attempts to read and display the value of each characteristic.
-5.  Saves the discovered GATT table to a loot file.
-"""
-
-# ---------------------------------------------------------------------------
-# 0) Imports & boilerplate
-# ---------------------------------------------------------------------------
-import os, sys, subprocess, signal, time, re
+import os
+import time
+import signal
+import subprocess
+import re
 from select import select
-
-# ---------------------------- Third‑party libs ----------------------------
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
-# ---------------------------------------------------------------------------
-# 1) GPIO mapping (BCM)
-# ---------------------------------------------------------------------------
 PINS: dict[str, int] = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
     "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
 
-# ---------------------------------------------------------------------------
-# 2) GPIO & LCD initialisation
-# ---------------------------------------------------------------------------
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values():
     GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -51,31 +26,22 @@ WIDTH, HEIGHT = 128, 128
 FONT = ImageFont.load_default()
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 
-# ---------------------------------------------------------------------------
-# 3) Global State & Configuration
-# ---------------------------------------------------------------------------
-LOOT_DIR = "/root/Raspyjack/loot/BLE_GATT/"
+RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
+LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "BLE_GATT")
 running = True
 
-# ---------------------------------------------------------------------------
-# 4) Graceful shutdown
-# ---------------------------------------------------------------------------
 def cleanup(*_):
     global running
     if running:
         running = False
-        # Explicitly stop bluetoothctl scanning if it's running in the background
         subprocess.run("bluetoothctl power off", shell=True, capture_output=True)
         subprocess.run("bluetoothctl disconnect", shell=True, capture_output=True)
         subprocess.run("bluetoothctl scan off", shell=True, capture_output=True)
-        subprocess.run("pkill -f bluetoothctl", shell=True, capture_output=True) # Aggressive kill if needed
+        subprocess.run("pkill -f bluetoothctl", shell=True, capture_output=True)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
-# ---------------------------------------------------------------------------
-# 5) UI Functions
-# ---------------------------------------------------------------------------
 def draw_message(message, color="yellow"):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
@@ -103,7 +69,6 @@ def draw_list_ui(title, items, selected_index):
         for i in range(start_index, end_index):
             color = "yellow" if i == selected_index else "white"
             line = items[i]
-            # Truncate long lines
             if len(line) > 20:
                 line = line[:19] + "..."
             d.text((5, y_pos), line, font=FONT, fill=color)
@@ -112,11 +77,7 @@ def draw_list_ui(title, items, selected_index):
     d.text((5, 115), "OK=Select | KEY3=Back", font=FONT, fill="cyan")
     LCD.LCD_ShowImage(img, 0, 0)
 
-# ---------------------------------------------------------------------------
-# 6) Core bluetoothctl Functions
-# ---------------------------------------------------------------------------
 def bluetoothctl_command(commands):
-    """Runs a sequence of commands in bluetoothctl and returns the output."""
     output = ""
     try:
         proc = subprocess.Popen(
@@ -136,7 +97,6 @@ def bluetoothctl_command(commands):
         proc.stdin.write("exit\n")
         proc.stdin.flush()
         
-        # Read output with a timeout
         out, _ = proc.communicate(timeout=15)
         output = out
     except subprocess.TimeoutExpired:
@@ -164,8 +124,6 @@ def scan_ble_devices():
 def get_gatt_table(mac):
     draw_message(f"Connecting to\n{mac}")
     
-    # This is a bit of a hack. We connect, list attributes, then disconnect.
-    # The sleep times are important to give bluetoothctl time to process.
     commands = [
         "power on",
         f"connect {mac}",
@@ -179,13 +137,13 @@ def get_gatt_table(mac):
         proc = subprocess.Popen(["bluetoothctl"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         
         proc.stdin.write(f"connect {mac}\n"); proc.stdin.flush()
-        time.sleep(5) # Wait for connection
+        time.sleep(5)
         
         proc.stdin.write("menu gatt\n"); proc.stdin.flush()
         time.sleep(1)
         
         proc.stdin.write("list-attributes\n"); proc.stdin.flush()
-        time.sleep(5) # Wait for attributes to list
+        time.sleep(5)
         
         proc.stdin.write(f"disconnect {mac}\n"); proc.stdin.flush()
         time.sleep(1)
@@ -197,94 +155,86 @@ def get_gatt_table(mac):
     except Exception as e:
         output = f"Error: {e}"
 
-    # Parse the output
     attributes = []
     for line in output.split('\n'):
         if "Attribute" in line or "Primary Service" in line or "Characteristic" in line:
-            # Clean up the line for display
             cleaned_line = line.replace("Attribute", "").strip()
             attributes.append(cleaned_line)
             
     return attributes
 
-# ---------------------------------------------------------------------------
-# 7) Main Loop
-# ---------------------------------------------------------------------------
-try:
-    # Dependency check for bluetoothctl
-    if subprocess.run("which bluetoothctl", shell=True, capture_output=True).returncode != 0:
-        draw_message("bluetoothctl not found!", "red")
-        time.sleep(5)
-        raise SystemExit("bluetoothctl not found.")
+if __name__ == "__main__":
+    try:
+        if subprocess.run("which bluetoothctl", shell=True, capture_output=True).returncode != 0:
+            draw_message("bluetoothctl not found!", "red")
+            time.sleep(5)
+            raise SystemExit("bluetoothctl not found.")
 
-    while running:
-        devices = scan_ble_devices()
-        if not devices:
-            draw_message("No BLE devices\nfound.")
-            time.sleep(3)
-            continue
-            
-        device_list = [f"{name} {mac[-5:]}" for mac, name in devices.items()]
-        mac_list = list(devices.keys())
-        selected_index = 0
-
-        # Device selection loop
         while running:
-            draw_list_ui("Select BLE Target", device_list, selected_index)
+            devices = scan_ble_devices()
+            if not devices:
+                draw_message("No BLE devices\nfound.")
+                time.sleep(3)
+                continue
+                
+            device_list = [f"{name} {mac[-5:]}" for mac, name in devices.items()]
+            mac_list = list(devices.keys())
+            selected_index = 0
+
+            while running:
+                draw_list_ui("Select BLE Target", device_list, selected_index)
+                
+                if GPIO.input(PINS["KEY3"]) == 0:
+                    time.sleep(0.3)
+                    break
+                
+                if GPIO.input(PINS["UP"]) == 0:
+                    selected_index = (selected_index - 1) % len(device_list)
+                    time.sleep(0.2)
+                elif GPIO.input(PINS["DOWN"]) == 0:
+                    selected_index = (selected_index + 1) % len(device_list)
+                    time.sleep(0.2)
+                elif GPIO.input(PINS["OK"]) == 0:
+                    target_mac = mac_list[selected_index]
+                    target_name = devices[target_mac]
+                    
+                    attributes = get_gatt_table(target_mac)
+                    
+                    if attributes:
+                        os.makedirs(LOOT_DIR, exist_ok=True)
+                        loot_file = os.path.join(LOOT_DIR, f"{target_mac.replace(':', '')}.txt")
+                        with open(loot_file, "w") as f:
+                            f.write(f"GATT Table for {target_name} ({target_mac})\n\n")
+                            f.writelines([f"{attr}\n" for attr in attributes])
+                        
+                        attr_selected_index = 0
+                        while running:
+                            draw_list_ui(f"GATT: {target_name[:10]}", attributes, attr_selected_index)
+                            if GPIO.input(PINS["KEY3"]) == 0:
+                                time.sleep(0.3)
+                                break
+                            if GPIO.input(PINS["UP"]) == 0:
+                                attr_selected_index = (attr_selected_index - 1) % len(attributes)
+                                time.sleep(0.2)
+                            elif GPIO.input(PINS["DOWN"]) == 0:
+                                attr_selected_index = (attr_selected_index + 1) % len(attributes)
+                                time.sleep(0.2)
+                    else:
+                        draw_message("Failed to get\nattributes.")
+                        time.sleep(3)
+                    
+                    break
+                
+                time.sleep(0.05)
             
             if GPIO.input(PINS["KEY3"]) == 0:
-                # Go back to main scan
-                time.sleep(0.3)
-                break
-            
-            if GPIO.input(PINS["UP"]) == 0:
-                selected_index = (selected_index - 1) % len(device_list)
-                time.sleep(0.2)
-            elif GPIO.input(PINS["DOWN"]) == 0:
-                selected_index = (selected_index + 1) % len(device_list)
-                time.sleep(0.2)
-            elif GPIO.input(PINS["OK"]) == 0:
-                target_mac = mac_list[selected_index]
-                target_name = devices[target_mac]
-                
-                attributes = get_gatt_table(target_mac)
-                
-                if attributes:
-                    os.makedirs(LOOT_DIR, exist_ok=True)
-                    loot_file = os.path.join(LOOT_DIR, f"{target_mac.replace(':', '')}.txt")
-                    with open(loot_file, "w") as f:
-                        f.write(f"GATT Table for {target_name} ({target_mac})\n\n")
-                        f.writelines([f"{attr}\n" for attr in attributes])
-                    
-                    attr_selected_index = 0
-                    while running:
-                        draw_list_ui(f"GATT: {target_name[:10]}", attributes, attr_selected_index)
-                        if GPIO.input(PINS["KEY3"]) == 0:
-                            time.sleep(0.3)
-                            break
-                        if GPIO.input(PINS["UP"]) == 0:
-                            attr_selected_index = (attr_selected_index - 1) % len(attributes)
-                            time.sleep(0.2)
-                        elif GPIO.input(PINS["DOWN"]) == 0:
-                            attr_selected_index = (attr_selected_index + 1) % len(attributes)
-                            time.sleep(0.2)
-                else:
-                    draw_message("Failed to get\nattributes.")
-                    time.sleep(3)
-                
-                # After viewing attributes or failing, break to device list
-                break
-            
-            time.sleep(0.05)
-        
-        if GPIO.input(PINS["KEY3"]) == 0:
-            cleanup()
+                cleanup()
 
-except (KeyboardInterrupt, SystemExit):
-    pass
-except Exception as e:
-    print(f"[ERROR] {e}", file=sys.stderr)
-finally:
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("BLE Char Scanner payload finished.")
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+    finally:
+        LCD.LCD_Clear()
+        GPIO.cleanup()
+        print("BLE Char Scanner payload finished.")

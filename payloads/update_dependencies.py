@@ -1,21 +1,10 @@
 #!/usr/bin/env python3
-"""
-RaspyJack *payload* – **Update & Install Dependencies**
-========================================================
-A utility payload that updates the system's package list and installs
-all the necessary dependencies for the advanced payloads.
+import sys
+import os
+import time
+import signal
+import subprocess
 
-This script will:
-1.  Run `apt-get update`.
-2.  Install a list of required packages using `apt-get`.
-3.  Install a list of required Python packages using `pip`.
-4.  Download and build `hcxdumptool` from source, as it is often not
-    available in default repositories.
-"""
-
-import os, sys, subprocess, signal, time
-
-# --- CONFIGURATION ---
 HCXDUMPTOOL_DIR = "/opt/hcxdumptool"
 HCXDUMPTOOL_REPO = "https://github.com/ZerBea/hcxdumptool.git"
 
@@ -23,33 +12,29 @@ APT_DEPS = [
     "python3-scapy", "python3-netifaces", "python3-pyudev", "python3-serial",
     "python3-smbus", "python3-rpi.gpio", "python3-spidev", "python3-pil", "python3-numpy",
     "python3-setuptools", "python3-cryptography", "python3-requests", "fonts-dejavu-core",
-    "python3-pip", # Added for pip functionality
+    "python3-pip",
     "hydra", "mitmproxy", "fswebcam", "alsa-utils", "macchanger",
     "reaver", "hostapd", "dnsmasq", "smbclient", "snmp", "php-cgi",
     "ettercap-common", "nmap", "git", "build-essential", "libcurl4-openssl-dev",
     "libssl-dev", "pkg-config",
-    "aircrack-ng", "wireless-tools", "wpasupplicant", "iw", # WiFi attack tools
-    "firmware-linux-nonfree", "firmware-realtek", "firmware-atheros", # USB WiFi dongle support
-    "i2c-tools", # Misc
-    "dos2unix", # For script conversion
-    "wget", # For font download
-    "ncat", "tcpdump", "arp-scan", "dsniff", "procps", # General network/offensive tools
-    # Bluetooth dependencies
-    "bluetooth", "bluez", # Bluetooth dependencies
-    "sqlite3", # Added for browser_password_stealer.py
-    "python3-evdev", # Added for keyboard_tester.py
-    "dnsutils" # Added for recon_dns_zone_transfer.py (provides 'host' command)
+    "aircrack-ng", "wireless-tools", "wpasupplicant", "iw",
+    "firmware-linux-nonfree", "firmware-realtek", "firmware-atheros",
+    "i2c-tools",
+    "dos2unix",
+    "wget",
+    "ncat", "tcpdump", "arp-scan", "dsniff", "procps",
+    "bluetooth", "bluez",
+    "sqlite3",
+    "python3-evdev",
+    "dnsutils"
 ]
-PIP_DEPS = ["qrcode[pil]", "requests", "zero-hid"] # Added zero-hid for HID emulation
+PIP_DEPS = ["qrcode[pil]", "requests", "zero-hid"]
 
-# --- Main ---
 def show_message(lines, color="lime"):
-    # In headless mode, print messages to console
     for line in lines:
         print(f"[{color.upper()}] {line}")
 
 def run_command(command, step_name):
-    """Runs a command and shows status on the console."""
     print(f"\n--- Running: {step_name} ---")
     print(f"Command: {command}")
     try:
@@ -75,7 +60,6 @@ def install_all():
         print("APT install failed. Exiting.")
         return
     
-    # Ensure pip is up-to-date
     if not run_command("python3 -m pip install --upgrade pip setuptools", "pip upgrade"):
         print("PIP upgrade failed. Exiting.")
         return
@@ -84,7 +68,6 @@ def install_all():
         print("PIP install failed. Exiting.")
         return
 
-    # Install hcxdumptool from source
     print("\nInstalling hcxdumptool from source...")
     if os.path.exists(HCXDUMPTOOL_DIR):
         print(f"Removing existing {HCXDUMPTOOL_DIR}...")
@@ -104,7 +87,6 @@ def install_all():
 
 if __name__ == '__main__':
     try:
-        # Check for root
         if os.geteuid() != 0:
             print("ERROR: This script must be run as root!")
             print("Please run with 'sudo python3 update_dependencies.py'")
@@ -117,4 +99,3 @@ if __name__ == '__main__':
         print(f"An unexpected error occurred: {e}", file=sys.stderr)
     finally:
         print("Dependency Installer payload finished.")
-
