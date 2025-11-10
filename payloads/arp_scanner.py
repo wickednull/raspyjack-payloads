@@ -23,42 +23,17 @@ import time
 import signal
 import subprocess
 import threading
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
+from PIL import Image, ImageDraw, ImageFont
+from scapy.all import *
+from scapy.error import Scapy_Exception
 
-# ----------------------------
-# RaspyJack PATH and ROOT check
-# ----------------------------
-def is_root():
-    return os.geteuid() == 0
-
-# Dynamically add Raspyjack path
-RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
-if RASPYJACK_PATH not in sys.path:
-    sys.path.append(RASPYJACK_PATH)
-
-# ----------------------------
-# Third-party library imports 
-# ----------------------------
+# WiFi Integration - Add dual interface support
 try:
-    import RPi.GPIO as GPIO
-    import LCD_1in44, LCD_Config
-    from PIL import Image, ImageDraw, ImageFont
-except ImportError:
-    print("ERROR: Hardware libraries (RPi.GPIO, LCD, PIL) not found.", file=sys.stderr)
-    print("Please run 'sudo pip3 install RPi.GPIO spidev Pillow'.", file=sys.stderr)
-    sys.exit(1)
 
-try:
-    from scapy.all import *
-    from scapy.error import Scapy_Exception
-except ImportError:
-    print("ERROR: Scapy library not found.", file=sys.stderr)
-    print("Please run 'sudo pip3 install scapy'.", file=sys.stderr)
-    sys.exit(1)
-
-# ----------------------------
-# RaspyJack WiFi Integration
-# ----------------------------
-try:
+    sys.path.append('/root/Raspyjack/wifi/')
     from wifi.raspyjack_integration import get_best_interface
     WIFI_INTEGRATION_AVAILABLE = True
 except ImportError:
@@ -179,21 +154,6 @@ def draw_ui(status_msg="", interface=""):
     LCD.LCD_ShowImage(img, 0, 0)
 
 if __name__ == "__main__":
-    if not is_root():
-        print("ERROR: This script requires root privileges.", file=sys.stderr)
-        # Attempt to display on LCD if possible
-        try:
-            LCD = LCD_1in44.LCD()
-            LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-            img = Image.new("RGB", (128, 128), "black")
-            d = ImageDraw.Draw(img)
-            FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-            d.text((10, 40), "ERROR:\nRoot privileges\nrequired.", font=FONT_TITLE, fill="red")
-            LCD.LCD_ShowImage(img, 0, 0)
-        except Exception as e:
-            print(f"Could not display error on LCD: {e}", file=sys.stderr)
-        sys.exit(1)
-
     try:
         current_interface = NETWORK_INTERFACE
         network_range = get_network_range(current_interface)

@@ -40,40 +40,10 @@ import time
 import signal
 import subprocess
 import threading
-
-# ----------------------------
-# RaspyJack PATH and ROOT check
-# ----------------------------
-def is_root():
-    return os.geteuid() == 0
-
-# Dynamically add Raspyjack path
-RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
-if RASPYJACK_PATH not in sys.path:
-    sys.path.append(RASPYJACK_PATH)
-
-# ----------------------------
-# Third-party library imports 
-# ----------------------------
-try:
-    import RPi.GPIO as GPIO
-    import LCD_1in44, LCD_Config
-    from PIL import Image, ImageDraw, ImageFont
-except ImportError:
-    print("ERROR: Hardware libraries (RPi.GPIO, LCD, PIL) not found.", file=sys.stderr)
-    print("Please run 'sudo pip3 install RPi.GPIO spidev Pillow'.", file=sys.stderr)
-    sys.exit(1)
-
-# ----------------------------
-# RaspyJack WiFi Integration
-# ----------------------------
-try:
-    from wifi.raspyjack_integration import get_best_interface
-    WIFI_INTEGRATION_AVAILABLE = True
-except ImportError:
-    WIFI_INTEGRATION_AVAILABLE = False
-    def get_best_interface():
-        return "wlan1" # Fallback
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for consistency
+import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
+from PIL import Image, ImageDraw, ImageFont
 
 PINS: dict[str, int] = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
@@ -91,16 +61,10 @@ FONT = ImageFont.load_default()
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT_UI = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
 
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..', '..', 'Raspyjack'))
-CAPTIVE_PORTAL_BASE_PATH = os.path.join(RASPYJACK_DIR, "DNSSpoof", "sites")
+CAPTIVE_PORTAL_BASE_PATH = "/root/Raspyjack/DNSSpoof/sites"
 CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, "wifi")
 LOOT_FILE = os.path.join(CAPTIVE_PORTAL_PATH, "loot.txt") # Changed to loot.txt
 TEMP_CONF_DIR = "/tmp/raspyjack_eviltwin/"
-
-WIFI_INTERFACE = get_best_interface()
-FAKE_AP_SSID = "Free_WiFi"
-FAKE_AP_CHANNEL = "1"
-
 
 running = True
 attack_processes = {}
@@ -522,21 +486,6 @@ def monitor_status():
         time.sleep(5)
 
 if __name__ == "__main__":
-    if not is_root():
-        print("ERROR: This script requires root privileges.", file=sys.stderr)
-        # Attempt to display on LCD if possible
-        try:
-            LCD = LCD_1in44.LCD()
-            LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-            img = Image.new("RGB", (128, 128), "black")
-            d = ImageDraw.Draw(img)
-            FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-            d.text((10, 40), "ERROR:\nRoot privileges\nrequired.", font=FONT_TITLE, fill="red")
-            LCD.LCD_ShowImage(img, 0, 0)
-        except Exception as e:
-            print(f"Could not display error on LCD: {e}", file=sys.stderr)
-        sys.exit(1)
-
     try:
         is_attacking = False
         current_screen = "main"
