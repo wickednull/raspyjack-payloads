@@ -35,22 +35,52 @@ import time
 import signal
 import subprocess
 import threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for consistency
-import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
 
-WIFI_INTERFACE = "wlan1" # Hardcoded to wlan1 as per user request for evil twin attacks
+# ----------------------------
+# RaspyJack PATH and ROOT check
+# ----------------------------
+def is_root():
+    return os.geteuid() == 0
+
+# Dynamically add Raspyjack path
+RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+if RASPYJACK_PATH not in sys.path:
+    sys.path.append(RASPYJACK_PATH)
+
+# ----------------------------
+# Third-party library imports 
+# ----------------------------
+try:
+    import RPi.GPIO as GPIO
+    import LCD_1in44, LCD_Config
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    print("ERROR: Hardware libraries (RPi.GPIO, LCD, PIL) not found.", file=sys.stderr)
+    print("Please run 'sudo pip3 install RPi.GPIO spidev Pillow'.", file=sys.stderr)
+    sys.exit(1)
+
+# ----------------------------
+# RaspyJack WiFi Integration
+# ----------------------------
+try:
+    from wifi.raspyjack_integration import get_best_interface
+    WIFI_INTEGRATION_AVAILABLE = True
+except ImportError:
+    WIFI_INTEGRATION_AVAILABLE = False
+    def get_best_interface():
+        return "wlan1" # Fallback
+
+WIFI_INTERFACE = get_best_interface() # Hardcoded to wlan1 as per user request for evil twin attacks
 FAKE_AP_SSID = "NETGEAR55"
 FAKE_AP_CHANNEL = "6"
-CAPTIVE_PORTAL_BASE_PATH = "/root/Raspyjack/DNSSpoof/sites"
-CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, "wifi")
+RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..', '..', 'Raspyjack'))
+CAPTIVE_PORTAL_BASE_PATH = os.path.join(RASPYJACK_DIR, "DNSSpoof", "sites")
+CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, "router")
 LOOT_FILE = os.path.join(CAPTIVE_PORTAL_PATH, "loot.txt")
 TEMP_CONF_DIR = "/tmp/raspyjack_eviltwin_router/"
 
 CHAR_SET = ' abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+\\[]{};:"<.>/?`~'
-current_html_file = "wifi"
+current_html_file = "router"
 html_files_list = []
 html_file_index = 0
 
@@ -399,7 +429,35 @@ def monitor_status():
             status_info["credentials"] = 0
         time.sleep(5)
 
+def check_dependencies():
+    """Check for required command-line tools."""
+    for dep in ["hostapd", "dnsmasq", "php"]:
+        if subprocess.run(["which", dep], capture_output=True).returncode != 0:
+            return dep
+    return None
+
 if __name__ == '__main__':
+    if not is_root():
+        print("ERROR: This script requires root privileges.", file=sys.stderr)
+        # Attempt to display on LCD if possible
+        try:
+            LCD = LCD_1in44.LCD()
+            LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+            img = Image.new("RGB", (128, 128), "black")
+            d = ImageDraw.Draw(img)
+            FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+            d.text((10, 40), "ERROR:\nRoot privileges\nrequired.", font=FONT_TITLE, fill="red")
+            LCD.LCD_ShowImage(img, 0, 0)
+        except Exception as e:
+            print(f"Could not display error on LCD: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    dep_missing = check_dependencies()
+    if dep_missing:
+        show_message([f"ERROR:", f"{dep_missing} not found!"], "red")
+        time.sleep(3)
+        sys.exit(1)
+
     current_screen = "main"
     is_attacking = False
     try:

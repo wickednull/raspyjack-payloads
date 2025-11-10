@@ -23,11 +23,40 @@ import time
 import signal
 import subprocess
 import threading
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
-import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
-import monitor_mode_helper
+
+# ----------------------------
+# RaspyJack PATH and ROOT check
+# ----------------------------
+def is_root():
+    return os.geteuid() == 0
+
+# Dynamically add Raspyjack path
+RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+if RASPYJACK_PATH not in sys.path:
+    sys.path.append(RASPYJACK_PATH)
+
+# ----------------------------
+# Third-party library imports 
+# ----------------------------
+try:
+    import RPi.GPIO as GPIO
+    import LCD_1in44, LCD_Config
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    print("ERROR: Hardware libraries (RPi.GPIO, LCD, PIL) not found.", file=sys.stderr)
+    print("Please run 'sudo pip3 install RPi.GPIO spidev Pillow'.", file=sys.stderr)
+    sys.exit(1)
+
+# ----------------------------
+# RaspyJack WiFi Integration
+# ----------------------------
+try:
+    import monitor_mode_helper
+    WIFI_INTEGRATION_AVAILABLE = True
+except ImportError:
+    WIFI_INTEGRATION_AVAILABLE = False
+    def activate_monitor_mode(interface):
+        return None
 
 TARGET_INTERFACE = "wlan1"
 MONITOR_INTERFACE = None
@@ -87,6 +116,26 @@ def main():
     time.sleep(5)
 
 if __name__ == "__main__":
+    if not is_root():
+        print("ERROR: This script requires root privileges.", file=sys.stderr)
+        # Attempt to display on LCD if possible
+        try:
+            LCD = LCD_1in44.LCD()
+            LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+            img = Image.new("RGB", (128, 128), "black")
+            d = ImageDraw.Draw(img)
+            FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+            d.text((10, 40), "ERROR:\nRoot privileges\nrequired.", font=FONT_TITLE, fill="red")
+            LCD.LCD_ShowImage(img, 0, 0)
+        except Exception as e:
+            print(f"Could not display error on LCD: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not WIFI_INTEGRATION_AVAILABLE:
+        draw_message(["ERROR:", "WiFi integration not found."], "red")
+        time.sleep(5)
+        sys.exit(1)
+        
     try:
         main()
     except SystemExit:

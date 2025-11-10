@@ -40,14 +40,45 @@ import time
 import signal
 import subprocess
 import threading # Added threading import as it was missing
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
-import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
-from wifi.raspyjack_integration import get_available_interfaces
-import re
-import monitor_mode_helper
+
+# ----------------------------
+# RaspyJack PATH and ROOT check
+# ----------------------------
+def is_root():
+    return os.geteuid() == 0
+
+# Dynamically add Raspyjack path
+RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+if RASPYJACK_PATH not in sys.path:
+    sys.path.append(RASPYJACK_PATH)
+
+# ----------------------------
+# Third-party library imports 
+# ----------------------------
+try:
+    import RPi.GPIO as GPIO
+    import LCD_1in44, LCD_Config
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    print("ERROR: Hardware libraries (RPi.GPIO, LCD, PIL) not found.", file=sys.stderr)
+    print("Please run 'sudo pip3 install RPi.GPIO spidev Pillow'.", file=sys.stderr)
+    sys.exit(1)
+
+# ----------------------------
+# RaspyJack WiFi Integration
+# ----------------------------
+try:
+    from wifi.raspyjack_integration import get_available_interfaces
+    import monitor_mode_helper
+    WIFI_INTEGRATION_AVAILABLE = True
+except ImportError:
+    WIFI_INTEGRATION_AVAILABLE = False
+    def get_available_interfaces():
+        return []
+    def activate_monitor_mode(interface):
+        return None
+    def deactivate_monitor_mode(interface):
+        return False
 
 WIFI_INTERFACE = None
 ORIGINAL_WIFI_INTERFACE = None
@@ -55,7 +86,7 @@ ROGUE_SSID = "Free_WiFi"
 ROGUE_CHANNEL = 6
 TEMP_CONF_DIR = "/tmp/raspyjack_rogue_ap" # Defined globally
 
-PINS = { "UP": 6, "DOWN": 19, "OK": 13, "KEY3": 16 }
+PINS = { "UP": 6, "DOWN": 19, "OK": 13, "KEY3": 16, "KEY2": 20 }
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
@@ -312,7 +343,40 @@ def start_attack():
     status_msg = "Rogue AP Running!"
     return True
 
+def check_dependencies():
+    """Check for required command-line tools."""
+    for dep in ["hostapd"]:
+        if subprocess.run(["which", dep], capture_output=True).returncode != 0:
+            return dep
+    return None
+
 if __name__ == '__main__':
+    if not is_root():
+        print("ERROR: This script requires root privileges.", file=sys.stderr)
+        # Attempt to display on LCD if possible
+        try:
+            LCD = LCD_1in44.LCD()
+            LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+            img = Image.new("RGB", (128, 128), "black")
+            d = ImageDraw.Draw(img)
+            FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+            d.text((10, 40), "ERROR:\nRoot privileges\nrequired.", font=FONT_TITLE, fill="red")
+            LCD.LCD_ShowImage(img, 0, 0)
+        except Exception as e:
+            print(f"Could not display error on LCD: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    dep_missing = check_dependencies()
+    if dep_missing:
+        draw_message(f"ERROR: {dep_missing} not found.", "red")
+        time.sleep(5)
+        sys.exit(1)
+
+    if not WIFI_INTEGRATION_AVAILABLE:
+        draw_message(["ERROR:", "WiFi integration not found."], "red")
+        time.sleep(5)
+        sys.exit(1)
+
     current_screen = "interface_select"
     selected_param_index = 0
     params = {
@@ -322,15 +386,6 @@ if __name__ == '__main__':
     param_keys = list(params.keys())
     
     try:
-        # Define TEMP_CONF_DIR here or ensure it's imported globally
-        TEMP_CONF_DIR = "/tmp/raspyjack_rogue_ap" # Assuming a temporary config directory
-
-        # Corrected check for hostapd
-        if subprocess.run(["which", "hostapd"], capture_output=True).returncode != 0:
-            draw_message(["hostapd not found!"], "red")
-            time.sleep(3)
-            raise SystemExit("`hostapd` command not found.")
-
         if not select_interface_menu():
             draw_message(["No interface selected", "or monitor mode failed."], "red")
             time.sleep(3)

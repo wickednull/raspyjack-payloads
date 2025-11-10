@@ -1,132 +1,132 @@
 #!/usr/bin/env python3
 """
-RaspyJack *payload* – **Update Dependencies**
-===========================================
-This payload automates the installation and update of all necessary system
-packages and Python libraries required for RaspyJack's functionality.
-It also compiles and installs `hcxdumptool` from source.
+RaspyJack *payload* – **Dependency Updater**
+==========================================
+This payload installs all necessary dependencies for the RaspyJack payloads.
+It is designed to be run on a Raspberry Pi with a Raspbian-based OS.
 
 Features:
-- Updates APT package lists.
-- Installs a comprehensive list of APT packages.
-- Upgrades pip and installs required Python packages.
-- Clones, compiles, and installs `hcxdumptool` from its GitHub repository.
-- Provides instructions for enabling USB HID Gadget functionality.
-
-Usage:
-- This script *must* be run as root: `sudo python3 update_dependencies.py`
-- It is designed to be executed directly and is non-interactive.
-
-Important:
-- After running this script, you may need to reboot your RaspyJack for
-  all changes (especially HID Gadget) to take effect.
+- Checks for root privileges.
+- Installs required APT packages.
+- Installs required Python packages via pip.
+- Displays installation progress on the LCD.
 """
+
 import sys
 import os
 import time
 import signal
 import subprocess
+import threading
 
-HCXDUMPTOOL_DIR = "/opt/hcxdumptool"
-HCXDUMPTOOL_REPO = "https://github.com/ZerBea/hcxdumptool.git"
+# ----------------------------
+# RaspyJack PATH and ROOT check
+# ----------------------------
+def is_root():
+    return os.geteuid() == 0
 
-APT_DEPS = [
-    "python3-scapy", "python3-netifaces", "python3-pyudev", "python3-serial",
-    "python3-smbus", "python3-rpi.gpio", "python3-spidev", "python3-pil", "python3-numpy",
-    "python3-setuptools", "python3-cryptography", "python3-requests", "fonts-dejavu-core",
-    "python3-pip",
-    "hydra", "mitmproxy", "fswebcam", "alsa-utils", "macchanger",
-    "reaver", "hostapd", "dnsmasq", "smbclient", "snmp", "php-cgi",
-    "ettercap-common", "nmap", "git", "build-essential", "libcurl4-openssl-dev",
-    "libssl-dev", "pkg-config",
-    "aircrack-ng", "wireless-tools", "wpasupplicant", "iw",
-    "firmware-linux-nonfree", "firmware-realtek", "firmware-atheros",
-    "i2c-tools",
-    "dos2unix",
-    "wget",
-    "ncat", "tcpdump", "arp-scan", "dsniff", "procps",
-    "bluetooth", "bluez",
-    "sqlite3",
-    "python3-evdev",
-    "dnsutils"
-]
-PIP_DEPS = ["qrcode[pil]", "requests", "zero-hid"]
+# Dynamically add Raspyjack path
+RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+if RASPYJACK_PATH not in sys.path:
+    sys.path.append(RASPYJACK_PATH)
 
-running = True
+# ----------------------------
+# Third-party library imports 
+# ----------------------------
+try:
+    import RPi.GPIO as GPIO
+    import LCD_1in44, LCD_Config
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    print("ERROR: Hardware libraries (RPi.GPIO, LCD, PIL) not found.", file=sys.stderr)
+    print("Please run 'sudo pip3 install RPi.GPIO spidev Pillow'.", file=sys.stderr)
+    sys.exit(1)
 
-def cleanup(*_):
-    global running
-    running = False
+PINS: dict[str, int] = {
+    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
+    "KEY1": 21, "KEY2": 20, "KEY3": 16,
+}
 
-signal.signal(signal.SIGINT, cleanup)
-signal.signal(signal.SIGTERM, cleanup)
+GPIO.setmode(GPIO.BCM)
+for pin in PINS.values():
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-def show_message(lines, color="lime"):
-    for line in lines:
-        print(f"[{color.upper()}] {line}")
+LCD = LCD_1in44.LCD()
+LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
+FONT = ImageFont.load_default()
+FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 
-def run_command(command, step_name):
-    print(f"\n--- Running: {step_name} ---")
-    print(f"Command: {command}")
+def draw_message(lines, color="yellow"):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ImageDraw.Draw(img)
+    font = FONT_TITLE
+    y = 40
+    message_list = lines if isinstance(lines, list) else [lines]
+    for line in message_list:
+        bbox = d.textbbox((0, 0), line, font=font)
+        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        x = (WIDTH - w) // 2
+        d.text((x, y), line, font=font, fill=color)
+        y += h + 5
+    LCD.LCD_ShowImage(img, 0, 0)
+
+def run_command(command):
     try:
-        proc = subprocess.run(command, shell=True, check=True, capture_output=True, text=True, timeout=600)
-        print(f"STDOUT:\n{proc.stdout}")
-        if proc.stderr:
-            print(f"STDERR:\n{proc.stderr}")
-        print(f"--- {step_name} SUCCEEDED ---")
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        while process.poll() is None:
+            draw_message(["Installing...", command.split(" ")[-1]], "lime")
+            time.sleep(1)
+        if process.returncode != 0:
+            draw_message(["Error installing", command.split(" ")[-1]], "red")
+            time.sleep(3)
+            return False
         return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        error_msg = e.stderr or e.stdout or str(e)
-        print(f"--- {step_name} FAILED ---")
-        print(f"ERROR: {error_msg}", file=sys.stderr)
+    except Exception as e:
+        draw_message(["Error:", str(e)], "red")
+        time.sleep(3)
         return False
 
-def install_all():
-    print("\nStarting dependency installation...")
-    if not run_command("apt-get update", "apt update"):
-        print("APT update failed. Exiting.")
-        return
+def main():
+    if not is_root():
+        draw_message(["ERROR:", "Root privileges", "required."], "red")
+        sys.exit(1)
 
-    if not run_command(f"apt-get install -y {' '.join(APT_DEPS)}", "apt install"):
-        print("APT install failed. Exiting.")
-        return
-    
-    if not run_command("python3 -m pip install --upgrade pip setuptools", "pip upgrade"):
-        print("PIP upgrade failed. Exiting.")
-        return
-        
-    if not run_command(f"pip install --break-system-packages {' '.join(PIP_DEPS)}", "pip install"):
-        print("PIP install failed. Exiting.")
-        return
+    draw_message(["Updating APT..."])
+    if not run_command("sudo apt-get update -y"):
+        sys.exit(1)
 
-    print("\nInstalling hcxdumptool from source...")
-    if os.path.exists(HCXDUMPTOOL_DIR):
-        print(f"Removing existing {HCXDUMPTOOL_DIR}...")
-        subprocess.run(f"rm -rf {HCXDUMPTOOL_DIR}", shell=True, check=True)
-    if not run_command(f"git clone {HCXDUMPTOOL_REPO} {HCXDUMPTOOL_DIR}", "git clone hcxdumptool"):
-        print("hcxdumptool git clone failed. Exiting.")
-        return
-    if not run_command(f"cd {HCXDUMPTOOL_DIR} && make && make install", "hcxdumptool make install"):
-        print("hcxdumptool make install failed. Exiting.")
-        return
-        
-    print("\nInstallation Complete!")
-    print("IMPORTANT: To enable USB HID Gadget, you might need to:")
-    print("  1. Edit /boot/config.txt: add 'dtoverlay=dwc2'")
-    print("  2. Edit /etc/modules: add 'dwc2' and 'libcomposite'")
-    print("Then reboot your RaspyJack!")
+    apt_packages = [
+        "python3-scapy", "python3-netifaces", "python3-pyudev", "python3-serial",
+        "python3-smbus", "python3-rpi.gpio", "python3-spidev", "python3-pil", "python3-numpy",
+        "python3-setuptools", "python3-cryptography", "python3-requests", "fonts-dejavu-core",
+        "nmap", "ncat", "tcpdump", "arp-scan", "dsniff", "ettercap-text-only", "php", "procps",
+        "aircrack-ng", "wireless-tools", "wpasupplicant", "iw",
+        "firmware-linux-nonfree", "firmware-realtek", "firmware-atheros",
+        "git", "i2c-tools", "reaver", "bluez", "python3-pip"
+    ]
 
-if __name__ == '__main__':
+    for package in apt_packages:
+        if not run_command(f"sudo apt-get install -y {package}"):
+            sys.exit(1)
+
+    pip_packages = [
+        "zero-hid"
+    ]
+
+    for package in pip_packages:
+        if not run_command(f"sudo pip3 install {package}"):
+            sys.exit(1)
+
+    draw_message(["All dependencies", "installed successfully!"], "lime")
+    time.sleep(3)
+
+if __name__ == "__main__":
     try:
-        if os.geteuid() != 0:
-            print("ERROR: This script must be run as root!")
-            print("Please run with 'sudo python3 update_dependencies.py'")
-        else:
-            install_all()
-            
-    except KeyboardInterrupt:
-        print("\nDependency Installer interrupted by user.")
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}", file=sys.stderr)
+        main()
+    except (KeyboardInterrupt, SystemExit):
+        pass
     finally:
-        print("Dependency Installer payload finished.")
+        LCD.LCD_Clear()
+        GPIO.cleanup()
+        print("Dependency update payload finished.")
