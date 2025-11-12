@@ -227,7 +227,7 @@ if __name__ == "__main__":
 
     try:
         # --- Init Hardware and Config ---
-        load_pin_config() # Load pins from JSON first
+        load_pin_config()
         GPIO.setmode(GPIO.BCM)
         for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         LCD = LCD_1in44.LCD(); LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
@@ -240,92 +240,9 @@ if __name__ == "__main__":
         if not validate_setup():
             raise SystemExit()
 
-        # --- Main Loop ---
+        # --- Main Loop (adapted from deauth.py) ---
         while IS_RUNNING:
-            # 1. Read Input
-            pressed_button = get_pressed_button()
-            
-            # 2. Handle State & Input
-            if pressed_button:
-                if pressed_button == "KEY3": IS_RUNNING = False; continue
-                
-                if APP_STATE == "menu":
-                    if pressed_button == "SELECT":
-                        if MENU_SELECTION == 0: start_scan()
-                        elif MENU_SELECTION == 1: APP_STATE = "settings"; MENU_SELECTION = 0
-                        elif MENU_SELECTION == 2: IS_RUNNING = False
-                    elif pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % 3
-                    elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % 3
-                
-                elif APP_STATE == "settings":
-                    if pressed_button == "SELECT":
-                        if MENU_SELECTION == 0: APP_STATE = "select_interface"; MENU_SELECTION = 0
-                        elif MENU_SELECTION == 1: APP_STATE = "select_attack_types"; MENU_SELECTION = 0
-                        elif MENU_SELECTION == 2: APP_STATE = "advanced_settings"; MENU_SELECTION = 0
-                    elif pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % 3
-                    elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % 3
-                    elif pressed_button == "LEFT": APP_STATE = "menu"; MENU_SELECTION = 0
-
-                elif APP_STATE == "advanced_settings":
-                    if pressed_button == "SELECT":
-                        if MENU_SELECTION == 0: APP_STATE = "select_power"
-                        elif MENU_SELECTION == 1: APP_STATE = "select_channel"
-                        elif MENU_SELECTION == 2: CONFIG["clients_only"] = not CONFIG["clients_only"]
-                    elif pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % 3
-                    elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % 3
-                    elif pressed_button == "LEFT": APP_STATE = "settings"; MENU_SELECTION = 0
-
-                elif APP_STATE == "select_interface":
-                    interfaces = get_wifi_interfaces()
-                    if pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % len(interfaces)
-                    elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % len(interfaces)
-                    elif pressed_button == "SELECT": CONFIG["interface"] = interfaces[MENU_SELECTION]; APP_STATE = "settings"; MENU_SELECTION = 0
-                    elif pressed_button == "LEFT": APP_STATE = "settings"; MENU_SELECTION = 0
-
-                elif APP_STATE == "select_attack_types":
-                    attack_keys = ["attack_wpa", "attack_wps", "attack_pmkid"]
-                    if pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % len(attack_keys)
-                    elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % len(attack_keys)
-                    elif pressed_button == "SELECT": CONFIG[attack_keys[MENU_SELECTION]] = not CONFIG[attack_keys[MENU_SELECTION]]
-                    elif pressed_button == "LEFT": APP_STATE = "settings"; MENU_SELECTION = 0
-
-                elif APP_STATE == "select_power":
-                    if pressed_button == "UP": CONFIG["power"] = min(100, CONFIG["power"] + 5)
-                    elif pressed_button == "DOWN": CONFIG["power"] = max(0, CONFIG["power"] - 5)
-                    elif pressed_button == "LEFT": APP_STATE = "advanced_settings"
-
-                elif APP_STATE == "select_channel":
-                    if pressed_button == "UP":
-                        if CONFIG["channel"] is None: CONFIG["channel"] = 1
-                        else: CONFIG["channel"] = min(14, CONFIG["channel"] + 1)
-                    elif pressed_button == "DOWN":
-                        if CONFIG["channel"] is None: CONFIG["channel"] = 14
-                        else: CONFIG["channel"] = max(1, CONFIG["channel"] - 1)
-                    elif pressed_button == "SELECT": CONFIG["channel"] = None
-                    elif pressed_button == "LEFT": APP_STATE = "advanced_settings"
-
-                elif APP_STATE == "scanning":
-                    if pressed_button == "LEFT":
-                        if SCAN_PROCESS: SCAN_PROCESS.terminate()
-                        APP_STATE = "menu"
-
-                elif APP_STATE == "targets":
-                    if pressed_button == "UP": MENU_SELECTION = max(0, MENU_SELECTION - 1)
-                    elif pressed_button == "DOWN": 
-                        if NETWORKS: MENU_SELECTION = min(len(NETWORKS) - 1, MENU_SELECTION + 1)
-                    elif pressed_button == "SELECT":
-                        if NETWORKS: start_attack(NETWORKS[MENU_SELECTION])
-                    elif pressed_button == "LEFT": APP_STATE = "menu"
-
-                elif APP_STATE == "attacking":
-                    if pressed_button == "LEFT":
-                        if ATTACK_PROCESS: ATTACK_PROCESS.terminate()
-                        APP_STATE = "targets"
-
-                elif APP_STATE == "results":
-                    if pressed_button: APP_STATE = "menu"
-
-            # 3. Render UI
+            # 1. Render UI based on current state FIRST
             DRAW.rectangle([(0,0), (WIDTH,HEIGHT)], fill="BLACK")
             if APP_STATE == "menu":
                 DRAW.text((28, 10), "Wifite GUI", font=FONT_TITLE, fill="WHITE")
@@ -435,11 +352,93 @@ if __name__ == "__main__":
 
             LCD.LCD_ShowImage(IMAGE, 0, 0)
 
-            # 4. Debounce by waiting for button release
-            if pressed_button:
-                while get_pressed_button() is not None:
-                    time.sleep(0.05)
-            else:
+            # 2. Read Input and Handle State
+            btn = get_pressed_button()
+            if not btn:
+                time.sleep(0.05)
+                continue
+
+            if btn == "KEY3": IS_RUNNING = False; continue
+            
+            if APP_STATE == "menu":
+                if btn == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % 3
+                elif btn == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % 3
+                elif btn == "SELECT":
+                    if MENU_SELECTION == 0: start_scan()
+                    elif MENU_SELECTION == 1: APP_STATE = "settings"; MENU_SELECTION = 0
+                    elif MENU_SELECTION == 2: IS_RUNNING = False
+            
+            elif APP_STATE == "settings":
+                if btn == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % 3
+                elif btn == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % 3
+                elif btn == "LEFT": APP_STATE = "menu"; MENU_SELECTION = 0
+                elif btn == "SELECT":
+                    if MENU_SELECTION == 0: APP_STATE = "select_interface"; MENU_SELECTION = 0
+                    elif MENU_SELECTION == 1: APP_STATE = "select_attack_types"; MENU_SELECTION = 0
+                    elif MENU_SELECTION == 2: APP_STATE = "advanced_settings"; MENU_SELECTION = 0
+            
+            # ... other states from previous version ...
+            elif APP_STATE == "advanced_settings":
+                if btn == "SELECT":
+                    if MENU_SELECTION == 0: APP_STATE = "select_power"
+                    elif MENU_SELECTION == 1: APP_STATE = "select_channel"
+                    elif MENU_SELECTION == 2: CONFIG["clients_only"] = not CONFIG["clients_only"]
+                elif btn == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % 3
+                elif btn == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % 3
+                elif btn == "LEFT": APP_STATE = "settings"; MENU_SELECTION = 0
+
+            elif APP_STATE == "select_interface":
+                interfaces = get_wifi_interfaces()
+                if btn == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % len(interfaces)
+                elif btn == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % len(interfaces)
+                elif btn == "SELECT": CONFIG["interface"] = interfaces[MENU_SELECTION]; APP_STATE = "settings"; MENU_SELECTION = 0
+                elif btn == "LEFT": APP_STATE = "settings"; MENU_SELECTION = 0
+
+            elif APP_STATE == "select_attack_types":
+                attack_keys = ["attack_wpa", "attack_wps", "attack_pmkid"]
+                if btn == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % len(attack_keys)
+                elif btn == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % len(attack_keys)
+                elif btn == "SELECT": CONFIG[attack_keys[MENU_SELECTION]] = not CONFIG[attack_keys[MENU_SELECTION]]
+                elif btn == "LEFT": APP_STATE = "settings"; MENU_SELECTION = 0
+
+            elif APP_STATE == "select_power":
+                if btn == "UP": CONFIG["power"] = min(100, CONFIG["power"] + 5)
+                elif btn == "DOWN": CONFIG["power"] = max(0, CONFIG["power"] - 5)
+                elif btn == "LEFT": APP_STATE = "advanced_settings"
+
+            elif APP_STATE == "select_channel":
+                if btn == "UP":
+                    if CONFIG["channel"] is None: CONFIG["channel"] = 1
+                    else: CONFIG["channel"] = min(14, CONFIG["channel"] + 1)
+                elif btn == "DOWN":
+                    if CONFIG["channel"] is None: CONFIG["channel"] = 14
+                    else: CONFIG["channel"] = max(1, CONFIG["channel"] - 1)
+                elif btn == "SELECT": CONFIG["channel"] = None
+                elif btn == "LEFT": APP_STATE = "advanced_settings"
+
+            elif APP_STATE == "scanning":
+                if btn == "LEFT":
+                    if SCAN_PROCESS: SCAN_PROCESS.terminate()
+                    APP_STATE = "menu"
+
+            elif APP_STATE == "targets":
+                if btn == "UP": MENU_SELECTION = max(0, MENU_SELECTION - 1)
+                elif btn == "DOWN": 
+                    if NETWORKS: MENU_SELECTION = min(len(NETWORKS) - 1, MENU_SELECTION + 1)
+                elif btn == "SELECT":
+                    if NETWORKS: start_attack(NETWORKS[MENU_SELECTION])
+                elif btn == "LEFT": APP_STATE = "menu"
+
+            elif APP_STATE == "attacking":
+                if btn == "LEFT":
+                    if ATTACK_PROCESS: ATTACK_PROCESS.terminate()
+                    APP_STATE = "targets"
+
+            elif APP_STATE == "results":
+                if btn: APP_STATE = "menu"
+
+            # 3. Debounce by waiting for release
+            while get_pressed_button() is not None:
                 time.sleep(0.05)
 
     except Exception as e:
