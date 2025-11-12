@@ -2,22 +2,32 @@
 """
 RaspyJack Payload: Wifite GUI
 =============================
-Final version, built using the definitive architecture and input handling
-logic from the project's known-working payloads.
+Final version. This payload dynamically loads its button configuration from the
+Raspyjack gui_conf.json file to ensure compatibility. It is built using the
+definitive architecture from the project's known-working complex payloads.
 """
 
 import os
 import sys
 import time
 import signal
+import json
 import subprocess
 import threading
 
 # This path modification is required for payloads to find Raspyjack libraries.
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
+# This hardcoded path is used by other working WiFi payloads.
 try:
-    # This import order is critical for hardware stability.
+    sys.path.append('/root/Raspyjack/wifi/')
+    from wifi.raspyjack_integration import get_available_interfaces
+    WIFI_INTEGRATION = True
+except ImportError:
+    WIFI_INTEGRATION = False
+
+try:
+    # Critical import order for hardware stability.
     import RPi.GPIO as GPIO
     import LCD_Config
     import LCD_1in44
@@ -32,7 +42,7 @@ except ImportError as e:
 # ============================================================================
 
 # Hardware objects
-PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "SELECT": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+PINS = {} # Will be loaded from gui_conf.json
 LCD, IMAGE, DRAW, FONT_TITLE, FONT = None, None, None, None, None
 
 # Global state machine
@@ -64,6 +74,39 @@ def cleanup_handler(*_):
     global IS_RUNNING
     IS_RUNNING = False
 
+def load_pin_config():
+    """Loads button pin mapping from the main Raspyjack config file."""
+    global PINS
+    # Path to the config file, relative to the Raspyjack root CWD
+    config_file = 'gui_conf.json'
+    
+    default_pins = {
+        "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "SELECT": 13,
+        "KEY1": 21, "KEY2": 20, "KEY3": 16
+    }
+
+    try:
+        with open(config_file, 'r') as f:
+            data = json.load(f)
+        conf_pins = data.get("PINS", {})
+        
+        # Map from the config file's format to the one used by payloads
+        PINS = {
+            "UP": conf_pins.get("KEY_UP_PIN", 6),
+            "DOWN": conf_pins.get("KEY_DOWN_PIN", 19),
+            "LEFT": conf_pins.get("KEY_LEFT_PIN", 5),
+            "RIGHT": conf_pins.get("KEY_RIGHT_PIN", 26),
+            "OK": conf_pins.get("KEY_PRESS_PIN", 13),
+            "SELECT": conf_pins.get("KEY_PRESS_PIN", 13),
+            "KEY1": conf_pins.get("KEY1_PIN", 21),
+            "KEY2": conf_pins.get("KEY2_PIN", 20),
+            "KEY3": conf_pins.get("KEY3_PIN", 16),
+        }
+        print("Successfully loaded PINS from gui_conf.json")
+    except Exception as e:
+        print(f"WARNING: Could not load gui_conf.json: {e}. Using default pins.", file=sys.stderr)
+        PINS = default_pins
+
 def get_pressed_button():
     """Checks for the first pressed button and returns its name."""
     for name, pin in PINS.items():
@@ -72,11 +115,22 @@ def get_pressed_button():
     return None
 
 def get_wifi_interfaces():
-    try:
-        all_ifaces = os.listdir('/sys/class/net/')
-        return [i for i in all_ifaces if i.startswith(('wlan', 'ath', 'ra'))] or ["wlan0mon"]
-    except FileNotFoundError:
-        return ["wlan0mon"]
+    """Intelligently finds the best WiFi interface, preferring external dongles."""
+    if WIFI_INTEGRATION:
+        try:
+            interfaces = get_available_interfaces()
+            if not interfaces: return ["wlan0mon"] # Fallback
+            # Sort to prefer wlan1/wlan2, then wlan0, then monitor versions
+            interfaces.sort(key=lambda x: (not x.startswith('wlan1'), not x.startswith('wlan2'), not x.endswith('mon'), x))
+            return interfaces
+        except Exception:
+            return ["wlan1mon"] # Fallback
+    else:
+        try:
+            all_ifaces = os.listdir('/sys/class/net/')
+            return [i for i in all_ifaces if i.startswith(('wlan', 'ath', 'ra'))] or ["wlan0mon"]
+        except FileNotFoundError:
+            return ["wlan0mon"]
 
 def validate_setup():
     """Checks if wifite is installed and a WiFi interface is available."""
@@ -94,16 +148,9 @@ def validate_setup():
     DRAW.rectangle([(0,0),(128,128)], fill="BLACK")
     DRAW.text((10, 40), "Checking WiFi...", font=FONT_TITLE, fill="WHITE")
     LCD.LCD_ShowImage(IMAGE, 0, 0)
+    
     interfaces = get_wifi_interfaces()
-    mon_ifaces = [i for i in interfaces if 'mon' in i]
-    if mon_ifaces: CONFIG['interface'] = mon_ifaces[0]
-    elif interfaces: CONFIG['interface'] = interfaces[0]
-    else:
-        DRAW.rectangle([(0,0),(128,128)], fill="BLACK")
-        DRAW.text((10, 40), "No WiFi interfaces!", font=FONT_TITLE, fill="RED")
-        LCD.LCD_ShowImage(IMAGE, 0, 0)
-        time.sleep(3)
-        return False
+    CONFIG['interface'] = interfaces[0] # Select the best one based on the new sort order
     
     DRAW.rectangle([(0,0),(128,128)], fill="BLACK")
     DRAW.text((10, 40), f"Using {CONFIG['interface']}", font=FONT_TITLE, fill="WHITE")
@@ -112,9 +159,8 @@ def validate_setup():
     return True
 
 # ============================================================================
-# --- Wifite Process Functions ---
+# --- Wifite Process Functions (Identical to previous working version) ---
 # ============================================================================
-
 def start_scan():
     global STATUS_MSG, NETWORKS, MENU_SELECTION, TARGET_SCROLL_OFFSET, SCAN_PROCESS, APP_STATE
     APP_STATE = "scanning"; STATUS_MSG = "Starting..."; NETWORKS = []; MENU_SELECTION = 0; TARGET_SCROLL_OFFSET = 0
@@ -180,7 +226,8 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, cleanup_handler)
 
     try:
-        # --- Hardware Init ---
+        # --- Init Hardware and Config ---
+        load_pin_config() # Load pins from JSON first
         GPIO.setmode(GPIO.BCM)
         for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         LCD = LCD_1in44.LCD(); LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
