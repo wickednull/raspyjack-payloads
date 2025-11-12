@@ -2,9 +2,8 @@
 """
 RaspyJack Payload: Wifite GUI
 =============================
-Final version. This payload is a direct structural clone of the working
-deauth.py and attack_ethernet_link_manipulator.py payloads, with all logic
-contained in a single main loop to ensure maximum compatibility.
+Final version, built using the definitive architecture and input handling
+logic from the project's known-working payloads.
 """
 
 import os
@@ -65,6 +64,13 @@ def cleanup_handler(*_):
     global IS_RUNNING
     IS_RUNNING = False
 
+def get_pressed_button():
+    """Checks for the first pressed button and returns its name."""
+    for name, pin in PINS.items():
+        if GPIO.input(pin) == 0:
+            return name
+    return None
+
 def get_wifi_interfaces():
     try:
         all_ifaces = os.listdir('/sys/class/net/')
@@ -73,6 +79,7 @@ def get_wifi_interfaces():
         return ["wlan0mon"]
 
 def validate_setup():
+    """Checks if wifite is installed and a WiFi interface is available."""
     global STATUS_MSG, CONFIG
     DRAW.rectangle([(0,0),(128,128)], fill="BLACK")
     DRAW.text((10, 40), "Checking tools...", font=FONT_TITLE, fill="WHITE")
@@ -187,19 +194,9 @@ if __name__ == "__main__":
             raise SystemExit()
 
         # --- Main Loop ---
-        last_button_press_time = 0
-        BUTTON_DEBOUNCE_TIME = 0.2
         while IS_RUNNING:
-            current_time = time.time()
-            pressed_button: str | None = None
-
-            # 1. Read Input with Time-based Debounce
-            if current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME:
-                for name, pin in PINS.items():
-                    if GPIO.input(pin) == 0:
-                        pressed_button = name
-                        last_button_press_time = current_time
-                        break
+            # 1. Read Input
+            pressed_button = get_pressed_button()
             
             # 2. Handle State & Input
             if pressed_button:
@@ -391,8 +388,12 @@ if __name__ == "__main__":
 
             LCD.LCD_ShowImage(IMAGE, 0, 0)
 
-            # 4. Sleep
-            time.sleep(0.05)
+            # 4. Debounce by waiting for button release
+            if pressed_button:
+                while get_pressed_button() is not None:
+                    time.sleep(0.05)
+            else:
+                time.sleep(0.05)
 
     except Exception as e:
         with open("/tmp/wifite_gui_error.log", "w") as f:
