@@ -2,8 +2,8 @@
 """
 RaspyJack Payload: Wifite GUI
 =============================
-Final version, optimized for low-memory startup. This payload is built using
-th e exact architecture of known-working, complex payloads.
+A graphical wrapper for Wifite, built using the proven architecture of the
+Raspyjack project's own complex payloads.
 """
 
 import os
@@ -17,7 +17,7 @@ import threading
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 try:
-    # Critical import order for hardware stability.
+    # This import order is critical for hardware stability.
     import RPi.GPIO as GPIO
     import LCD_Config
     import LCD_1in44
@@ -61,10 +61,12 @@ class Network:
 # ============================================================================
 
 def cleanup_handler(*_):
+    """Signal handler to ensure the main loop terminates cleanly."""
     global IS_RUNNING
     IS_RUNNING = False
 
 def get_interfaces():
+    """Returns a list of wireless network interfaces."""
     try:
         all_ifaces = os.listdir('/sys/class/net/')
         return [i for i in all_ifaces if i.startswith(('wlan', 'ath', 'ra'))] or ["wlan0mon"]
@@ -76,6 +78,7 @@ def get_interfaces():
 # ============================================================================
 
 def start_scan():
+    """Configures and starts the wifite scan process in a background thread."""
     global STATUS_MSG, NETWORKS, MENU_SELECTION, TARGET_SCROLL_OFFSET, SCAN_PROCESS, APP_STATE
     APP_STATE = "scanning"
     STATUS_MSG = "Starting..."; NETWORKS = []; MENU_SELECTION = 0; TARGET_SCROLL_OFFSET = 0
@@ -108,6 +111,7 @@ def start_scan():
     threading.Thread(target=scan_worker, daemon=True).start()
 
 def start_attack(network):
+    """Configures and starts the wifite attack process."""
     global APP_STATE, ATTACK_TARGET, CRACKED_PASSWORD, STATUS_MSG, ATTACK_PROCESS
     APP_STATE = "attacking"; ATTACK_TARGET = network; CRACKED_PASSWORD = None; STATUS_MSG = "Initializing..."
     
@@ -158,9 +162,6 @@ if __name__ == "__main__":
         IMAGE = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
         DRAW = ImageDraw.Draw(IMAGE)
         
-        # --- Font Init (Memory Optimization) ---
-        # Load only one custom font and use the default for smaller text
-        # to reduce memory footprint on startup.
         try:
             FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
         except IOError:
@@ -176,88 +177,90 @@ if __name__ == "__main__":
                     pressed_button = name
                     break
             
+            # 2. Handle Global Exit Key
             if pressed_button == "KEY3":
                 IS_RUNNING = False
                 continue
 
-            # 2. Handle State & Input
-            if APP_STATE == "menu":
-                if pressed_button == "SELECT":
-                    if MENU_SELECTION == 0: start_scan()
-                    elif MENU_SELECTION == 1: APP_STATE = "settings"; MENU_SELECTION = 0
-                    elif MENU_SELECTION == 2: IS_RUNNING = False
-                elif pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % 3
-                elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % 3
-            
-            elif APP_STATE == "settings":
-                if pressed_button == "SELECT":
-                    if MENU_SELECTION == 0: APP_STATE = "select_interface"; MENU_SELECTION = 0
-                    elif MENU_SELECTION == 1: APP_STATE = "select_attack_types"; MENU_SELECTION = 0
-                    elif MENU_SELECTION == 2: APP_STATE = "advanced_settings"; MENU_SELECTION = 0
-                elif pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % 3
-                elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % 3
-                elif pressed_button == "LEFT": APP_STATE = "menu"; MENU_SELECTION = 0
+            # 3. Handle State & Input
+            if pressed_button is not None:
+                if APP_STATE == "menu":
+                    if pressed_button == "SELECT":
+                        if MENU_SELECTION == 0: start_scan()
+                        elif MENU_SELECTION == 1: APP_STATE = "settings"; MENU_SELECTION = 0
+                        elif MENU_SELECTION == 2: IS_RUNNING = False
+                    elif pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % 3
+                    elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % 3
+                
+                elif APP_STATE == "settings":
+                    if pressed_button == "SELECT":
+                        if MENU_SELECTION == 0: APP_STATE = "select_interface"; MENU_SELECTION = 0
+                        elif MENU_SELECTION == 1: APP_STATE = "select_attack_types"; MENU_SELECTION = 0
+                        elif MENU_SELECTION == 2: APP_STATE = "advanced_settings"; MENU_SELECTION = 0
+                    elif pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % 3
+                    elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % 3
+                    elif pressed_button == "LEFT": APP_STATE = "menu"; MENU_SELECTION = 0
 
-            elif APP_STATE == "advanced_settings":
-                if pressed_button == "SELECT":
-                    if MENU_SELECTION == 0: APP_STATE = "select_power"
-                    elif MENU_SELECTION == 1: APP_STATE = "select_channel"
-                    elif MENU_SELECTION == 2: CONFIG["clients_only"] = not CONFIG["clients_only"]
-                elif pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % 3
-                elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % 3
-                elif pressed_button == "LEFT": APP_STATE = "settings"; MENU_SELECTION = 0
+                elif APP_STATE == "advanced_settings":
+                    if pressed_button == "SELECT":
+                        if MENU_SELECTION == 0: APP_STATE = "select_power"
+                        elif MENU_SELECTION == 1: APP_STATE = "select_channel"
+                        elif MENU_SELECTION == 2: CONFIG["clients_only"] = not CONFIG["clients_only"]
+                    elif pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % 3
+                    elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % 3
+                    elif pressed_button == "LEFT": APP_STATE = "settings"; MENU_SELECTION = 0
 
-            elif APP_STATE == "select_interface":
-                interfaces = get_interfaces()
-                if pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % len(interfaces)
-                elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % len(interfaces)
-                elif pressed_button == "SELECT": CONFIG["interface"] = interfaces[MENU_SELECTION]; APP_STATE = "settings"; MENU_SELECTION = 0
-                elif pressed_button == "LEFT": APP_STATE = "settings"; MENU_SELECTION = 0
+                elif APP_STATE == "select_interface":
+                    interfaces = get_interfaces()
+                    if pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % len(interfaces)
+                    elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % len(interfaces)
+                    elif pressed_button == "SELECT": CONFIG["interface"] = interfaces[MENU_SELECTION]; APP_STATE = "settings"; MENU_SELECTION = 0
+                    elif pressed_button == "LEFT": APP_STATE = "settings"; MENU_SELECTION = 0
 
-            elif APP_STATE == "select_attack_types":
-                attack_keys = ["attack_wpa", "attack_wps", "attack_pmkid"]
-                if pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % len(attack_keys)
-                elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % len(attack_keys)
-                elif pressed_button == "SELECT": CONFIG[attack_keys[MENU_SELECTION]] = not CONFIG[attack_keys[MENU_SELECTION]]
-                elif pressed_button == "LEFT": APP_STATE = "settings"; MENU_SELECTION = 0
+                elif APP_STATE == "select_attack_types":
+                    attack_keys = ["attack_wpa", "attack_wps", "attack_pmkid"]
+                    if pressed_button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % len(attack_keys)
+                    elif pressed_button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % len(attack_keys)
+                    elif pressed_button == "SELECT": CONFIG[attack_keys[MENU_SELECTION]] = not CONFIG[attack_keys[MENU_SELECTION]]
+                    elif pressed_button == "LEFT": APP_STATE = "settings"; MENU_SELECTION = 0
 
-            elif APP_STATE == "select_power":
-                if pressed_button == "UP": CONFIG["power"] = min(100, CONFIG["power"] + 5)
-                elif pressed_button == "DOWN": CONFIG["power"] = max(0, CONFIG["power"] - 5)
-                elif pressed_button == "LEFT": APP_STATE = "advanced_settings"
+                elif APP_STATE == "select_power":
+                    if pressed_button == "UP": CONFIG["power"] = min(100, CONFIG["power"] + 5)
+                    elif pressed_button == "DOWN": CONFIG["power"] = max(0, CONFIG["power"] - 5)
+                    elif pressed_button == "LEFT": APP_STATE = "advanced_settings"
 
-            elif APP_STATE == "select_channel":
-                if pressed_button == "UP":
-                    if CONFIG["channel"] is None: CONFIG["channel"] = 1
-                    else: CONFIG["channel"] = min(14, CONFIG["channel"] + 1)
-                elif pressed_button == "DOWN":
-                    if CONFIG["channel"] is None: CONFIG["channel"] = 14
-                    else: CONFIG["channel"] = max(1, CONFIG["channel"] - 1)
-                elif pressed_button == "SELECT": CONFIG["channel"] = None
-                elif pressed_button == "LEFT": APP_STATE = "advanced_settings"
+                elif APP_STATE == "select_channel":
+                    if pressed_button == "UP":
+                        if CONFIG["channel"] is None: CONFIG["channel"] = 1
+                        else: CONFIG["channel"] = min(14, CONFIG["channel"] + 1)
+                    elif pressed_button == "DOWN":
+                        if CONFIG["channel"] is None: CONFIG["channel"] = 14
+                        else: CONFIG["channel"] = max(1, CONFIG["channel"] - 1)
+                    elif pressed_button == "SELECT": CONFIG["channel"] = None
+                    elif pressed_button == "LEFT": APP_STATE = "advanced_settings"
 
-            elif APP_STATE == "scanning":
-                if pressed_button == "LEFT":
-                    if SCAN_PROCESS: SCAN_PROCESS.terminate()
-                    APP_STATE = "menu"
+                elif APP_STATE == "scanning":
+                    if pressed_button == "LEFT":
+                        if SCAN_PROCESS: SCAN_PROCESS.terminate()
+                        APP_STATE = "menu"
 
-            elif APP_STATE == "targets":
-                if pressed_button == "UP": MENU_SELECTION = max(0, MENU_SELECTION - 1)
-                elif pressed_button == "DOWN": 
-                    if NETWORKS: MENU_SELECTION = min(len(NETWORKS) - 1, MENU_SELECTION + 1)
-                elif pressed_button == "SELECT":
-                    if NETWORKS: start_attack(NETWORKS[MENU_SELECTION])
-                elif pressed_button == "LEFT": APP_STATE = "menu"
+                elif APP_STATE == "targets":
+                    if pressed_button == "UP": MENU_SELECTION = max(0, MENU_SELECTION - 1)
+                    elif pressed_button == "DOWN": 
+                        if NETWORKS: MENU_SELECTION = min(len(NETWORKS) - 1, MENU_SELECTION + 1)
+                    elif pressed_button == "SELECT":
+                        if NETWORKS: start_attack(NETWORKS[MENU_SELECTION])
+                    elif pressed_button == "LEFT": APP_STATE = "menu"
 
-            elif APP_STATE == "attacking":
-                if pressed_button == "LEFT":
-                    if ATTACK_PROCESS: ATTACK_PROCESS.terminate()
-                    APP_STATE = "targets"
+                elif APP_STATE == "attacking":
+                    if pressed_button == "LEFT":
+                        if ATTACK_PROCESS: ATTACK_PROCESS.terminate()
+                        APP_STATE = "targets"
 
-            elif APP_STATE == "results":
-                if pressed_button: APP_STATE = "menu"
+                elif APP_STATE == "results":
+                    if pressed_button: APP_STATE = "menu"
 
-            # 3. Render UI
+            # 4. Render UI
             DRAW.rectangle([(0,0), (WIDTH,HEIGHT)], fill="BLACK")
             if APP_STATE == "menu":
                 DRAW.text((28, 10), "Wifite GUI", font=FONT_TITLE, fill="WHITE")
@@ -367,11 +370,13 @@ if __name__ == "__main__":
 
             LCD.LCD_ShowImage(IMAGE, 0, 0)
 
-            # 4. Debounce & Sleep
+            # 5. Debounce & Sleep
             if pressed_button:
+                # Wait for the button to be released
                 while GPIO.input(PINS[pressed_button]) == 0 and IS_RUNNING:
                     time.sleep(0.05)
             else:
+                # No button activity, sleep to reduce CPU usage
                 time.sleep(0.05)
 
     except Exception as e:
@@ -382,6 +387,6 @@ if __name__ == "__main__":
     finally:
         print("Cleaning up GPIO...")
         if HARDWARE_AVAILABLE:
-            try: LCD.LCD_Clear() # type: ignore
+            try: LCD.LCD_Clear()
             except: pass
             GPIO.cleanup()
