@@ -252,8 +252,8 @@ if __name__ == "__main__":
                     fill = "WHITE"; y_pos = 40 + i * 25
                     if i == MENU_SELECTION: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
                     value = f": {CONFIG['interface']}" if i == 0 else ""
-                    DRAW.text(f"{option}{value}", (10, y_pos), font=FONT, fill=fill)
-                DRAW.text("LEFT for Back", (20, 110), font=FONT, fill="#888")
+                    DRAW.text((10, y_pos), f"{option}{value}", font=FONT, fill=fill)
+                DRAW.text((20, 110), "LEFT for Back", font=FONT, fill="#888")
 
             elif APP_STATE == "advanced_settings":
                 DRAW.text((10, 10), "Advanced", font=FONT_TITLE, fill="WHITE")
@@ -265,18 +265,22 @@ if __name__ == "__main__":
                     if i == 0: value = f": {CONFIG['power']}"
                     elif i == 1: value = f": {CONFIG['channel'] or 'All'}"
                     else: value = f": {'On' if CONFIG['clients_only'] else 'Off'}"
-                    DRAW.text(f"{option}{value}", (10, y_pos), font=FONT, fill=fill)
-                DRAW.text("LEFT for Back", (20, 110), font=FONT, fill="#888")
+                    DRAW.text((10, y_pos), f"{option}{value}", font=FONT, fill=fill)
+                DRAW.text((20, 110), "LEFT for Back", font=FONT, fill="#888")
 
             elif APP_STATE == "select_interface":
                 DRAW.text((15, 10), "Interface", font=FONT_TITLE, fill="WHITE")
                 DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
                 interfaces = get_wifi_interfaces()
-                for i, iface in enumerate(interfaces):
-                    fill = "WHITE"; y_pos = 40 + i * 25
-                    if i == MENU_SELECTION: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
-                    DRAW.text(iface, (20, y_pos), font=FONT_TITLE, fill=fill)
-                DRAW.text("LEFT for Back", (20, 110), font=FONT, fill="#888")
+                if not interfaces:
+                    DRAW.text((10, 60), "No WiFi interfaces", font=FONT_TITLE, fill="#FF0000")
+                    DRAW.text((10, 80), "Press LEFT to go back", font=FONT, fill="#888")
+                else:
+                    for i, iface in enumerate(interfaces):
+                        fill = "WHITE"; y_pos = 40 + i * 25
+                        if i == MENU_SELECTION: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
+                        DRAW.text((20, y_pos), iface, font=FONT_TITLE, fill=fill)
+                DRAW.text((20, 110), "LEFT for Back", font=FONT, fill="#888")
 
             elif APP_STATE == "select_attack_types":
                 DRAW.text((25, 10), "Attack Types", font=FONT_TITLE, fill="WHITE")
@@ -286,28 +290,28 @@ if __name__ == "__main__":
                     fill = "WHITE"; y_pos = 40 + i * 25
                     if i == MENU_SELECTION: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
                     status = "[x]" if CONFIG[key] else "[ ]"
-                    DRAW.text(f"{status} {options[key]}", (10, y_pos), font=FONT, fill=fill)
-                DRAW.text("LEFT for Back", (20, 110), font=FONT, fill="#888")
+                    DRAW.text((10, y_pos), f"{status} {options[key]}", font=FONT, fill=fill)
+                DRAW.text((20, 110), "LEFT for Back", font=FONT, fill="#888")
 
             elif APP_STATE == "select_power":
                 DRAW.text((30, 10), "Set Power", font=FONT_TITLE, fill="WHITE")
                 DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                DRAW.text(f"{CONFIG['power']}", (50, 50), font=FONT_TITLE, fill="WHITE")
-                DRAW.text("Up/Down to change", (10, 80), font=FONT, fill="WHITE")
-                DRAW.text("LEFT for Back", (20, 110), font=FONT, fill="#888")
+                DRAW.text((50, 50), f"{CONFIG['power']}", font=FONT_TITLE, fill="WHITE")
+                DRAW.text((10, 80), "Up/Down to change", font=FONT, fill="WHITE")
+                DRAW.text((20, 110), "LEFT for Back", font=FONT, fill="#888")
 
             elif APP_STATE == "select_channel":
                 DRAW.text((25, 10), "Set Channel", font=FONT_TITLE, fill="WHITE")
                 DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                DRAW.text(f"{CONFIG['channel'] or 'All'}", (50, 50), font=FONT_TITLE, fill="WHITE")
-                DRAW.text("Up/Down to change", (10, 80), font=FONT, fill="WHITE")
-                DRAW.text("OK for 'All'", (20, 95), font=FONT, fill="WHITE")
-                DRAW.text("LEFT for Back", (20, 110), font=FONT, fill="#888")
+                DRAW.text((50, 50), f"{CONFIG['channel'] or 'All'}", font=FONT_TITLE, fill="WHITE")
+                DRAW.text((10, 80), "Up/Down to change", font=FONT, fill="WHITE")
+                DRAW.text((20, 95), "OK for 'All'", font=FONT, fill="WHITE")
+                DRAW.text((20, 110), "LEFT for Back", font=FONT, fill="#888")
 
             elif APP_STATE == "scanning":
                 DRAW.text((25, 40), "Scanning...", font=FONT_TITLE, fill="WHITE")
                 if STATUS_MSG: DRAW.text((10, 60), STATUS_MSG, font=FONT, fill="#00FF00")
-                DRAW.text("KEY3=Exit | LEFT=Back", (10, 110), font=FONT, fill="#888")
+                DRAW.text((10, 110), "KEY3=Exit | LEFT=Back", font=FONT, fill="#888")
 
             elif APP_STATE == "targets":
                 DRAW.text((20, 5), "Select Target", font=FONT_TITLE, fill="WHITE"); DRAW.line([(0, 22), (128, 22)], fill="#333", width=1)
@@ -320,26 +324,26 @@ if __name__ == "__main__":
                         if i >= len(NETWORKS): break
                         network = NETWORKS[i]; display_y = 25 + (i - TARGET_SCROLL_OFFSET) * 16; fill = "WHITE"
                         if i == MENU_SELECTION: DRAW.rectangle([(0, display_y - 2), (128, display_y + 13)], fill="#003366"); fill = "#FFFF00"
-                        DRAW.text(f"{network.essid[:14]}", (5, display_y), font=FONT, fill=fill)
-                        DRAW.text(f"{network.power}dBm", (90, display_y), font=FONT, fill=fill)
+                        DRAW.text((5, display_y), f"{network.essid[:14]}", font=FONT, fill=fill)
+                        DRAW.text((90, display_y), f"{network.power}dBm", font=FONT, fill=fill)
 
             elif APP_STATE == "attacking":
                 if ATTACK_TARGET:
-                    DRAW.text("Attacking:", (5, 5), font=FONT, fill="WHITE")
-                    DRAW.text(ATTACK_TARGET.essid[:18], (5, 20), font=FONT_TITLE, fill="#FF0000"); DRAW.line([(0, 38), (128, 38)], fill="#333", width=1)
-                    if STATUS_MSG: DRAW.text(STATUS_MSG, (5, 45), font=FONT, fill="#00FF00")
-                DRAW.text("KEY3=Exit | LEFT=Back", (10, 110), font=FONT, fill="#888")
+                    DRAW.text((5, 5), "Attacking:", font=FONT, fill="WHITE")
+                    DRAW.text((5, 20), ATTACK_TARGET.essid[:18], font=FONT_TITLE, fill="#FF0000"); DRAW.line([(0, 38), (128, 38)], fill="#333", width=1)
+                    if STATUS_MSG: DRAW.text((5, 45), STATUS_MSG, font=FONT, fill="#00FF00")
+                DRAW.text((10, 110), "KEY3=Exit | LEFT=Back", font=FONT, fill="#888")
 
             elif APP_STATE == "results":
-                DRAW.text("Result", (40, 10), font=FONT_TITLE, fill="WHITE"); DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
+                DRAW.text((40, 10), "Result", font=FONT_TITLE, fill="WHITE"); DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
                 if CRACKED_PASSWORD:
-                    DRAW.text("Success!", (35, 40), font=FONT_TITLE, fill="#00FF00")
-                    DRAW.text("Password:", (5, 60), font=FONT, fill="WHITE")
-                    DRAW.text(CRACKED_PASSWORD, (5, 75), font=FONT_TITLE, fill="#00FF00")
+                    DRAW.text((35, 40), "Success!", font=FONT_TITLE, fill="#00FF00")
+                    DRAW.text((5, 60), "Password:", font=FONT, fill="WHITE")
+                    DRAW.text((5, 75), CRACKED_PASSWORD, font=FONT_TITLE, fill="#00FF00")
                 else:
-                    DRAW.text("Failed", (40, 40), font=FONT_TITLE, fill="#FF0000")
-                    DRAW.text("Could not crack network.", (5, 60), font=FONT, fill="WHITE")
-                DRAW.text("Press any key...", (15, 110), font=FONT, fill="#888")
+                    DRAW.text((40, 40), "Failed", font=FONT_TITLE, fill="#FF0000")
+                    DRAW.text((5, 60), "Could not crack network.", font=FONT, fill="WHITE")
+                DRAW.text((15, 110), "Press any key...", font=FONT, fill="#888")
 
             LCD.LCD_ShowImage(IMAGE, 0, 0)
 
@@ -398,18 +402,23 @@ if __name__ == "__main__":
 
             elif APP_STATE == "select_interface":
                 interfaces = get_wifi_interfaces()
-                if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    MENU_SELECTION = (MENU_SELECTION - 1) % len(interfaces)
-                elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    MENU_SELECTION = (MENU_SELECTION + 1) % len(interfaces)
-                elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    CONFIG["interface"] = interfaces[MENU_SELECTION]; APP_STATE = "settings"; MENU_SELECTION = 0
-                elif GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    APP_STATE = "settings"; MENU_SELECTION = 0
+                if not interfaces:
+                    if GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        APP_STATE = "settings"; MENU_SELECTION = 0
+                else:
+                    if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        MENU_SELECTION = (MENU_SELECTION - 1) % len(interfaces)
+                    elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        MENU_SELECTION = (MENU_SELECTION + 1) % len(interfaces)
+                    elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        CONFIG["interface"] = interfaces[MENU_SELECTION]; APP_STATE = "settings"; MENU_SELECTION = 0
+                    elif GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                        last_button_press_time = current_time
+                        APP_STATE = "settings"; MENU_SELECTION = 0
 
             elif APP_STATE == "targets":
                 if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):

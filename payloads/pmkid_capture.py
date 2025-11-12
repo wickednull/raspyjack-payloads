@@ -29,18 +29,36 @@ import threading
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
 import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
+import LCD_Config
+import LCD_1in44
 from PIL import Image, ImageDraw, ImageFont
 from wifi.raspyjack_integration import (
     get_best_interface,
+    get_available_interfaces,
 )
 import monitor_mode_helper
 
-PINS: dict[str, int] = {
-    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
-    "KEY1": 21, "KEY2": 20, "KEY3": 16,
-}
-
+# Load PINS from RaspyJack gui_conf.json
+PINS: dict[str, int] = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+try:
+    import json
+    RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+    conf_path = os.path.join(RASPYJACK_PATH, 'gui_conf.json')
+    with open(conf_path, 'r') as f:
+        data = json.load(f)
+    conf_pins = data.get("PINS", {})
+    PINS = {
+        "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
+        "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
+        "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
+        "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
+        "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
+        "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
+        "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
+        "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
+    }
+except Exception:
+    pass
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values():
     GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -53,7 +71,18 @@ FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bol
 FONT_STATUS = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 10)
 
 RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
-WIFI_INTERFACE = get_best_interface(prefer_wifi=True)
+# Prefer wlan1 explicitly if available; otherwise fall back to best WiFi
+try:
+    interfaces = get_available_interfaces()
+    wifi_ifaces = [i for i in interfaces if i.startswith('wlan')]
+    if 'wlan1' in wifi_ifaces:
+        WIFI_INTERFACE = 'wlan1'
+    elif wifi_ifaces:
+        WIFI_INTERFACE = wifi_ifaces[0]
+    else:
+        WIFI_INTERFACE = get_best_interface(prefer_wifi=True)
+except Exception:
+    WIFI_INTERFACE = get_best_interface(prefer_wifi=True)
 ORIGINAL_WIFI_INTERFACE = None
 LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "PMKID")
 running = True

@@ -40,15 +40,61 @@ import time
 import signal
 import subprocess
 import threading
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for consistency
-import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
 
-PINS: dict[str, int] = {
-    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
-    "KEY1": 21, "KEY2": 20, "KEY3": 16,
-}
+# ----------------------------
+# RaspyJack PATH and ROOT check
+# ----------------------------
+def is_root():
+    return os.geteuid() == 0
+
+# Dynamically add Raspyjack path
+RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+if RASPYJACK_PATH not in sys.path:
+    sys.path.append(RASPYJACK_PATH)
+
+# ----------------------------
+# Third-party library imports 
+# ----------------------------
+try:
+    import RPi.GPIO as GPIO
+    import LCD_1in44, LCD_Config
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    print("ERROR: Hardware libraries (RPi.GPIO, LCD, PIL) not found.", file=sys.stderr)
+    print("Please run 'sudo pip3 install RPi.GPIO spidev Pillow'.", file=sys.stderr)
+    sys.exit(1)
+
+# ----------------------------
+# RaspyJack WiFi Integration
+# ----------------------------
+try:
+    from wifi.raspyjack_integration import get_best_interface
+    WIFI_INTEGRATION_AVAILABLE = True
+except ImportError:
+    WIFI_INTEGRATION_AVAILABLE = False
+    def get_best_interface():
+        return "wlan1" # Fallback
+
+# Load PINS from RaspyJack gui_conf.json when possible
+PINS: dict[str, int] = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+try:
+    import json
+    conf_path = os.path.join(RASPYJACK_DIR, 'gui_conf.json')
+    with open(conf_path, 'r') as f:
+        data = json.load(f)
+    conf_pins = data.get("PINS", {})
+    PINS = {
+        "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
+        "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
+        "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
+        "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
+        "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
+        "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
+        "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
+        "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
+    }
+except Exception:
+    pass
 
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values():
@@ -61,10 +107,16 @@ FONT = ImageFont.load_default()
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT_UI = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
 
-CAPTIVE_PORTAL_BASE_PATH = "/root/Raspyjack/DNSSpoof/sites"
+RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..', '..', 'Raspyjack'))
+CAPTIVE_PORTAL_BASE_PATH = os.path.join(RASPYJACK_DIR, "DNSSpoof", "sites")
 CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, "wifi")
 LOOT_FILE = os.path.join(CAPTIVE_PORTAL_PATH, "loot.txt") # Changed to loot.txt
 TEMP_CONF_DIR = "/tmp/raspyjack_eviltwin/"
+
+WIFI_INTERFACE = get_best_interface()
+FAKE_AP_SSID = "Free_WiFi"
+FAKE_AP_CHANNEL = "1"
+
 
 running = True
 attack_processes = {}
@@ -99,7 +151,8 @@ def run_command(command_parts, error_message, timeout=10, shell=False, check=Fal
         print(f"ERROR: {error_message} - Command timed out: {command_parts}", file=sys.stderr)
         return "", False
     except FileNotFoundError:
-        print(f"ERROR: {error_message} - Command not found: {command_parts.split()[0]}", file=sys.stderr)
+        cmd_name = command_parts[0] if isinstance(command_parts, (list, tuple)) else str(command_parts).split()[0]
+        print(f"ERROR: {error_message} - Command not found: {cmd_name}", file=sys.stderr)
         return "", False
     except Exception as e:
         print(f"CRITICAL ERROR during {error_message}: {e}", file=sys.stderr)
@@ -486,6 +539,21 @@ def monitor_status():
         time.sleep(5)
 
 if __name__ == "__main__":
+    if not is_root():
+        print("ERROR: This script requires root privileges.", file=sys.stderr)
+        # Attempt to display on LCD if possible
+        try:
+            LCD = LCD_1in44.LCD()
+            LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+            img = Image.new("RGB", (128, 128), "black")
+            d = ImageDraw.Draw(img)
+            FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+            d.text((10, 40), "ERROR:\nRoot privileges\nrequired.", font=FONT_TITLE, fill="red")
+            LCD.LCD_ShowImage(img, 0, 0)
+        except Exception as e:
+            print(f"Could not display error on LCD: {e}", file=sys.stderr)
+        sys.exit(1)
+
     try:
         is_attacking = False
         current_screen = "main"

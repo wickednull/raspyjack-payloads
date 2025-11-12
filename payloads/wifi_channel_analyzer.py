@@ -31,16 +31,48 @@ import time
 import signal
 import subprocess
 import threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
-import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
-from scapy.all import *
-conf.verb = 0
-from wifi.raspyjack_integration import get_available_interfaces
-from monitor_mode_helper import activate_monitor_mode, deactivate_monitor_mode
-# from wifi.wifi_manager import WiFiManager # WiFiManager is not used for monitor mode setup here
+
+# ----------------------------
+# RaspyJack PATH and ROOT check
+# ----------------------------
+def is_root():
+    return os.geteuid() == 0
+
+# Dynamically add Raspyjack path
+RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+if RASPYJACK_PATH not in sys.path:
+    sys.path.append(RASPYJACK_PATH)
+
+# ----------------------------
+# Third-party library imports 
+# ----------------------------
+try:
+    import RPi.GPIO as GPIO
+    import LCD_Config
+    import LCD_1in44
+    from PIL import Image, ImageDraw, ImageFont
+    from scapy.all import *
+    conf.verb = 0
+except ImportError as e:
+    print(f"ERROR: A required library is not found. {e}", file=sys.stderr)
+    print("Please run 'sudo pip3 install RPi.GPIO spidev Pillow scapy'.", file=sys.stderr)
+    sys.exit(1)
+
+# ----------------------------
+# RaspyJack WiFi Integration
+# ----------------------------
+try:
+    from wifi.raspyjack_integration import get_available_interfaces
+    from monitor_mode_helper import activate_monitor_mode, deactivate_monitor_mode
+    WIFI_INTEGRATION_AVAILABLE = True
+except ImportError:
+    WIFI_INTEGRATION_AVAILABLE = False
+    def get_available_interfaces():
+        return []
+    def activate_monitor_mode(interface):
+        return None
+    def deactivate_monitor_mode(interface):
+        return False
 
 WIFI_INTERFACE = None
 ORIGINAL_WIFI_INTERFACE = None # Added for consistent cleanup
@@ -48,9 +80,29 @@ CHANNELS_2_4GHZ = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 CHANNELS_5GHZ = [36, 40, 44, 48, 149, 153, 157, 161]
 SCAN_TIME_PER_CHANNEL = 1
 
-PINS = { "UP": 6, "DOWN": 19, "OK": 13, "KEY3": 16 }
+# Load PINS from RaspyJack gui_conf.json
+PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+try:
+    import json
+    conf_path = os.path.join(RASPYJACK_PATH, 'gui_conf.json')
+    with open(conf_path, 'r') as f:
+        data = json.load(f)
+    conf_pins = data.get("PINS", {})
+    PINS = {
+        "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
+        "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
+        "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
+        "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
+        "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
+        "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
+        "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
+        "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
+    }
+except Exception:
+    pass
 GPIO.setmode(GPIO.BCM)
-for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+for pin in PINS.values():
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 WIDTH, HEIGHT = 128, 128
@@ -138,6 +190,10 @@ def select_interface_menu():
     global WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE, current_menu_selection, status_msg
     
     available_interfaces = [iface for iface in get_available_interfaces() if iface.startswith('wlan')]
+    # Prefer wlan1 if present
+    if 'wlan1' in available_interfaces:
+        available_interfaces.remove('wlan1')
+        available_interfaces.insert(0, 'wlan1')
     if not available_interfaces:
         draw_message(["No WiFi", "interfaces found!"], "red")
         time.sleep(3)
@@ -246,6 +302,26 @@ def sniffer_worker():
         time.sleep(5)
 
 if __name__ == "__main__":
+    if not is_root():
+        print("ERROR: This script requires root privileges.", file=sys.stderr)
+        # Attempt to display on LCD if possible
+        try:
+            LCD = LCD_1in44.LCD()
+            LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+            img = Image.new("RGB", (128, 128), "black")
+            d = ImageDraw.Draw(img)
+            FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+            d.text((10, 40), "ERROR:\nRoot privileges\nrequired.", font=FONT_TITLE, fill="red")
+            LCD.LCD_ShowImage(img, 0, 0)
+        except Exception as e:
+            print(f"Could not display error on LCD: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not WIFI_INTEGRATION_AVAILABLE:
+        draw_message(["ERROR:", "WiFi integration not found."], "red")
+        time.sleep(5)
+        sys.exit(1)
+
     try:
         if not select_interface_menu():
             draw_message(["No interface selected", "or monitor mode failed."], "red")

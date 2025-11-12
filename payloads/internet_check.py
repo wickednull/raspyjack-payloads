@@ -30,13 +30,31 @@ import signal
 import subprocess
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
+import LCD_Config
+import LCD_1in44
 from PIL import Image, ImageDraw, ImageFont
 
-PINS: dict[str, int] = {
-    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
-    "KEY1": 21, "KEY2": 20, "KEY3": 16,
-}
+# Load PINS from RaspyJack gui_conf.json
+PINS: dict[str, int] = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+try:
+    import json
+    RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+    conf_path = os.path.join(RASPYJACK_PATH, 'gui_conf.json')
+    with open(conf_path, 'r') as f:
+        data = json.load(f)
+    conf_pins = data.get("PINS", {})
+    PINS = {
+        "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
+        "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
+        "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
+        "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
+        "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
+        "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
+        "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
+        "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
+    }
+except Exception:
+    pass
 
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values():
@@ -155,7 +173,7 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
                 current_char = char_list[cursor_pos_ref]
                 
                 try:
-                    char_set.index(current_char)
+                    char_index = char_set.index(current_char)
                     if btn == "UP":
                         char_index = (char_index + 1) % len(char_set)
                     else:

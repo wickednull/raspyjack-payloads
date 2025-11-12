@@ -23,17 +23,43 @@ import time
 import signal
 import subprocess
 import threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
-import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
-from scapy.all import *
-from scapy.error import Scapy_Exception
 
-# WiFi Integration - Add dual interface support
+# ----------------------------
+# RaspyJack PATH and ROOT check
+# ----------------------------
+def is_root():
+    return os.geteuid() == 0
+
+# Dynamically add Raspyjack path
+RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+if RASPYJACK_PATH not in sys.path:
+    sys.path.append(RASPYJACK_PATH)
+
+# ----------------------------
+# Third-party library imports 
+# ----------------------------
 try:
+    import RPi.GPIO as GPIO
+    import LCD_Config
+    import LCD_1in44
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    print("ERROR: Hardware libraries (RPi.GPIO, LCD, PIL) not found.", file=sys.stderr)
+    print("Please run 'sudo pip3 install RPi.GPIO spidev Pillow'.", file=sys.stderr)
+    sys.exit(1)
 
-    sys.path.append('/root/Raspyjack/wifi/')
+try:
+    from scapy.all import *
+    from scapy.error import Scapy_Exception
+except ImportError:
+    print("ERROR: Scapy library not found.", file=sys.stderr)
+    print("Please run 'sudo pip3 install scapy'.", file=sys.stderr)
+    sys.exit(1)
+
+# ----------------------------
+# RaspyJack WiFi Integration
+# ----------------------------
+try:
     from wifi.raspyjack_integration import get_best_interface
     WIFI_INTEGRATION_AVAILABLE = True
 except ImportError:
@@ -41,10 +67,26 @@ except ImportError:
     def get_best_interface():
         return "eth0" # Fallback
 
-PINS: dict[str, int] = {
-    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
-    "KEY1": 21, "KEY2": 20, "KEY3": 16,
-}
+# Load PINS from RaspyJack gui_conf.json
+PINS: dict[str, int] = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+try:
+    import json
+    conf_path = os.path.join(RASPYJACK_PATH, 'gui_conf.json')
+    with open(conf_path, 'r') as f:
+        data = json.load(f)
+    conf_pins = data.get("PINS", {})
+    PINS = {
+        "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
+        "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
+        "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
+        "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
+        "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
+        "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
+        "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
+        "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
+    }
+except Exception:
+    pass
 
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values():
@@ -154,6 +196,21 @@ def draw_ui(status_msg="", interface=""):
     LCD.LCD_ShowImage(img, 0, 0)
 
 if __name__ == "__main__":
+    if not is_root():
+        print("ERROR: This script requires root privileges.", file=sys.stderr)
+        # Attempt to display on LCD if possible
+        try:
+            LCD = LCD_1in44.LCD()
+            LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+            img = Image.new("RGB", (128, 128), "black")
+            d = ImageDraw.Draw(img)
+            FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+            d.text((10, 40), "ERROR:\nRoot privileges\nrequired.", font=FONT_TITLE, fill="red")
+            LCD.LCD_ShowImage(img, 0, 0)
+        except Exception as e:
+            print(f"Could not display error on LCD: {e}", file=sys.stderr)
+        sys.exit(1)
+
     try:
         current_interface = NETWORK_INTERFACE
         network_range = get_network_range(current_interface)
