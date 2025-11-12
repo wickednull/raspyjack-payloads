@@ -35,7 +35,6 @@ try:
     HARDWARE_AVAILABLE = True
 except ImportError as e:
     print(f"FATAL: Hardware libraries not found: {e}", file=sys.stderr)
-    sys.stderr.flush() # Ensure print output is immediately shown
     sys.exit(1)
 
 # ============================================================================
@@ -72,13 +71,8 @@ class Network:
 # ============================================================================
 
 def cleanup_handler(*_):
-    # FIX: Ensure all global variables are declared
-    global IS_RUNNING, SCAN_PROCESS, ATTACK_PROCESS 
+    global IS_RUNNING
     IS_RUNNING = False
-    if SCAN_PROCESS and SCAN_PROCESS.poll() is None:
-        SCAN_PROCESS.terminate()
-    if ATTACK_PROCESS and ATTACK_PROCESS.poll() is None:
-        ATTACK_PROCESS.terminate()
 
 def load_pin_config():
     """Loads button pin mapping from the main Raspyjack config file."""
@@ -137,8 +131,6 @@ def validate_setup():
         time.sleep(3)
         return False
     
-    # NOTE: The redundant 'sudo' check was removed to prevent an immediate crash.
-    
     DRAW.rectangle([(0,0),(128,128)], fill="BLACK")
     DRAW.text((10, 40), "Checking WiFi...", font=FONT_TITLE, fill="WHITE")
     LCD.LCD_ShowImage(IMAGE, 0, 0)
@@ -153,98 +145,50 @@ def validate_setup():
     return True
 
 # ============================================================================
-# --- Wifite Process Functions (FIX: Removed 'sudo' based on root confirmation) ---
+# --- Wifite Process Functions ---
 # ============================================================================
 def start_scan():
     global STATUS_MSG, NETWORKS, MENU_SELECTION, TARGET_SCROLL_OFFSET, SCAN_PROCESS, APP_STATE
     APP_STATE = "scanning"; STATUS_MSG = "Starting..."; NETWORKS = []; MENU_SELECTION = 0; TARGET_SCROLL_OFFSET = 0
-    
-    # FIX: Removed 'sudo' since payload runs as root.
     cmd = ["wifite", "--csv", "-i", CONFIG['interface'], '--power', str(CONFIG['power'])]
     if not CONFIG['attack_wps']: cmd.append('--no-wps')
     if not CONFIG['attack_wpa']: cmd.append('--no-wpa')
     if not CONFIG['attack_pmkid']: cmd.append('--no-pmkid')
     if CONFIG['channel']: cmd.extend(['-c', str(CONFIG['channel'])])
     if CONFIG['clients_only']: cmd.append('--clients-only')
-    
     def scan_worker():
         global SCAN_PROCESS, STATUS_MSG, NETWORKS, APP_STATE
         try:
             SCAN_PROCESS = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
             header = False
-            
-            # Allow a short time for the process to fail immediately
-            time.sleep(1) 
-            if SCAN_PROCESS.poll() is not None and SCAN_PROCESS.returncode != 0:
-                # Log crash details to help diagnose if this still fails
-                error_output = SCAN_PROCESS.stdout.read() if SCAN_PROCESS.stdout else "No output or immediate crash"
-                STATUS_MSG = f"Scan failed! See /tmp/wifite_scan.log"
-                with open("/tmp/wifite_scan.log", "w") as f:
-                    f.write(f"Command: {' '.join(cmd)}\n")
-                    f.write(f"Return Code: {SCAN_PROCESS.returncode}\n")
-                    f.write(f"Error Output:\n{error_output}")
-                time.sleep(3)
-                APP_STATE = "menu"
-                return
-            
             for line in iter(SCAN_PROCESS.stdout.readline, ''):
                 if not IS_RUNNING or APP_STATE != "scanning": break
-                
-                if SCAN_PROCESS.poll() is not None and SCAN_PROCESS.returncode != 0:
-                    STATUS_MSG = f"Scan failed. Code: {SCAN_PROCESS.returncode}"
-                    time.sleep(3)
-                    APP_STATE = "menu"
-                    return
-                
                 if not header and "BSSID,ESSID" in line: header = True; STATUS_MSG = "Parsing..."; continue
                 if header:
                     try:
-                        # Parsing logic for Wifite CSV output
                         parts = line.strip().split(','); bssid, essid, ch, pwr, enc = parts[0], parts[1], parts[2], parts[3], parts[4]
                         if bssid and not any(n.bssid == bssid for n in NETWORKS):
                             NETWORKS.append(Network(bssid, essid, ch, pwr, enc)); STATUS_MSG = f"Found: {len(NETWORKS)}"
                     except Exception: continue
-            
             SCAN_PROCESS.wait()
             if APP_STATE == "scanning": APP_STATE = "targets"
-        except Exception as e: 
-            STATUS_MSG = f"Launch Error: {str(e)[:15]}"; time.sleep(2); APP_STATE = "menu"
-    
+        except Exception as e: STATUS_MSG = f"Error: {str(e)[:15]}"; time.sleep(2); APP_STATE = "menu"
     threading.Thread(target=scan_worker, daemon=True).start()
 
 def start_attack(network):
     global APP_STATE, ATTACK_TARGET, CRACKED_PASSWORD, STATUS_MSG, ATTACK_PROCESS
     APP_STATE = "attacking"; ATTACK_TARGET = network; CRACKED_PASSWORD = None; STATUS_MSG = "Initializing..."
-    
-    # FIX: Removed 'sudo' since payload runs as root.
     cmd = ["wifite", "--bssid", network.bssid, "-i", CONFIG['interface']]
     if not CONFIG['attack_wps']: cmd.append('--no-wps')
     if not CONFIG['attack_wpa']: cmd.append('--no-wpa')
     if not CONFIG['attack_pmkid']: cmd.append('--no-pmkid')
     if CONFIG['clients_only']: cmd.append('--clients-only')
-    
     def attack_worker():
         global ATTACK_PROCESS, STATUS_MSG, CRACKED_PASSWORD, APP_STATE
         try:
             ATTACK_PROCESS = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
-            
-            # Allow a short time for the process to fail immediately
-            time.sleep(1) 
-            if ATTACK_PROCESS.poll() is not None and ATTACK_PROCESS.returncode != 0:
-                STATUS_MSG = f"Attack failed! Code: {ATTACK_PROCESS.returncode}"
-                time.sleep(3)
-                APP_STATE = "targets"
-                return
-
             for line in iter(ATTACK_PROCESS.stdout.readline, ''):
                 if not IS_RUNNING or APP_STATE != "attacking": break
-                
-                if ATTACK_PROCESS.poll() is not None and ATTACK_PROCESS.returncode != 0:
-                    STATUS_MSG = f"Attack failed. Code: {ATTACK_PROCESS.returncode}"
-                    time.sleep(3)
-                    APP_STATE = "targets"
-                    return
-                    
                 line_lower = line.lower()
                 if "wps pin attack" in line_lower: STATUS_MSG = "WPS PIN Attack..."
                 elif "wpa handshake" in line_lower: STATUS_MSG = "WPA Handshake Capture..."
@@ -254,16 +198,13 @@ def start_attack(network):
                     except IndexError: CRACKED_PASSWORD = "See logs"
                     break
                 elif "failed" in line_lower: STATUS_MSG = "Attack failed."
-            
             ATTACK_PROCESS.wait()
             if APP_STATE == "attacking": APP_STATE = "results"
-        except Exception as e: 
-            STATUS_MSG = f"Attack Error: {str(e)[:15]}"; time.sleep(2); APP_STATE = "targets"
-    
+        except Exception as e: STATUS_MSG = f"Attack Error: {str(e)[:15]}"; time.sleep(2); APP_STATE = "targets"
     threading.Thread(target=attack_worker, daemon=True).start()
 
 # ============================================================================
-# --- Main Application Entry Point (Omitted for brevity) ---
+# --- Main Application Entry Point ---
 # ============================================================================
 
 if __name__ == "__main__":
@@ -285,7 +226,7 @@ if __name__ == "__main__":
         if not validate_setup():
             raise SystemExit()
 
-        # --- Main Loop ---
+        # --- Main Loop (adapted from util_file_browser.py) ---
         last_button_press_time = 0
         BUTTON_DEBOUNCE_TIME = 0.25 # seconds
 
@@ -412,7 +353,7 @@ if __name__ == "__main__":
                 IS_RUNNING = False
                 continue
 
-            # --- State Machine Logic (omitted for brevity) ---
+            # --- State Machine Logic ---
             if APP_STATE == "menu":
                 if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
@@ -442,6 +383,7 @@ if __name__ == "__main__":
                     last_button_press_time = current_time
                     APP_STATE = "menu"; MENU_SELECTION = 0
 
+            # ... (Continue this pattern for all other states)
             elif APP_STATE == "advanced_settings":
                 if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
@@ -496,25 +438,13 @@ if __name__ == "__main__":
             time.sleep(0.05)
 
     except Exception as e:
-        # Catch any final unhandled exception and log it
         with open("/tmp/wifite_gui_error.log", "w") as f:
-            f.write(f"FATAL PYTHON ERROR: {type(e).__name__}: {e}\n")
+            f.write(f"FATAL ERROR: {type(e).__name__}: {e}\n")
             import traceback
             traceback.print_exc(file=f)
-        sys.stderr.write(f"\nFATAL CRASH! Check /tmp/wifite_gui_error.log for details.\n")
-        sys.stderr.flush()
     finally:
         print("Cleaning up GPIO...")
         if HARDWARE_AVAILABLE:
             try: LCD.LCD_Clear()
             except: pass
             GPIO.cleanup()
-
-### ➡️ Next Step: The Final Diagnosis
-
-Please use this script and let me know the result.
-
-If it **still crashes immediately**, we need the stack trace. Please run the command below immediately after the crash and share the output:
-
-```bash
-cat /tmp/wifite_gui_error.log

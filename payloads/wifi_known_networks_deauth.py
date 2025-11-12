@@ -61,8 +61,7 @@ LOOT_DIR = os.path.join(os.path.abspath(os.path.join(__file__, '..', '..')), "lo
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 try:
     import json
-    RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
-    conf_path = os.path.join(RASPYJACK_PATH, 'gui_conf.json')
+    conf_path = 'gui_conf.json'
     with open(conf_path, 'r') as f:
         data = json.load(f)
     conf_pins = data.get("PINS", {})
