@@ -82,13 +82,41 @@ def cleanup_handler(*_):
     global IS_RUNNING
     IS_RUNNING = False
 
+def _find_gui_conf() -> str | None:
+    # Try multiple likely locations for gui_conf.json
+    candidates = []
+    # 1) Current working dir (RaspyJack UI typically runs here)
+    candidates.append(os.path.join(os.getcwd(), 'gui_conf.json'))
+    # 2) Default RaspyJack install location
+    candidates.append(os.path.join('/root/Raspyjack', 'gui_conf.json'))
+    # 3) Sibling Raspyjack repo next to raspyjack-payloads
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    candidates.append(os.path.join(os.path.dirname(repo_root), 'Raspyjack', 'gui_conf.json'))
+    # 4) Any sys.path entry that points at Raspyjack
+    for sp in sys.path:
+        try:
+            if sp and os.path.basename(sp) == 'Raspyjack':
+                cand = os.path.join(sp, 'gui_conf.json')
+                candidates.append(cand)
+        except Exception:
+            pass
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
+
+
 def load_pin_config():
     """Loads button pin mapping from the main Raspyjack config file."""
     global PINS
-    config_file = 'gui_conf.json'
     default_pins = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+    cfg_path = _find_gui_conf()
+    if not cfg_path:
+        PINS = default_pins
+        return
     try:
-        with open(config_file, 'r') as f: data = json.load(f)
+        with open(cfg_path, 'r') as f:
+            data = json.load(f)
         conf_pins = data.get("PINS", {})
         PINS = {
             "UP": conf_pins.get("KEY_UP_PIN", 6), "DOWN": conf_pins.get("KEY_DOWN_PIN", 19),
@@ -97,9 +125,7 @@ def load_pin_config():
             "KEY1": conf_pins.get("KEY1_PIN", 21), "KEY2": conf_pins.get("KEY2_PIN", 20),
             "KEY3": conf_pins.get("KEY3_PIN", 16),
         }
-        print("Successfully loaded PINS from gui_conf.json")
-    except Exception as e:
-        print(f"WARNING: Could not load gui_conf.json: {e}. Using default pins.", file=sys.stderr)
+    except Exception:
         PINS = default_pins
 
 def get_pressed_button():
