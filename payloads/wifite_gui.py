@@ -2,8 +2,8 @@
 """
 RaspyJack Payload: Wifite GUI
 =============================
-A graphical wrapper for Wifite, built using the proven architecture of the
-Raspyjack project's own complex payloads.
+Final version, optimized for low-memory startup. This payload is built using
+th e exact architecture of known-working, complex payloads.
 """
 
 import os
@@ -17,7 +17,7 @@ import threading
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 try:
-    # This import order is critical for hardware stability.
+    # Critical import order for hardware stability.
     import RPi.GPIO as GPIO
     import LCD_Config
     import LCD_1in44
@@ -31,35 +31,23 @@ except ImportError as e:
 # --- Global Variables & State Management ---
 # ============================================================================
 
-# Hardware objects initialized in the global scope
+# Hardware objects
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "SELECT": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
-GPIO.setmode(GPIO.BCM)
-for pin in PINS.values():
-    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+LCD, IMAGE, DRAW, FONT_TITLE, FONT = None, None, None, None, None
 
-LCD = LCD_1in44.LCD()
-LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-IMAGE = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
-DRAW = ImageDraw.Draw(IMAGE)
-try:
-    FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
-    FONT = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
-except IOError:
-    FONT_TITLE = ImageFont.load_default()
-    FONT = ImageFont.load_default()
-
-# State Machine and UI Globals
-IS_RUNNING = True
+# Global state machine
 APP_STATE = "menu"
-MENU_SELECTION = 0
-STATUS_MSG = "Ready"
-TARGET_SCROLL_OFFSET = 0
+IS_RUNNING = True
 
-# Wifite-specific Globals
+# UI and data state
+MENU_SELECTION = 0
 NETWORKS = []
 SCAN_PROCESS, ATTACK_PROCESS = None, None
 ATTACK_TARGET, CRACKED_PASSWORD = None, None
+STATUS_MSG = "Ready"
+TARGET_SCROLL_OFFSET = 0
+
+# Wifite Configuration
 CONFIG = {
     "interface": "wlan1mon", "attack_wpa": True, "attack_wps": True,
     "attack_pmkid": True, "power": 50, "channel": None, "clients_only": False
@@ -73,12 +61,10 @@ class Network:
 # ============================================================================
 
 def cleanup_handler(*_):
-    """Signal handler to ensure the main loop terminates cleanly."""
     global IS_RUNNING
     IS_RUNNING = False
 
 def get_interfaces():
-    """Returns a list of wireless network interfaces."""
     try:
         all_ifaces = os.listdir('/sys/class/net/')
         return [i for i in all_ifaces if i.startswith(('wlan', 'ath', 'ra'))] or ["wlan0mon"]
@@ -90,7 +76,6 @@ def get_interfaces():
 # ============================================================================
 
 def start_scan():
-    """Configures and starts the wifite scan process in a background thread."""
     global STATUS_MSG, NETWORKS, MENU_SELECTION, TARGET_SCROLL_OFFSET, SCAN_PROCESS, APP_STATE
     APP_STATE = "scanning"
     STATUS_MSG = "Starting..."; NETWORKS = []; MENU_SELECTION = 0; TARGET_SCROLL_OFFSET = 0
@@ -123,7 +108,6 @@ def start_scan():
     threading.Thread(target=scan_worker, daemon=True).start()
 
 def start_attack(network):
-    """Configures and starts the wifite attack process."""
     global APP_STATE, ATTACK_TARGET, CRACKED_PASSWORD, STATUS_MSG, ATTACK_PROCESS
     APP_STATE = "attacking"; ATTACK_TARGET = network; CRACKED_PASSWORD = None; STATUS_MSG = "Initializing..."
     
@@ -163,8 +147,29 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, cleanup_handler)
 
     try:
+        # --- Hardware Init ---
+        GPIO.setmode(GPIO.BCM)
+        for pin in PINS.values():
+            GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+        LCD = LCD_1in44.LCD()
+        LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+        WIDTH, HEIGHT = 128, 128
+        IMAGE = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
+        DRAW = ImageDraw.Draw(IMAGE)
+        
+        # --- Font Init (Memory Optimization) ---
+        # Load only one custom font and use the default for smaller text
+        # to reduce memory footprint on startup.
+        try:
+            FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
+        except IOError:
+            FONT_TITLE = ImageFont.load_default()
+        FONT = ImageFont.load_default()
+
+        # --- Main Loop ---
         while IS_RUNNING:
-            # 1. Read Input (simple, robust polling)
+            # 1. Read Input
             pressed_button: str | None = None
             for name, pin in PINS.items():
                 if GPIO.input(pin) == 0:
@@ -282,7 +287,7 @@ if __name__ == "__main__":
                     fill = "WHITE"; y_pos = 40 + i * 25
                     if i == MENU_SELECTION: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
                     if i == 0: value = f": {CONFIG['power']}"
-                    elif i == 1: value = f": {CONFIG['channel'] or 'All}'"
+                    elif i == 1: value = f": {CONFIG['channel'] or 'All'}"
                     else: value = f": {'On' if CONFIG['clients_only'] else 'Off'}"
                     DRAW.text(f"{option}{value}", (10, y_pos), font=FONT, fill=fill)
                 DRAW.text("LEFT for Back", (20, 110), font=FONT, fill="#888")
@@ -377,6 +382,6 @@ if __name__ == "__main__":
     finally:
         print("Cleaning up GPIO...")
         if HARDWARE_AVAILABLE:
-            try: LCD.LCD_Clear()
+            try: LCD.LCD_Clear() # type: ignore
             except: pass
             GPIO.cleanup()
