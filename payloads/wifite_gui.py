@@ -1,154 +1,190 @@
 #!/usr/bin/env python3
 """
-RaspyJack *payload* example – **Show Buttons**
-=============================================
-This script lives in the ``payloads/`` folder of the RaspyJack project.
-It demonstrates how to:
-
-1. **Read** the on‑board joystick (UP / DOWN / LEFT / RIGHT / OK) **and** the
-   three extra push‑buttons (KEY1 / KEY2 / KEY3) present on most Waveshare
-   1.44‑inch LCD HATs.
-2. **Display** the name of the button currently being pressed, centred on the
-   LCD in bright green text.
-3. **Exit cleanly** when:
-   * the user presses **KEY3** (bottom‑right button) – *new feature*;
-   * the user hits *Ctrl‑C* in the terminal;
-   * RaspyJack UI sends a *SIGTERM* signal when the payload is stopped from the
-     menu.
-
-The code is **heavily commented** so that an absolute Python beginner can read
-and understand every step.
+RaspyJack Payload: Wifite GUI
+=============================
+A graphical wrapper for Wifite to simplify wireless auditing on the RaspyJack.
 """
 
 # ---------------------------------------------------------------------------
 # 0) Make sure we can import local helper modules when launched directly
 # ---------------------------------------------------------------------------
 import os, sys
-# «…/Raspyjack/» is two directories up from this script. Add it to sys.path so
-# that `import LCD_1in44` works even when we run the script manually from
-# inside the “payloads” folder.
+# This line is required for the payload to find the Raspyjack libraries.
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
 # ---------------------------- Standard library ----------------------------
-import time           # sleep() for timing / debouncing
-import signal         # capture Ctrl‑C (SIGINT) & termination (SIGTERM)
-import sys            # print exceptions to stderr
+import time
+import signal
+import subprocess
+from threading import Thread
 
 # ----------------------------- Third‑party libs ---------------------------
-# These come pre‑installed on RaspyJack; on a vanilla Pi OS you’d need:
-#   sudo apt install python3-pil python3-rpi.gpio
-import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
-import LCD_1in44, LCD_Config          # Waveshare driver helpers for the LCD
-from PIL import Image, ImageDraw, ImageFont  # Pillow – draw text on images
-
-# ---------------------------------------------------------------------------
-# 1) GPIO pin mapping (BCM numbering) – tweak here if your wiring differs
-# ---------------------------------------------------------------------------
-# Keys are logical names, values are BCM GPIO numbers on the Pi header.
-# All buttons are **active‑LOW**: they read 0 V (logic 0) when pressed.
-PINS: dict[str, int] = {
-    "UP"   : 6,
-    "DOWN" : 19,
-    "LEFT" : 5,
-    "RIGHT": 26,
-    "OK"   : 13,   # joystick centre push
-    "KEY1" : 21,
-    "KEY2" : 20,
-    "KEY3" : 16,   # ← acts as «Back to menu»
-}
-
-# ---------------------------------------------------------------------------
-# 2) GPIO initialisation
-# ---------------------------------------------------------------------------
-GPIO.setmode(GPIO.BCM)  # use BCM numbers rather than physical pin numbers
-for pin in PINS.values():
-    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-# ---------------------------------------------------------------------------
-# 3) LCD initialisation
-# ---------------------------------------------------------------------------
-LCD = LCD_1in44.LCD()                     # create driver instance
-LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)      # default scan direction (portrait)
-WIDTH, HEIGHT = 128, 128                  # pixels
-font = ImageFont.load_default()           # tiny fixed‑width font
-
-# ---------------------------------------------------------------------------
-# 4) Helper: draw centred text on the LCD
-# ---------------------------------------------------------------------------
-
-def draw(text: str) -> None:
-    """Clear the screen and draw *text* centred in bright green."""
-    # 4.1 – create a black canvas
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
-
-    # 4.2 – measure text size (Pillow ≥ 9.2 offers textbbox())
-    if hasattr(d, "textbbox"):
-        x0, y0, x1, y1 = d.textbbox((0, 0), text, font=font)
-        w, h = x1 - x0, y1 - y0
-    else:  # Pillow < 9.2 fallback
-        w, h = d.textsize(text, font=font)
-
-    # 4.3 – centre coordinates
-    pos = ((WIDTH - w) // 2, (HEIGHT - h) // 2)
-
-    # 4.4 – draw the text and push the image to the LCD
-    d.text(pos, text, font=font, fill="#00FF00")
-    LCD.LCD_ShowImage(img, 0, 0)
-
-# ---------------------------------------------------------------------------
-# 5) Graceful shutdown – SIGINT/SIGTERM & KEY3
-# ---------------------------------------------------------------------------
-running = True  # global flag for the main loop
-
-
-def cleanup(*_):
-    """Signal handler: stop the main loop so `finally` can clean up."""
-    global running
-    running = False
-
-# Register handlers for Ctrl‑C and external termination
-signal.signal(signal.SIGINT, cleanup)
-signal.signal(signal.SIGTERM, cleanup)
-
-# ---------------------------------------------------------------------------
-# 6) Main loop – poll buttons & update display
-# ---------------------------------------------------------------------------
 try:
-    draw("Ready!")
+    import RPi.GPIO as GPIO
+    import LCD_Config
+    import LCD_1in44
+    from PIL import Image, ImageDraw, ImageFont
+    HARDWARE_AVAILABLE = True
+except ImportError:
+    print("FATAL: Hardware libraries not found.", file=sys.stderr)
+    HARDWARE_AVAILABLE = False
 
-    while running:
-        pressed: str | None = None  # name of the button currently pressed
+# ============================================================================
+# --- Global Variables & State Management ---
+# ============================================================================
 
-        # 6.1 – scan all buttons; break at the first active‑LOW pin
-        for name, pin in PINS.items():
-            if GPIO.input(pin) == 0:  # button pressed
-                pressed = name
-                break
+# Hardware objects
+PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "SELECT": 13, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+LCD, IMAGE, DRAW, FONT, SMALL_FONT = None, None, None, None, None
 
-        # 6.2 – act on the result
-        if pressed:
-            if pressed == "KEY3":  # ← user wants to go back to RaspyJack
-                running = False    # leave the main loop → exit script
-                break
+# Global state machine
+APP_STATE = "menu"
+IS_RUNNING = True
 
-            # display which button was pressed
-            draw(f"{pressed} pressed")
+# UI and data state
+MENU_SELECTION = 0
+STATUS_MESSAGE = ""
 
-            # wait until the same button is released (basic debouncing)
-            while GPIO.input(PINS[pressed]) == 0 and running:
-                time.sleep(0.05)
-        else:
-            # no button activity → small sleep to reduce CPU usage
+# ============================================================================
+# --- Core Hardware & Drawing Functions ---
+# ============================================================================
+
+def init_hardware():
+    """Initializes all hardware components."""
+    global LCD, IMAGE, DRAW, FONT, SMALL_FONT
+    if not HARDWARE_AVAILABLE: return
+    GPIO.setmode(GPIO.BCM)
+    for pin in PINS.values():
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    
+    LCD = LCD_1in44.LCD()
+    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    IMAGE = Image.new("RGB", (LCD.width, LCD.height), "BLACK")
+    DRAW = ImageDraw.Draw(IMAGE)
+    try:
+        FONT = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
+        SMALL_FONT = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+    except IOError:
+        FONT = ImageFont.load_default()
+        SMALL_FONT = ImageFont.load_default()
+    LCD.LCD_Clear()
+
+def get_pressed_button():
+    """Checks for a button press and returns its name, with debouncing."""
+    if not HARDWARE_AVAILABLE: return None
+    for name, pin in PINS.items():
+        if GPIO.input(pin) == GPIO.LOW:
             time.sleep(0.05)
+            if GPIO.input(pin) == GPIO.LOW:
+                return name
+    return None
 
-except Exception as exc:
-    # Log unexpected errors
-    print(f"[ERROR] {exc}", file=sys.stderr)
+def update_display():
+    """Pushes the virtual canvas to the actual LCD screen."""
+    if LCD: LCD.LCD_ShowImage(IMAGE)
 
-finally:
-    # -----------------------------------------------------------------------
-    # 7) Always executed: clear the screen and release GPIO resources
-    # -----------------------------------------------------------------------
-    LCD.LCD_Clear()   # avoid leaving ghost images on the display
-    GPIO.cleanup()    # reset all GPIO pins to a safe state
+def clear_screen():
+    """Wipes the virtual canvas clear."""
+    if DRAW: DRAW.rectangle([(0, 0), (128, 128)], fill="BLACK")
+
+# ============================================================================
+# --- UI Rendering Functions ---
+# ============================================================================
+
+def render_ui():
+    """Calls the appropriate rendering function based on the global APP_STATE."""
+    clear_screen()
+    if APP_STATE == "menu":
+        DRAW.text((28, 10), "Wifite GUI", font=FONT, fill="WHITE")
+        DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
+        # For now, only two options. Settings will be added next.
+        options = ["Start Scan", "Exit"]
+        for i, option in enumerate(options):
+            fill = "WHITE"; y_pos = 40 + i * 25
+            if i == MENU_SELECTION:
+                DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366")
+                fill = "#FFFF00"
+            DRAW.text((20, y_pos), option, font=FONT, fill=fill)
+
+    elif APP_STATE == "scanning": # Placeholder screen
+        DRAW.text((25, 40), "Scanning...", font=FONT, fill="WHITE")
+        DRAW.text("(Not Implemented)", font=SMALL_FONT, fill="YELLOW")
+        DRAW.text("Press LEFT to go back", (10, 110), font=SMALL_FONT, fill="#888")
+
+    update_display()
+
+# ============================================================================
+# --- Main Application Controller ---
+# ============================================================================
+
+def handle_input(button):
+    """Updates the application state based on button presses."""
+    global IS_RUNNING, APP_STATE, MENU_SELECTION
+
+    if button is None:
+        return
+
+    if APP_STATE == "menu":
+        if button == "SELECT":
+            if MENU_SELECTION == 0: # Start Scan
+                APP_STATE = "scanning" 
+            elif MENU_SELECTION == 1: # Exit
+                IS_RUNNING = False
+        elif button == "UP": MENU_SELECTION = (MENU_SELECTION - 1) % 2
+        elif button == "DOWN": MENU_SELECTION = (MENU_SELECTION + 1) % 2
+    
+    elif APP_STATE == "scanning":
+        if button == "LEFT":
+            APP_STATE = "menu"
+
+def main():
+    """The main entry point and state machine loop of the application."""
+    global IS_RUNNING
+    
+    init_hardware()
+
+    while IS_RUNNING:
+        button = get_pressed_button()
+        
+        # Global exit key
+        if button == "KEY3":
+            IS_RUNNING = False
+            continue
+        
+        handle_input(button)
+        render_ui()
+
+        if button:
+            while get_pressed_button() is not None: time.sleep(0.05)
+        time.sleep(0.05)
+
+# ============================================================================
+# --- Payload Execution Entry Point ---
+# ============================================================================
+
+if __name__ == "__main__":
+    def cleanup_handler(signum, frame):
+        global IS_RUNNING
+        print(f"Signal {signum} received. Shutting down.")
+        IS_RUNNING = False
+    
+    signal.signal(signal.SIGINT, cleanup_handler)
+    signal.signal(signal.SIGTERM, cleanup_handler)
+
+    try:
+        main()
+    except Exception as e:
+        # Log any unexpected errors for debugging
+        with open("/tmp/wifite_gui_error.log", "w") as f:
+            f.write(f"{type(e).__name__}: {e}\n")
+            import traceback
+            traceback.print_exc(file=f)
+    finally:
+        # Essential cleanup for returning control to Raspyjack cleanly.
+        print("Cleaning up GPIO...")
+        if HARDWARE_AVAILABLE:
+            try:
+                if LCD: LCD.LCD_Clear()
+            except:
+                pass
+            GPIO.cleanup()
