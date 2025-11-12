@@ -2,8 +2,9 @@
 """
 RaspyJack Payload: Wifite GUI
 =============================
-A graphical wrapper for Wifite, built using the definitive architecture
-from the working deauth.py payload.
+Final version. This payload is a direct structural clone of the working
+deauth.py and attack_ethernet_link_manipulator.py payloads, with all logic
+contained in a single main loop to ensure maximum compatibility.
 """
 
 import os
@@ -16,16 +17,8 @@ import threading
 # This path modification is required for payloads to find Raspyjack libraries.
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
-# This hardcoded path is used by other working WiFi payloads and is critical.
 try:
-    sys.path.append('/root/Raspyjack/wifi/')
-    from wifi.raspyjack_integration import get_available_interfaces
-    WIFI_INTEGRATION = True
-except ImportError:
-    WIFI_INTEGRATION = False
-
-try:
-    # Critical import order for hardware stability.
+    # This import order is critical for hardware stability.
     import RPi.GPIO as GPIO
     import LCD_Config
     import LCD_1in44
@@ -72,73 +65,49 @@ def cleanup_handler(*_):
     global IS_RUNNING
     IS_RUNNING = False
 
-def get_pressed_button():
-    for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            return name
-    return None
-
-def update_display():
-    if LCD: LCD.LCD_ShowImage(IMAGE)
-
-def draw_message(lines, duration=2):
-    DRAW.rectangle([(0,0), (128,128)], fill="BLACK")
-    y_pos = 20
-    for line in lines:
-        w, h = DRAW.textsize(line, font=FONT_TITLE)
-        DRAW.text(((128 - w) / 2, y_pos), line, font=FONT_TITLE, fill="YELLOW")
-        y_pos += h + 4
-    update_display()
-    time.sleep(duration)
-
 def get_wifi_interfaces():
-    if WIFI_INTEGRATION:
-        try:
-            return get_available_interfaces() or ["wlan1mon"]
-        except:
-            return ["wlan1mon"]
-    else:
-        # Fallback for testing
-        try:
-            all_ifaces = os.listdir('/sys/class/net/')
-            return [i for i in all_ifaces if i.startswith(('wlan', 'ath', 'ra'))] or ["wlan1mon"]
-        except FileNotFoundError:
-            return ["wlan1mon"]
+    try:
+        all_ifaces = os.listdir('/sys/class/net/')
+        return [i for i in all_ifaces if i.startswith(('wlan', 'ath', 'ra'))] or ["wlan0mon"]
+    except FileNotFoundError:
+        return ["wlan0mon"]
 
 def validate_setup():
-    """Checks if wifite is installed and a monitor interface is likely available."""
-    global STATUS_MSG
-    STATUS_MSG = "Checking tools..."
-    draw_ui()
+    global STATUS_MSG, CONFIG
+    DRAW.rectangle([(0,0),(128,128)], fill="BLACK")
+    DRAW.text((10, 40), "Checking tools...", font=FONT_TITLE, fill="WHITE")
+    LCD.LCD_ShowImage(IMAGE, 0, 0)
     if subprocess.run(["which", "wifite"], capture_output=True).returncode != 0:
-        STATUS_MSG = "wifite not found!"
-        draw_ui()
+        DRAW.rectangle([(0,0),(128,128)], fill="BLACK")
+        DRAW.text((10, 40), "wifite not found!", font=FONT_TITLE, fill="RED")
+        LCD.LCD_ShowImage(IMAGE, 0, 0)
         time.sleep(3)
         return False
     
-    STATUS_MSG = "Checking WiFi..."
-    draw_ui()
+    DRAW.rectangle([(0,0),(128,128)], fill="BLACK")
+    DRAW.text((10, 40), "Checking WiFi...", font=FONT_TITLE, fill="WHITE")
+    LCD.LCD_ShowImage(IMAGE, 0, 0)
     interfaces = get_wifi_interfaces()
-    # Prefer a monitor-mode interface if it already exists
     mon_ifaces = [i for i in interfaces if 'mon' in i]
-    if mon_ifaces:
-        CONFIG['interface'] = mon_ifaces[0]
-    elif interfaces:
-        CONFIG['interface'] = interfaces[0]
+    if mon_ifaces: CONFIG['interface'] = mon_ifaces[0]
+    elif interfaces: CONFIG['interface'] = interfaces[0]
     else:
-        STATUS_MSG = "No WiFi interfaces!"
-        draw_ui()
+        DRAW.rectangle([(0,0),(128,128)], fill="BLACK")
+        DRAW.text((10, 40), "No WiFi interfaces!", font=FONT_TITLE, fill="RED")
+        LCD.LCD_ShowImage(IMAGE, 0, 0)
         time.sleep(3)
         return False
     
-    STATUS_MSG = f"Using {CONFIG['interface']}"
-    draw_ui()
+    DRAW.rectangle([(0,0),(128,128)], fill="BLACK")
+    DRAW.text((10, 40), f"Using {CONFIG['interface']}", font=FONT_TITLE, fill="WHITE")
+    LCD.LCD_ShowImage(IMAGE, 0, 0)
     time.sleep(2)
     return True
 
 # ============================================================================
-# --- Wifite Process Functions (unchanged from previous version) ---
+# --- Wifite Process Functions ---
 # ============================================================================
+
 def start_scan():
     global STATUS_MSG, NETWORKS, MENU_SELECTION, TARGET_SCROLL_OFFSET, SCAN_PROCESS, APP_STATE
     APP_STATE = "scanning"; STATUS_MSG = "Starting..."; NETWORKS = []; MENU_SELECTION = 0; TARGET_SCROLL_OFFSET = 0
@@ -204,7 +173,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, cleanup_handler)
 
     try:
-        # --- Hardware & Sanity Checks ---
+        # --- Hardware Init ---
         GPIO.setmode(GPIO.BCM)
         for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         LCD = LCD_1in44.LCD(); LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
@@ -215,18 +184,27 @@ if __name__ == "__main__":
         FONT = ImageFont.load_default()
         
         if not validate_setup():
-            raise SystemExit("Setup validation failed.")
+            raise SystemExit()
 
         # --- Main Loop ---
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.2
         while IS_RUNNING:
-            # 1. Read Input (using the simple, working method)
-            pressed_button = get_pressed_button()
+            current_time = time.time()
+            pressed_button: str | None = None
+
+            # 1. Read Input with Time-based Debounce
+            if current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME:
+                for name, pin in PINS.items():
+                    if GPIO.input(pin) == 0:
+                        pressed_button = name
+                        last_button_press_time = current_time
+                        break
             
             # 2. Handle State & Input
             if pressed_button:
                 if pressed_button == "KEY3": IS_RUNNING = False; continue
                 
-                # --- State Machine Logic ---
                 if APP_STATE == "menu":
                     if pressed_button == "SELECT":
                         if MENU_SELECTION == 0: start_scan()
@@ -305,7 +283,6 @@ if __name__ == "__main__":
 
             # 3. Render UI
             DRAW.rectangle([(0,0), (WIDTH,HEIGHT)], fill="BLACK")
-            # This single block replaces all the individual render calls
             if APP_STATE == "menu":
                 DRAW.text((28, 10), "Wifite GUI", font=FONT_TITLE, fill="WHITE")
                 DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
@@ -352,7 +329,7 @@ if __name__ == "__main__":
             elif APP_STATE == "select_attack_types":
                 DRAW.text((25, 10), "Attack Types", font=FONT_TITLE, fill="WHITE")
                 DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                options = {"attack_wpa": "WPA (Handshake)", "attack_wps": "WPS (PIN Attack)", "attack_pmkid": "PMKID Attack"}
+                options = {"attack_wpa": "WPA", "attack_wps": "WPS", "attack_pmkid": "PMKID"}
                 for i, key in enumerate(options):
                     fill = "WHITE"; y_pos = 40 + i * 25
                     if i == MENU_SELECTION: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
@@ -414,12 +391,8 @@ if __name__ == "__main__":
 
             LCD.LCD_ShowImage(IMAGE, 0, 0)
 
-            # 4. Debounce by waiting for button release
-            if pressed_button:
-                while GPIO.input(PINS[pressed_button]) == 0:
-                    time.sleep(0.05)
-            else:
-                time.sleep(0.05)
+            # 4. Sleep
+            time.sleep(0.05)
 
     except Exception as e:
         with open("/tmp/wifite_gui_error.log", "w") as f:
