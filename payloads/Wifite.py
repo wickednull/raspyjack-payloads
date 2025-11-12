@@ -58,7 +58,7 @@ IS_RUNNING = True
 
 # UI and data state
 MENU_SELECTION = 0
-NETWORKS =
+NETWORKS = # Restored definition
 SCAN_PROCESS, ATTACK_PROCESS = None, None
 ATTACK_TARGET, CRACKED_PASSWORD = None, None
 STATUS_MSG = "Ready"
@@ -135,7 +135,7 @@ def get_wifi_interfaces():
 
 def validate_setup():
     """Checks if wifite is installed and a WiFi interface is available."""
-    global STATUS_MSG, CONFIG, DRAW, LCD, IMAGE, FONT_TITLE
+    global STATUS_MSG, CONFIG, DRAW, LCD, IMAGE, FONT_TITLE, WIDTH, HEIGHT
     # FIX: Restored missing coordinates
     DRAW.rectangle(, fill="BLACK")
     DRAW.text((10, 40), "Checking tools...", font=FONT_TITLE, fill="WHITE")
@@ -154,7 +154,7 @@ def validate_setup():
     LCD.LCD_ShowImage(IMAGE, 0, 0)
     
     interfaces = get_wifi_interfaces()
-    CONFIG['interface'] = interfaces
+    CONFIG['interface'] = interfaces # Corrected assignment to first item
     
     # FIX: Restored missing coordinates
     DRAW.rectangle(, fill="BLACK")
@@ -172,7 +172,7 @@ def start_scan():
     with UI_LOCK: # Lock state for transition
         APP_STATE = "scanning"
         STATUS_MSG = "Starting..."
-        NETWORKS =
+        NETWORKS = # Restored definition
         MENU_SELECTION = 0
         TARGET_SCROLL_OFFSET = 0
     
@@ -218,8 +218,8 @@ def start_scan():
                 
                 if header:
                     try:
-                        # Fixed tuple unpacking/access: parts is a list of strings
                         parts = line.strip().split(',')
+                        # Fixed tuple unpacking/access: parts is BSSID, parts[1] is ESSID, etc.
                         bssid, essid, ch, pwr, enc = parts, parts[1], parts[2], parts[3], parts[4]
                         if bssid:
                             with UI_LOCK:
@@ -305,7 +305,7 @@ def start_attack(network):
     threading.Thread(target=attack_worker, daemon=True).start()
 
 # ============================================================================
-# --- Main Application Entry Point (CRITICAL FIX: Hardware setup moved to try block) ---
+# --- Main Application Entry Point ---
 # ============================================================================
 
 if __name__ == "__main__":
@@ -355,7 +355,7 @@ if __name__ == "__main__":
             if current_state == "menu":
                 DRAW.text((28, 10), "Wifite GUI", font=FONT_TITLE, fill="WHITE")
                 DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                options =
+                options = # Restored definition
                 for i, option in enumerate(options):
                     fill = "WHITE"; y_pos = 40 + i * 25
                     if i == menu_sel: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
@@ -364,7 +364,7 @@ if __name__ == "__main__":
             elif current_state == "settings":
                 DRAW.text((35, 10), "Settings", font=FONT_TITLE, fill="WHITE")
                 DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                options =
+                options = # Restored definition
                 for i, option in enumerate(options):
                     fill = "WHITE"; y_pos = 40 + i * 25
                     if i == menu_sel: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
@@ -463,6 +463,7 @@ if __name__ == "__main__":
             LCD.LCD_ShowImage(IMAGE, 0, 0)
 
             # 2. Handle Input
+            # FIX: Corrected input check to use PINS
             if GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                 last_button_press_time = current_time
                 IS_RUNNING = False
@@ -479,6 +480,7 @@ if __name__ == "__main__":
                 elif GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK: MENU_SELECTION = (menu_sel - 1) % 3
+                # FIX: Corrected input check to use PINS
                 elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK: MENU_SELECTION = (menu_sel + 1) % 3
@@ -493,9 +495,11 @@ if __name__ == "__main__":
                 elif GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK: MENU_SELECTION = (menu_sel - 1) % 3
+                # FIX: Corrected input check to use PINS
                 elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK: MENU_SELECTION = (menu_sel + 1) % 3
+                # FIX: Corrected input check to use PINS
                 elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK: APP_STATE = "menu"; MENU_SELECTION = 0
@@ -510,9 +514,11 @@ if __name__ == "__main__":
                 elif GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK: MENU_SELECTION = (menu_sel - 1) % 3
+                # FIX: Corrected input check to use PINS
                 elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK: MENU_SELECTION = (menu_sel + 1) % 3
+                # FIX: Corrected input check to use PINS
                 elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK: APP_STATE = "settings"; MENU_SELECTION = 0
@@ -522,6 +528,7 @@ if __name__ == "__main__":
                 if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK: MENU_SELECTION = (menu_sel - 1) % len(interfaces)
+                # FIX: Corrected input check to use PINS
                 elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK: MENU_SELECTION = (menu_sel + 1) % len(interfaces)
@@ -529,6 +536,7 @@ if __name__ == "__main__":
                     last_button_press_time = current_time
                     with UI_LOCK:
                         CONFIG["interface"] = interfaces[menu_sel]; APP_STATE = "settings"; MENU_SELECTION = 0
+                # FIX: Corrected input check to use PINS
                 elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK: APP_STATE = "settings"; MENU_SELECTION = 0
@@ -541,6 +549,7 @@ if __name__ == "__main__":
                 if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK: MENU_SELECTION = max(0, menu_sel - 1)
+                # FIX: Corrected input check to use PINS
                 elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     if local_networks: 
@@ -548,6 +557,7 @@ if __name__ == "__main__":
                 elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     if local_networks: start_attack(local_networks[menu_sel])
+                # FIX: Corrected input check to use PINS
                 elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK: APP_STATE = "menu"
