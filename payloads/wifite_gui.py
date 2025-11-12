@@ -15,12 +15,15 @@ import json
 import subprocess
 import threading
 
-# This path modification is required for payloads to find Raspyjack libraries.
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Ensure RaspyJack root is on sys.path for local wifi.* imports
+BASE_DIR = os.path.dirname(__file__)
+sys.path.append(os.path.abspath(os.path.join(BASE_DIR, '..', '..')))
 
 # This hardcoded path is used by other working WiFi payloads.
 try:
-    sys.path.append('/root/Raspyjack/wifi/')
+    # Add Raspyjack root so `wifi.*` package resolves
+    if '/root/Raspyjack' not in sys.path:
+        sys.path.append('/root/Raspyjack')
     from wifi.raspyjack_integration import get_available_interfaces
     WIFI_INTEGRATION = True
 except ImportError:
@@ -147,32 +150,94 @@ def validate_setup():
 # ============================================================================
 # --- Wifite Process Functions ---
 # ============================================================================
+def _native_scan(interface: str):
+    """Scan WiFi networks using 'iw dev <iface> scan' and return Network list.
+    If interface is in monitor mode (endswith 'mon'), attempt scanning on the base iface.
+    """
+    networks = []
+    try:
+        scan_iface = interface[:-3] if interface.endswith('mon') else interface
+        proc = subprocess.run(["iw", "dev", scan_iface, "scan"], capture_output=True, text=True, timeout=45)
+        if proc.returncode != 0:
+            return networks
+        bssid = essid = None
+        channel = None
+        power = None
+        encryption = "?"
+        for raw in proc.stdout.splitlines():
+            line = raw.strip()
+            if line.startswith("BSS "):
+                # Flush previous BSS
+                if bssid:
+                    networks.append(Network(bssid, essid or "Hidden", str(channel or "?"), str(power or "?"), encryption))
+                # Start new BSS
+                parts = line.split()
+                bssid = parts[1] if len(parts) > 1 else None
+                essid = None; channel = None; power = None; encryption = "?"
+            elif line.startswith("SSID:"):
+                essid = line.split(":", 1)[1].strip()
+            elif line.startswith("primary channel:"):
+                try:
+                    channel = int(line.split(":", 1)[1].strip())
+                except: channel = None
+            elif line.startswith("DS Parameter set:") and "channel" in line:
+                try:
+                    channel = int(line.split("channel",1)[1].strip())
+                except: channel = None
+            elif line.startswith("signal:"):
+                # signal: -45.00 dBm
+                try:
+                    power = int(float(line.split()[1]))
+                except: power = None
+            elif line.startswith("RSN:") or line.startswith("WPA:"):
+                encryption = "WPA/WPA2"
+        if bssid:
+            networks.append(Network(bssid, essid or "Hidden", str(channel or "?"), str(power or "?"), encryption))
+    except Exception:
+        pass
+    return networks
+
+
 def start_scan():
     global STATUS_MSG, NETWORKS, MENU_SELECTION, TARGET_SCROLL_OFFSET, SCAN_PROCESS, APP_STATE
     APP_STATE = "scanning"; STATUS_MSG = "Starting..."; NETWORKS = []; MENU_SELECTION = 0; TARGET_SCROLL_OFFSET = 0
-    cmd = ["wifite", "--csv", "-i", CONFIG['interface'], '--power', str(CONFIG['power'])]
-    if not CONFIG['attack_wps']: cmd.append('--no-wps')
-    if not CONFIG['attack_wpa']: cmd.append('--no-wpa')
-    if not CONFIG['attack_pmkid']: cmd.append('--no-pmkid')
-    if CONFIG['channel']: cmd.extend(['-c', str(CONFIG['channel'])])
-    if CONFIG['clients_only']: cmd.append('--clients-only')
+
     def scan_worker():
-        global SCAN_PROCESS, STATUS_MSG, NETWORKS, APP_STATE
+        global STATUS_MSG, NETWORKS, APP_STATE
+        # Prefer native scan for reliability
+        STATUS_MSG = "Scanning (iw)..."
+        nets = _native_scan(CONFIG['interface'])
+        if nets:
+            NETWORKS = nets
+            APP_STATE = "targets"
+            return
+        # Fallback to wifite CSV if native scan failed
+        cmd = ["wifite", "--csv", "-i", CONFIG['interface'], '--power', str(CONFIG['power'])]
+        if not CONFIG['attack_wps']: cmd.append('--no-wps')
+        if not CONFIG['attack_wpa']: cmd.append('--no-wpa')
+        if not CONFIG['attack_pmkid']: cmd.append('--no-pmkid')
+        if CONFIG['channel']: cmd.extend(['-c', str(CONFIG['channel'])])
+        if CONFIG['clients_only']: cmd.append('--clients-only')
         try:
-            SCAN_PROCESS = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
             header = False
-            for line in iter(SCAN_PROCESS.stdout.readline, ''):
+            for line in iter(proc.stdout.readline, ''):
                 if not IS_RUNNING or APP_STATE != "scanning": break
-                if not header and "BSSID,ESSID" in line: header = True; STATUS_MSG = "Parsing..."; continue
+                if not header and "BSSID,ESSID" in line:
+                    header = True; STATUS_MSG = "Parsing..."; continue
                 if header:
                     try:
-                        parts = line.strip().split(','); bssid, essid, ch, pwr, enc = parts[0], parts[1], parts[2], parts[3], parts[4]
-                        if bssid and not any(n.bssid == bssid for n in NETWORKS):
-                            NETWORKS.append(Network(bssid, essid, ch, pwr, enc)); STATUS_MSG = f"Found: {len(NETWORKS)}"
-                    except Exception: continue
-            SCAN_PROCESS.wait()
-            if APP_STATE == "scanning": APP_STATE = "targets"
-        except Exception as e: STATUS_MSG = f"Error: {str(e)[:15]}"; time.sleep(2); APP_STATE = "menu"
+                        parts = line.strip().split(',')
+                        if len(parts) >= 5:
+                            bssid, essid, ch, pwr, enc = parts[0], parts[1], parts[2], parts[3], parts[4]
+                            if bssid and not any(n.bssid == bssid for n in NETWORKS):
+                                NETWORKS.append(Network(bssid, essid, ch, pwr, enc)); STATUS_MSG = f"Found: {len(NETWORKS)}"
+                    except Exception:
+                        continue
+            proc.wait()
+            if APP_STATE == "scanning": APP_STATE = "targets" if NETWORKS else "menu"
+        except Exception as e:
+            STATUS_MSG = f"Scan error"; time.sleep(2); APP_STATE = "menu"
     threading.Thread(target=scan_worker, daemon=True).start()
 
 def start_attack(network):
@@ -298,14 +363,14 @@ if __name__ == "__main__":
                 DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
                 DRAW.text((50, 50), f"{CONFIG['power']}", font=FONT_TITLE, fill="WHITE")
                 DRAW.text((10, 80), "Up/Down to change", font=FONT, fill="WHITE")
-                DRAW.text((20, 110), "LEFT for Back", font=FONT, fill="#888")
+                DRAW.text((20, 110), "OK=Confirm | LEFT=Back", font=FONT, fill="#888")
 
             elif APP_STATE == "select_channel":
                 DRAW.text((25, 10), "Set Channel", font=FONT_TITLE, fill="WHITE")
                 DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
                 DRAW.text((50, 50), f"{CONFIG['channel'] or 'All'}", font=FONT_TITLE, fill="WHITE")
                 DRAW.text((10, 80), "Up/Down to change", font=FONT, fill="WHITE")
-                DRAW.text((20, 95), "OK for 'All'", font=FONT, fill="WHITE")
+                DRAW.text((20, 95), "OK=Confirm 'All'", font=FONT, fill="WHITE")
                 DRAW.text((20, 110), "LEFT for Back", font=FONT, fill="#888")
 
             elif APP_STATE == "scanning":
@@ -400,6 +465,43 @@ if __name__ == "__main__":
                     last_button_press_time = current_time
                     APP_STATE = "settings"; MENU_SELECTION = 0
 
+            elif APP_STATE == "select_power":
+                if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    CONFIG["power"] = min(100, int(CONFIG["power"]) + 1)
+                elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    CONFIG["power"] = max(1, int(CONFIG["power"]) - 1)
+                elif GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    APP_STATE = "advanced_settings"
+                elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    APP_STATE = "advanced_settings"
+
+            elif APP_STATE == "select_channel":
+                if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    if CONFIG['channel'] is None:
+                        CONFIG['channel'] = 1
+                    else:
+                        CONFIG['channel'] = 1 if int(CONFIG['channel']) >= 13 else int(CONFIG['channel']) + 1
+                elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    if CONFIG['channel'] is None:
+                        CONFIG['channel'] = 1
+                    else:
+                        CONFIG['channel'] = 13 if int(CONFIG['channel']) <= 1 else int(CONFIG['channel']) - 1
+                elif GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    APP_STATE = "advanced_settings"
+                elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    # OK confirms current selection; set to None if 'All'
+                    if CONFIG['channel'] in ("All", None):
+                        CONFIG['channel'] = None
+                    APP_STATE = "advanced_settings"
+
             elif APP_STATE == "select_interface":
                 interfaces = get_wifi_interfaces()
                 if not interfaces:
@@ -419,6 +521,48 @@ if __name__ == "__main__":
                     elif GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                         last_button_press_time = current_time
                         APP_STATE = "settings"; MENU_SELECTION = 0
+
+            elif APP_STATE == "select_attack_types":
+                # Toggle WPA/WPS/PMKID
+                if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    MENU_SELECTION = (MENU_SELECTION - 1) % 3
+                elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    MENU_SELECTION = (MENU_SELECTION + 1) % 3
+                elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    key = ["attack_wpa", "attack_wps", "attack_pmkid"][MENU_SELECTION]
+                    CONFIG[key] = not CONFIG[key]
+                elif GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    APP_STATE = "settings"; MENU_SELECTION = 0
+
+            elif APP_STATE == "scanning":
+                # Allow cancel back to menu
+                if GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    STATUS_MSG = "Cancelled"
+                    APP_STATE = "menu"
+
+            elif APP_STATE == "attacking":
+                # Allow abort attack and return to targets
+                if GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    try:
+                        if ATTACK_PROCESS and ATTACK_PROCESS.poll() is None:
+                            ATTACK_PROCESS.terminate()
+                    except Exception:
+                        pass
+                    APP_STATE = "targets"
+
+            elif APP_STATE == "results":
+                # Any key returns to main menu
+                any_pressed = any(GPIO.input(pin) == 0 for pin in PINS.values())
+                if any_pressed and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    MENU_SELECTION = 0
+                    APP_STATE = "menu"
 
             elif APP_STATE == "targets":
                 if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):

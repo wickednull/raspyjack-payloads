@@ -79,7 +79,7 @@ except ImportError:
 PINS: dict[str, int] = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 try:
     import json
-    conf_path = os.path.join(RASPYJACK_DIR, 'gui_conf.json')
+    conf_path = 'gui_conf.json'
     with open(conf_path, 'r') as f:
         data = json.load(f)
     conf_pins = data.get("PINS", {})
@@ -411,7 +411,7 @@ dhcp-option=6,10.0.0.1
 server=8.8.8.8
 log-queries
 log-dhcp
-listen-address=127.0.0.1
+listen-address=10.0.0.1
 address=/#/10.0.0.1
 """
     with open(dnsmasq_conf_path, "w") as f:
@@ -624,6 +624,13 @@ if __name__ == "__main__":
         pass
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)
+        try:
+            with open("/tmp/evil_twin_error.log", "w") as f:
+                import traceback
+                f.write(f"FATAL ERROR: {type(e).__name__}: {e}\n")
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
         draw_message([f"ERROR:", f"{str(e)[:20]}"], "red")
         time.sleep(3)
     finally:

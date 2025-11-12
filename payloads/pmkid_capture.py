@@ -26,7 +26,7 @@ import signal
 import subprocess
 import re
 import threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
 import RPi.GPIO as GPIO
 import LCD_Config
@@ -69,7 +69,7 @@ FONT = ImageFont.load_default()
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT_STATUS = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 10)
 
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
+RASPYJACK_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 # Prefer wlan1 explicitly if available; otherwise fall back to best WiFi
 try:
     interfaces = get_available_interfaces()

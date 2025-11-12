@@ -90,7 +90,7 @@ TARGET_BSSID = "00:11:22:33:44:55"
 TARGET_CHANNEL = "6"
 TARGET_ESSID = "MyHomeWiFi"
 SEND_DEAUTH = True
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
+RASPYJACK_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "Handshakes")
 
 # Load PINS from RaspyJack gui_conf.json
@@ -500,6 +500,17 @@ if __name__ == '__main__':
 
     except (KeyboardInterrupt, SystemExit):
         pass
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        try:
+            with open("/tmp/wifi_handshake_capture_error.log", "w") as f:
+                import traceback
+                f.write(f"FATAL ERROR: {type(e).__name__}: {e}\n")
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
+        draw_message([f"ERROR:", f"{str(e)[:20]}"] , "red")
+        time.sleep(3)
     finally:
         cleanup()
         LCD.LCD_Clear()

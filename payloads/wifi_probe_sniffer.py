@@ -76,7 +76,7 @@ except ImportError:
 WIFI_INTERFACE = None
 ORIGINAL_WIFI_INTERFACE = None
 PROBES: dict[str, set[str]] = {}
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
+RASPYJACK_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "Probe_Sniffer")
 
 # Load PINS from RaspyJack gui_conf.json
@@ -381,6 +381,13 @@ if __name__ == "__main__":
         pass
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)
+        try:
+            with open("/tmp/wifi_probe_sniffer_error.log", "w") as f:
+                import traceback
+                f.write(f"FATAL ERROR: {type(e).__name__}: {e}\n")
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
         draw_message([f"ERROR:", f"{str(e)[:20]}"], "red")
         time.sleep(3)
     finally:
