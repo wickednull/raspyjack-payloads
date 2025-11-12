@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-RaspyJack Payload: Wifite GUI
-=============================
-Final version. This payload dynamically loads its button configuration from the
-Raspyjack gui_conf.json file to ensure compatibility. It is built using the
-definitive architecture from the project's known-working complex payloads.
+RaspyJack Payload: Wifite GUI (fixed, robust)
+- Fixed sys.path handling
+- Loads gui_conf.json from several likely locations
+- Uses airodump-ng for reliable CSV scan output (parsing like your deauth payload)
+- Adds UI_LOCK around shared state and LCD drawing
+- Robust font fallback
+- Proper cleanup and signal handling
+- Logs critical tracebacks to /tmp/wifite_gui_error.log
 """
 
 import os
@@ -15,109 +18,166 @@ import json
 import subprocess
 import threading
 import traceback
+import shutil
 
-# This path modification is required for payloads to find Raspyjack libraries.
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Make imports robust for RaspyJack layout:
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if BASE_DIR not in sys.path:
+    sys.path.append(BASE_DIR)
 
-# This hardcoded path is used by other working WiFi payloads.
+# try wifi integration path used by your other payloads
+WIFI_INTEGRATION = False
 try:
     sys.path.append('/root/Raspyjack/wifi/')
     from wifi.raspyjack_integration import get_available_interfaces
     WIFI_INTEGRATION = True
-except ImportError:
+except Exception:
     WIFI_INTEGRATION = False
 
-# Imports that might cause immediate crash (Kept outside main loop to allow error reporting)
+# Hardware libs (fail fast if missing)
 try:
-    # Critical import order for hardware stability.
     import RPi.GPIO as GPIO
-    import LCD_Config
-    import LCD_1in44
+    import LCD_1in44, LCD_Config
     from PIL import Image, ImageDraw, ImageFont
     HARDWARE_AVAILABLE = True
-except ImportError as e:
-    # Force error print to console if hardware libs fail immediately
+except Exception as e:
     print(f"FATAL: Hardware libraries not found: {e}", file=sys.stderr)
-    sys.exit(1)
+    HARDWARE_AVAILABLE = False
+    # Continue in degraded mode to surface errors when run outside hardware.
 
-# ============================================================================
-# --- Global Variables & State Management ---
-# ============================================================================
+# --------------------
+# Globals & defaults
+# --------------------
+UI_LOCK = threading.Lock()
 
-# Hardware objects (Initialized later in the try block)
-PINS = {} 
-LCD, IMAGE, DRAW, FONT_TITLE, FONT = None, None, None, None, None
-WIDTH, HEIGHT = 128, 128 # Define resolution globally
+# Default pins (will be overridden by gui_conf.json if present)
+PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 
-# FIX: Lock to prevent race conditions when the main loop and worker threads access shared variables.
-UI_LOCK = threading.Lock() 
+LCD = None
+IMAGE = None
+DRAW = None
+FONT_TITLE = None
+FONT = None
+WIDTH, HEIGHT = 128, 128
 
-# Global state machine
-APP_STATE = "menu"
+# App state
+APP_STATE = "menu"          # menu, scanning, targets, attacking, results, settings, etc.
 IS_RUNNING = True
-
-# UI and data state
 MENU_SELECTION = 0
-NETWORKS = # FIX: Restored definition
-SCAN_PROCESS, ATTACK_PROCESS = None, None
-ATTACK_TARGET, CRACKED_PASSWORD = None, None
-STATUS_MSG = "Ready"
+NETWORKS = []               # list of Network objects
 TARGET_SCROLL_OFFSET = 0
+SCAN_PROCESS = None
+ATTACK_PROCESS = None
+ATTACK_TARGET = None
+CRACKED_PASSWORD = None
+STATUS_MSG = "Ready"
 
-# Wifite Configuration
+# config
 CONFIG = {
-    "interface": "wlan1mon", "attack_wpa": True, "attack_wps": True,
-    "attack_pmkid": True, "power": 50, "channel": None, "clients_only": False
+    "interface": "wlan1mon",
+    "attack_wpa": True,
+    "attack_wps": True,
+    "attack_pmkid": True,
+    "power": 50,
+    "channel": None,
+    "clients_only": False,
+    "scan_timeout": 12
 }
+
+LOGFILE = "/tmp/wifite_gui.log"
+ERRFILE = "/tmp/wifite_gui_error.log"
+
 class Network:
     def __init__(self, bssid, essid, channel, power, encryption):
-        self.bssid, self.essid, self.channel, self.power, self.encryption = bssid, essid if essid else "Hidden", channel, power, encryption
+        self.bssid = bssid
+        self.essid = essid or "Hidden"
+        self.channel = channel
+        self.power = power
+        self.encryption = encryption
 
-# ============================================================================
-# --- Core & Helper Functions ---
-# ============================================================================
+# --------------------
+# Utilities
+# --------------------
+def log(msg):
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with open(LOGFILE, "a") as f:
+            f.write(f"[{ts}] {msg}\n")
+    except Exception:
+        pass
 
-def cleanup_handler(*_):
-    global IS_RUNNING, SCAN_PROCESS, ATTACK_PROCESS 
-    IS_RUNNING = False
-    if SCAN_PROCESS and SCAN_PROCESS.poll() is None:
-        SCAN_PROCESS.terminate()
-    if ATTACK_PROCESS and ATTACK_PROCESS.poll() is None:
-        ATTACK_PROCESS.terminate()
+def log_exc(e):
+    try:
+        with open(ERRFILE, "a") as f:
+            f.write(f"=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+            f.write(f"{type(e).__name__}: {e}\n")
+            traceback.print_exc(file=f)
+    except Exception:
+        pass
+
+def safe_subprocess_run(cmd, timeout=None):
+    """Run subprocess and return (returncode, stdout+stderr)."""
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, shell=False)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        return proc.returncode, out
+    except Exception as e:
+        log(f"Subprocess error: {e}")
+        return 1, str(e)
+
+def run_cmd_shell(cmd):
+    """Run a shell command string (legacy compatibility)."""
+    try:
+        return subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, text=True)
+    except subprocess.CalledProcessError as e:
+        return e.output
 
 def load_pin_config():
-    """Loads button pin mapping from the main Raspyjack config file."""
+    """Attempt to load gui_conf.json from multiple likely locations."""
     global PINS
-    # FIX: Use absolute path relative to script for robustness in root execution
-    config_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
-    config_file = os.path.join(config_dir, 'gui_conf.json') 
-    
-    default_pins = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
-    try:
-        # Check parent directory first, matching general Raspyjack config expectations
-        with open(config_file, 'r') as f: data = json.load(f)
-        conf_pins = data.get("PINS", {})
-        PINS = {
-            "UP": conf_pins.get("KEY_UP_PIN", 6), "DOWN": conf_pins.get("KEY_DOWN_PIN", 19),
-            "LEFT": conf_pins.get("KEY_LEFT_PIN", 5), "RIGHT": conf_pins.get("KEY_RIGHT_PIN", 26),
-            "OK": conf_pins.get("KEY_PRESS_PIN", 13),
-            "KEY1": conf_pins.get("KEY1_PIN", 21), "KEY2": conf_pins.get("KEY2_PIN", 20),
-            "KEY3": conf_pins.get("KEY3_PIN", 16),
-        }
-        print("Successfully loaded PINS from gui_conf.json")
-    except Exception as e:
-        print(f"WARNING: Could not load gui_conf.json: {e}. Using default pins.", file=sys.stderr)
-        PINS = default_pins
+    possible = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui_conf.json"),
+        "/root/Raspyjack/gui_conf.json",
+        "/root/gui_conf.json",
+    ]
+    loaded = False
+    for path in possible:
+        try:
+            if os.path.exists(path):
+                with open(path, "r") as fh:
+                    data = json.load(fh)
+                    conf_pins = data.get("PINS", {})
+                    PINS = {
+                        "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
+                        "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
+                        "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
+                        "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
+                        "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
+                        "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
+                        "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
+                        "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
+                    }
+                    log(f"Loaded PINS from {path}")
+                    loaded = True
+                    break
+        except Exception as e:
+            log(f"Failed reading {path}: {e}")
+            continue
+    if not loaded:
+        log("gui_conf.json not found; using default PINS")
 
 def get_pressed_button():
-    """Checks for the first pressed button and returns its name."""
+    """Return first pressed button or None."""
     for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            return name
+        try:
+            if GPIO.input(pin) == 0:
+                return name
+        except Exception:
+            return None
     return None
 
 def get_wifi_interfaces():
-    """Intelligently finds the best WiFi interface, preferring external dongles."""
+    """Return a list of plausible interfaces (prefer monitor suffix)."""
     if WIFI_INTEGRATION:
         try:
             interfaces = get_available_interfaces()
@@ -129,455 +189,593 @@ def get_wifi_interfaces():
     else:
         try:
             all_ifaces = os.listdir('/sys/class/net/')
-            return [i for i in all_ifaces if i.startswith(('wlan', 'ath', 'ra'))] or ["wlan0mon"]
-        except FileNotFoundError:
+            ifaces = [i for i in all_ifaces if i.startswith(('wlan', 'ath', 'ra'))]
+            if not ifaces:
+                return ["wlan0mon"]
+            return ifaces
+        except Exception:
             return ["wlan0mon"]
 
-def validate_setup():
-    """Checks if wifite is installed and a WiFi interface is available."""
-    global STATUS_MSG, CONFIG, DRAW, LCD, IMAGE, FONT_TITLE, WIDTH, HEIGHT
-    # FIX: Restored missing coordinates
-    DRAW.rectangle(,, fill="BLACK")
-    DRAW.text((10, 40), "Checking tools...", font=FONT_TITLE, fill="WHITE")
-    LCD.LCD_ShowImage(IMAGE, 0, 0)
-    if subprocess.run(["which", "wifite"], capture_output=True).returncode!= 0:
-        # FIX: Restored missing coordinates
-        DRAW.rectangle(,, fill="BLACK")
-        DRAW.text((10, 40), "wifite not found!", font=FONT_TITLE, fill="RED")
-        LCD.LCD_ShowImage(IMAGE, 0, 0)
-        time.sleep(3)
-        return False
-    
-    # FIX: Restored missing coordinates
-    DRAW.rectangle(,, fill="BLACK")
-    DRAW.text((10, 40), "Checking WiFi...", font=FONT_TITLE, fill="WHITE")
-    LCD.LCD_ShowImage(IMAGE, 0, 0)
-    
-    interfaces = get_wifi_interfaces()
-    CONFIG['interface'] = interfaces # Corrected assignment to first item
-    
-    # FIX: Restored missing coordinates
-    DRAW.rectangle(,, fill="BLACK")
-    DRAW.text((10, 40), f"Using {CONFIG['interface']}", font=FONT_TITLE, fill="WHITE")
-    LCD.LCD_ShowImage(IMAGE, 0, 0)
-    time.sleep(2)
-    return True
+# --------------------
+# LCD helpers
+# --------------------
+def init_lcd():
+    global LCD, IMAGE, DRAW, FONT_TITLE, FONT, WIDTH, HEIGHT
+    if not HARDWARE_AVAILABLE:
+        return
+    LCD = LCD_1in44.LCD()
+    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    WIDTH, HEIGHT = 128, 128
+    IMAGE = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
+    DRAW = ImageDraw.Draw(IMAGE)
+    try:
+        FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
+    except Exception:
+        FONT_TITLE = ImageFont.load_default()
+        log("Using default font for title")
+    FONT = ImageFont.load_default()
 
-# ============================================================================
-# --- Wifite Process Functions (No sudo, UI_LOCK applied) ---
-# ============================================================================
+def lcd_show_image():
+    """Draw current IMAGE to physical LCD holding UI_LOCK to avoid races."""
+    try:
+        if not HARDWARE_AVAILABLE:
+            return
+        with UI_LOCK:
+            LCD.LCD_ShowImage(IMAGE, 0, 0)
+    except Exception as e:
+        log(f"lcd_show_image error: {e}")
+
+def draw_message(lines, color="WHITE"):
+    """Centered message on screen."""
+    if not HARDWARE_AVAILABLE:
+        log("draw_message (no hardware): " + " | ".join(lines))
+        return
+    with UI_LOCK:
+        DRAW.rectangle([(0, 0), (WIDTH, HEIGHT)], fill="BLACK")
+        y_offset = (HEIGHT - len(lines) * 12) // 2
+        for ln in lines:
+            bbox = DRAW.textbbox((0,0), ln, font=FONT_TITLE)
+            w = bbox[2] - bbox[0]
+            x = (WIDTH - w) // 2
+            DRAW.text((x, y_offset), ln, font=FONT_TITLE, fill=color)
+            y_offset += 12
+        lcd_show_image()
+
+# --------------------
+# Scan & parse using airodump (reliable CSV)
+# --------------------
 def start_scan():
-    global STATUS_MSG, NETWORKS, MENU_SELECTION, TARGET_SCROLL_OFFSET, SCAN_PROCESS, APP_STATE
-    
-    with UI_LOCK: # Lock state for transition
+    """
+    Launch airodump-ng for CONFIG['scan_timeout'] seconds and parse CSV results.
+    Updates NETWORKS list and sets APP_STATE to 'targets' when done.
+    """
+    global SCAN_PROCESS, NETWORKS, APP_STATE, STATUS_MSG, TARGET_SCROLL_OFFSET
+    with UI_LOCK:
         APP_STATE = "scanning"
-        STATUS_MSG = "Starting..."
-        NETWORKS = # FIX: Restored definition
-        MENU_SELECTION = 0
+        STATUS_MSG = "Starting scan..."
+        NETWORKS = []
         TARGET_SCROLL_OFFSET = 0
-    
-    cmd = ["wifite", "--csv", "-i", CONFIG['interface'], '--power', str(CONFIG['power'])]
-    if not CONFIG['attack_wps']: cmd.append('--no-wps')
-    if not CONFIG['attack_wpa']: cmd.append('--no-wpa')
-    if not CONFIG['attack_pmkid']: cmd.append('--no-pmkid')
-    if CONFIG['channel']: cmd.extend(['-c', str(CONFIG['channel'])])
-    if CONFIG['clients_only']: cmd.append('--clients-only')
-    
+
+    iface = CONFIG.get("interface", "wlan1mon")
+    timeout_s = int(CONFIG.get("scan_timeout", 12))
+    out_prefix = "/tmp/wifite_scan"
+    # remove old files
+    try:
+        for f in [f"/tmp/wifite_scan-01.csv", "/tmp/wifite_scan-01.kismet.csv"]:
+            if os.path.exists(f):
+                os.remove(f)
+    except Exception:
+        pass
+
+    cmd = ["timeout", str(timeout_s), "airodump-ng", "--band", "abg", "--output-format", "csv", "-w", out_prefix, iface]
+    log(f"Starting airodump for {timeout_s}s on {iface}: {' '.join(cmd)}")
+
     def scan_worker():
-        global SCAN_PROCESS, STATUS_MSG, NETWORKS, APP_STATE
+        global SCAN_PROCESS, NETWORKS, APP_STATE, STATUS_MSG
         try:
-            SCAN_PROCESS = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
-            header = False
-            
-            time.sleep(1) 
-            if SCAN_PROCESS.poll() is not None:
+            # Spawn airodump-ng (shell not used)
+            SCAN_PROCESS = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            # monitor output for a short period (we also rely on CSV file)
+            start = time.time()
+            while time.time() - start < timeout_s + 2:
+                # update status line
                 with UI_LOCK:
-                    STATUS_MSG = f"Scan failed! Code: {SCAN_PROCESS.returncode}"
-                time.sleep(3)
-                with UI_LOCK:
-                    APP_STATE = "menu"
-                return
-            
-            for line in iter(SCAN_PROCESS.stdout.readline, ''):
-                with UI_LOCK:
-                    if not IS_RUNNING or APP_STATE!= "scanning": break
-                
-                if SCAN_PROCESS.poll() is not None:
-                    if SCAN_PROCESS.returncode!= 0:
-                        with UI_LOCK:
-                            STATUS_MSG = f"Scan failed. Code: {SCAN_PROCESS.returncode}"
-                        time.sleep(3)
-                        with UI_LOCK:
-                            APP_STATE = "menu"
-                        return
-                
-                if not header and "BSSID,ESSID" in line:
-                    header = True
-                    with UI_LOCK: STATUS_MSG = "Parsing..."
-                    continue
-                
-                if header:
-                    try:
-                        parts = line.strip().split(',')
-                        # Fixed tuple unpacking/access: parts is BSSID, parts[1] is ESSID, etc.
-                        bssid, essid, ch, pwr, enc = parts, parts[1], parts[2], parts[3], parts[4]
-                        if bssid:
-                            with UI_LOCK:
-                                if not any(n.bssid == bssid for n in NETWORKS):
-                                    NETWORKS.append(Network(bssid, essid, ch, pwr, enc))
-                                    STATUS_MSG = f"Found: {len(NETWORKS)}"
-                    except Exception: continue
-            
-            SCAN_PROCESS.wait()
+                    STATUS_MSG = f"Scanning ({int(max(0, timeout_s - (time.time() - start)))}s)"
+                time.sleep(0.25)
+                # allow early termination
+                if not IS_RUNNING or APP_STATE != "scanning":
+                    break
+
+            # ensure process gone
+            try:
+                SCAN_PROCESS.wait(timeout=1)
+            except Exception:
+                try:
+                    SCAN_PROCESS.terminate()
+                except Exception:
+                    pass
+
+            # Parse CSV
+            csv_path = "/tmp/wifite_scan-01.csv"
+            networks = []
+            if os.path.exists(csv_path):
+                try:
+                    with open(csv_path, "r", errors="ignore") as fh:
+                        content = fh.read()
+                    # Truncate trailing Station MAC section (like your deauth payload)
+                    if "Station MAC" in content:
+                        content = content.split("Station MAC")[0]
+                    lines = [l for l in content.splitlines() if l.strip()]
+                    bssid_idx = essid_idx = channel_idx = power_idx = enc_idx = -1
+                    header_found = False
+                    for line in lines:
+                        if not header_found and "BSSID" in line and "ESSID" in line:
+                            header_found = True
+                            parts = line.split(",")
+                            for i, p in enumerate(parts):
+                                p_low = p.lower()
+                                if "bssid" in p_low:
+                                    bssid_idx = i
+                                elif "essid" in p_low:
+                                    essid_idx = i
+                                elif "channel" in p_low:
+                                    channel_idx = i
+                                elif "power" in p_low or "signal" in p_low:
+                                    power_idx = i
+                                elif "encryption" in p_low or "enc" in p_low:
+                                    enc_idx = i
+                            continue
+                        if header_found:
+                            parts = line.split(",")
+                            # Safe access
+                            try:
+                                bssid = parts[bssid_idx].strip()
+                                essid = parts[essid_idx].strip().strip('"') if essid_idx >= 0 else ""
+                                ch = parts[channel_idx].strip() if channel_idx >= 0 else "?"
+                                pwr = parts[power_idx].strip() if power_idx >= 0 else "?"
+                                enc = parts[enc_idx].strip() if enc_idx >= 0 else ""
+                            except Exception:
+                                continue
+                            if bssid and ":" in bssid:
+                                networks.append(Network(bssid, essid, ch, pwr, enc))
+                except Exception as e:
+                    log(f"Error parsing csv: {e}")
+            else:
+                log("CSV scan file not found after airodump")
+
             with UI_LOCK:
-                if APP_STATE == "scanning": APP_STATE = "targets"
+                NETWORKS = networks
+                APP_STATE = "targets"
+                STATUS_MSG = f"Found {len(NETWORKS)}"
         except Exception as e:
+            log_exc(e)
             with UI_LOCK:
-                STATUS_MSG = f"Launch Error: {str(e)[:15]}"
-            time.sleep(2)
-            with UI_LOCK:
+                STATUS_MSG = f"Scan error"
                 APP_STATE = "menu"
-    
+
     threading.Thread(target=scan_worker, daemon=True).start()
 
+# --------------------
+# Attack (launch wifite if present) - non-blocking thread
+# --------------------
 def start_attack(network):
-    global APP_STATE, ATTACK_TARGET, CRACKED_PASSWORD, STATUS_MSG, ATTACK_PROCESS
-    
-    with UI_LOCK: # Lock state for transition
+    global ATTACK_PROCESS, APP_STATE, ATTACK_TARGET, CRACKED_PASSWORD, STATUS_MSG
+    if not network:
+        return
+    with UI_LOCK:
         APP_STATE = "attacking"
         ATTACK_TARGET = network
         CRACKED_PASSWORD = None
-        STATUS_MSG = "Initializing..."
-    
-    cmd = ["wifite", "--bssid", network.bssid, "-i", CONFIG['interface']]
-    if not CONFIG['attack_wps']: cmd.append('--no-wps')
-    if not CONFIG['attack_wpa']: cmd.append('--no-wpa')
-    if not CONFIG['attack_pmkid']: cmd.append('--no-pmkid')
-    if CONFIG['clients_only']: cmd.append('--clients-only')
-    
-    def attack_worker():
-        global ATTACK_PROCESS, STATUS_MSG, CRACKED_PASSWORD, APP_STATE
-        try:
-            ATTACK_PROCESS = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
-            
-            time.sleep(1) # Allow short time for immediate failure
-            if ATTACK_PROCESS.poll() is not None:
-                with UI_LOCK:
-                    STATUS_MSG = f"Attack failed! Code: {ATTACK_PROCESS.returncode}"
-                time.sleep(3)
-                with UI_LOCK:
-                    APP_STATE = "targets"
-                return
+        STATUS_MSG = "Starting attack..."
 
-            for line in iter(ATTACK_PROCESS.stdout.readline, ''):
+    # detect wifite
+    wifite_path = shutil.which("wifite")
+    if not wifite_path:
+        with UI_LOCK:
+            STATUS_MSG = "wifite not found"
+            APP_STATE = "targets"
+        return
+
+    cmd = [wifite_path, "-i", CONFIG.get("interface", "wlan1mon"), "--bssid", network.bssid]
+    # respect config toggles (simple)
+    if not CONFIG.get("attack_wps", True):
+        cmd.append("--no-wps")
+    if not CONFIG.get("attack_wpa", True):
+        cmd.append("--no-wpa")
+    if not CONFIG.get("attack_pmkid", True):
+        cmd.append("--no-pmkid")
+    if CONFIG.get("clients_only"):
+        cmd.append("--clients-only")
+
+    log(f"Launching wifite: {' '.join(cmd)}")
+
+    def attack_worker():
+        global ATTACK_PROCESS, CRACKED_PASSWORD, APP_STATE, STATUS_MSG
+        try:
+            ATTACK_PROCESS = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            start = time.time()
+            # stream output for status heuristics (look for keywords)
+            for line in iter(ATTACK_PROCESS.stdout.readline, ""):
+                if not line:
+                    break
+                l = line.lower()
                 with UI_LOCK:
-                    if not IS_RUNNING or APP_STATE!= "attacking": break
-                
-                if ATTACK_PROCESS.poll() is not None and ATTACK_PROCESS.returncode!= 0:
-                    with UI_LOCK:
-                        STATUS_MSG = f"Attack failed. Code: {ATTACK_PROCESS.returncode}"
-                    time.sleep(3)
-                    with UI_LOCK:
-                        APP_STATE = "targets"
-                    return
-                    
-                line_lower = line.lower()
-                with UI_LOCK: # Lock when updating status messages
-                    if "wps pin attack" in line_lower: STATUS_MSG = "WPS PIN Attack..."
-                    elif "wpa handshake" in line_lower: STATUS_MSG = "WPA Handshake Capture..."
-                    elif "pmkid attack" in line_lower: STATUS_MSG = "PMKID Attack..."
-                    elif "cracked" in line_lower:
-                        try: CRACKED_PASSWORD = line.split('"')[1]
-                        except IndexError: CRACKED_PASSWORD = "See logs"
+                    if "wps pin" in l: STATUS_MSG = "WPS PIN attack..."
+                    elif "wpa handshake" in l: STATUS_MSG = "WPA handshake..."
+                    elif "pmkid" in l: STATUS_MSG = "PMKID..."
+                    elif "cracked" in l:
+                        try:
+                            # attempt to extract quoted password if present
+                            CRACKED_PASSWORD = line.split('"')[1]
+                        except Exception:
+                            CRACKED_PASSWORD = "See logs"
                         break
-                    elif "failed" in line_lower: STATUS_MSG = "Attack failed."
-            
-            ATTACK_PROCESS.wait()
+                    elif "failed" in l: STATUS_MSG = "Attack failed"
+                # allow user to abort
+                with UI_LOCK:
+                    if not IS_RUNNING or APP_STATE != "attacking":
+                        break
+            # ensure process ends
+            try:
+                ATTACK_PROCESS.wait(timeout=2)
+            except Exception:
+                try:
+                    ATTACK_PROCESS.terminate()
+                except Exception:
+                    pass
             with UI_LOCK:
-                if APP_STATE == "attacking": APP_STATE = "results"
+                if CRACKED_PASSWORD:
+                    APP_STATE = "results"
+                else:
+                    if APP_STATE == "attacking":
+                        APP_STATE = "targets"
         except Exception as e:
+            log_exc(e)
             with UI_LOCK:
-                STATUS_MSG = f"Attack Error: {str(e)[:15]}"
-            time.sleep(2)
-            with UI_LOCK:
+                STATUS_MSG = "Attack error"
                 APP_STATE = "targets"
-    
+
     threading.Thread(target=attack_worker, daemon=True).start()
 
-# ============================================================================
-# --- Main Application Entry Point ---
-# ============================================================================
-
-if __name__ == "__main__":
-    signal.signal(signal.SIGINT, cleanup_handler)
-    signal.signal(signal.SIGTERM, cleanup_handler)
-
+def stop_scan_or_attack():
+    global SCAN_PROCESS, ATTACK_PROCESS, APP_STATE
     try:
-        # --- Init Hardware and Config ---
-        load_pin_config()
-        
-        # CRITICAL FIX: All hardware setup must be inside the try block for logging
-        GPIO.setmode(GPIO.BCM)
-        for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        LCD = LCD_1in44.LCD(); LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-        IMAGE = Image.new("RGB", (WIDTH, HEIGHT), "BLACK"); DRAW = ImageDraw.Draw(IMAGE)
-        
-        # Robust Font Initialization
-        try: 
-            FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
-        except IOError:
-            FONT_TITLE = ImageFont.load_default()
-            print("WARNING: DejaVuSans-Bold.ttf not found. Using default font.", file=sys.stderr)
-            
-        FONT = ImageFont.load_default()
-        
-        if not validate_setup():
-            raise SystemExit()
+        if SCAN_PROCESS and SCAN_PROCESS.poll() is None:
+            try: SCAN_PROCESS.terminate()
+            except: pass
+            SCAN_PROCESS = None
+        if ATTACK_PROCESS and ATTACK_PROCESS.poll() is None:
+            try: ATTACK_PROCESS.terminate()
+            except: pass
+            ATTACK_PROCESS = None
+    except Exception:
+        pass
+    with UI_LOCK:
+        APP_STATE = "menu"
 
-        # --- Main Loop ---
-        last_button_press_time = 0
-        BUTTON_DEBOUNCE_TIME = 0.25 # seconds
+# --------------------
+# Cleanup & Signals
+# --------------------
+def cleanup_handler(signum=None, frame=None):
+    global IS_RUNNING
+    IS_RUNNING = False
+    stop_scan_or_attack()
+    try:
+        # try to restore networking/processes as your other payloads do
+        run_cmd_shell("pkill -f wifite 2>/dev/null || true")
+        run_cmd_shell("pkill -f airodump-ng 2>/dev/null || true")
+    except Exception:
+        pass
+    try:
+        if HARDWARE_AVAILABLE:
+            with UI_LOCK:
+                LCD.LCD_Clear()
+    except Exception:
+        pass
+    try:
+        GPIO.cleanup()
+    except Exception:
+        pass
+    log("Cleanup complete")
+    # don't sys.exit here (caller will handle)
 
-        while IS_RUNNING:
+signal.signal(signal.SIGINT, cleanup_handler)
+signal.signal(signal.SIGTERM, cleanup_handler)
+
+# --------------------
+# UI render helpers
+# --------------------
+def draw_main_menu(menu_sel):
+    with UI_LOCK:
+        DRAW.rectangle([(0,0),(WIDTH,HEIGHT)], fill="BLACK")
+        DRAW.text((28, 10), "Wifite GUI", font=FONT_TITLE, fill="WHITE")
+        DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
+        options = ["Start Scan", "Settings", "Exit"]
+        for i, option in enumerate(options):
+            fill = "WHITE"
+            y_pos = 40 + i * 25
+            if i == menu_sel:
+                DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366")
+                fill = "#FFFF00"
+            DRAW.text((20, y_pos), option, font=FONT_TITLE, fill=fill)
+        lcd_show_image()
+
+def draw_scanning(status_msg):
+    with UI_LOCK:
+        DRAW.rectangle([(0,0),(WIDTH,HEIGHT)], fill="BLACK")
+        DRAW.text((25, 40), "Scanning...", font=FONT_TITLE, fill="WHITE")
+        if status_msg:
+            DRAW.text((10, 60), status_msg, font=FONT, fill="#00FF00")
+        DRAW.text((10, 110), "KEY3=Exit | LEFT=Back", font=FONT, fill="#888")
+        lcd_show_image()
+
+def draw_targets(menu_sel, scroll_offset):
+    with UI_LOCK:
+        DRAW.rectangle([(0,0),(WIDTH,HEIGHT)], fill="BLACK")
+        DRAW.text((20, 5), "Select Target", font=FONT_TITLE, fill="WHITE")
+        DRAW.line([(0, 22), (128, 22)], fill="#333", width=1)
+        local_networks = NETWORKS[:]
+        if not local_networks:
+            DRAW.text((10, 50), "No networks found.", font=FONT_TITLE, fill="WHITE")
+        else:
+            visible_items = 6
+            # ensure scroll_offset valid
+            if menu_sel < scroll_offset:
+                scroll_offset = menu_sel
+            if menu_sel >= scroll_offset + visible_items:
+                scroll_offset = menu_sel - visible_items + 1
+            y_base = 25
+            for i in range(scroll_offset, min(len(local_networks), scroll_offset + visible_items)):
+                network = local_networks[i]
+                display_y = y_base + (i - scroll_offset) * 16
+                fill = "WHITE"
+                if i == menu_sel:
+                    DRAW.rectangle([(0, display_y - 2), (128, display_y + 13)], fill="#003366")
+                    fill = "#FFFF00"
+                DRAW.text((5, display_y), network.essid[:14], font=FONT, fill=fill)
+                DRAW.text((90, display_y), f"{network.power}dBm", font=FONT, fill=fill)
+        lcd_show_image()
+        return scroll_offset
+
+def draw_attacking(attack_target, status_msg):
+    with UI_LOCK:
+        DRAW.rectangle([(0,0),(WIDTH,HEIGHT)], fill="BLACK")
+        if attack_target:
+            DRAW.text((5, 5), "Attacking:", font=FONT, fill="WHITE")
+            DRAW.text((5, 20), attack_target.essid[:18], font=FONT_TITLE, fill="#FF0000")
+            DRAW.line([(0, 38), (128, 38)], fill="#333", width=1)
+        if status_msg:
+            DRAW.text((5, 45), status_msg, font=FONT, fill="#00FF00")
+        DRAW.text((10, 110), "KEY3=Exit | LEFT=Back", font=FONT, fill="#888")
+        lcd_show_image()
+
+def draw_results(cracked_password):
+    with UI_LOCK:
+        DRAW.rectangle([(0,0),(WIDTH,HEIGHT)], fill="BLACK")
+        DRAW.text((40, 10), "Result", font=FONT_TITLE, fill="WHITE")
+        DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
+        if cracked_password:
+            DRAW.text((35, 40), "Success!", font=FONT_TITLE, fill="#00FF00")
+            DRAW.text((5, 60), "Password:", font=FONT, fill="WHITE")
+            DRAW.text((5, 75), cracked_password, font=FONT_TITLE, fill="#00FF00")
+        else:
+            DRAW.text((40, 40), "Failed", font=FONT_TITLE, fill="#FF0000")
+            DRAW.text((5, 60), "Could not crack network.", font=FONT, fill="WHITE")
+        DRAW.text((15, 110), "Press any key...", font=FONT, fill="#888")
+        lcd_show_image()
+
+# --------------------
+# Main
+# --------------------
+def main_loop():
+    global MENU_SELECTION, APP_STATE, IS_RUNNING, TARGET_SCROLL_OFFSET, NETWORKS, STATUS_MSG, MENU_SELECTION
+    last_button_press_time = 0
+    BUTTON_DEBOUNCE_TIME = 0.25
+
+    while IS_RUNNING:
+        try:
             current_time = time.time()
-            
-            # 1. Render UI based on current state FIRST
-            # FIX: Restored missing coordinates
-            DRAW.rectangle(,, fill="BLACK") 
-            
-            with UI_LOCK: 
+            with UI_LOCK:
                 current_state = APP_STATE
                 menu_sel = MENU_SELECTION
                 status_msg = STATUS_MSG
-                attack_target = ATTACK_TARGET
-                cracked_password = CRACKED_PASSWORD
-                
+                attack_t = ATTACK_TARGET
+                cracked_pw = CRACKED_PASSWORD
+
+            # Render UI per-state
             if current_state == "menu":
-                DRAW.text((28, 10), "Wifite GUI", font=FONT_TITLE, fill="WHITE")
-                DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                options = # FIX: Restored definition
-                for i, option in enumerate(options):
-                    fill = "WHITE"; y_pos = 40 + i * 25
-                    if i == menu_sel: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
-                    DRAW.text((20, y_pos), option, font=FONT_TITLE, fill=fill)
-            
+                draw_main_menu(menu_sel)
+            elif current_state == "scanning":
+                draw_scanning(status_msg)
+            elif current_state == "targets":
+                # compute scroll_offset and draw
+                TARGET_SCROLL_OFFSET = draw_targets(menu_sel, TARGET_SCROLL_OFFSET)
+            elif current_state == "attacking":
+                draw_attacking(attack_t, status_msg)
+            elif current_state == "results":
+                draw_results(cracked_pw)
             elif current_state == "settings":
-                DRAW.text((35, 10), "Settings", font=FONT_TITLE, fill="WHITE")
-                DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                options = # FIX: Restored definition
-                for i, option in enumerate(options):
-                    fill = "WHITE"; y_pos = 40 + i * 25
-                    if i == menu_sel: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
-                    value = f": {CONFIG['interface']}" if i == 0 else ""
-                    DRAW.text(f"{option}{value}", (10, y_pos), font=FONT, fill=fill)
-                DRAW.text("LEFT for Back", (20, 110), font=FONT, fill="#888")
+                # Minimal settings rendering
+                with UI_LOCK:
+                    DRAW.rectangle([(0,0),(WIDTH,HEIGHT)], fill="BLACK")
+                    DRAW.text((35, 10), "Settings", font=FONT_TITLE, fill="WHITE")
+                    DRAW.line([(10,30),(118,30)], fill="#333", width=1)
+                    DRAW.text((10, 45), f"Interface: {CONFIG.get('interface')}", font=FONT, fill="WHITE")
+                    DRAW.text((10, 60), f"Scan: {CONFIG.get('scan_timeout')}s", font=FONT, fill="WHITE")
+                    DRAW.text((10, 110), "LEFT Back", font=FONT, fill="#888")
+                    lcd_show_image()
 
-            elif current_state == "advanced_settings":
-                DRAW.text((10, 10), "Advanced", font=FONT_TITLE, fill="WHITE")
-                DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                options = ["Power", "Channel", "Clients Only"]
-                for i, option in enumerate(options):
-                    fill = "WHITE"; y_pos = 40 + i * 25
-                    if i == menu_sel: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
-                    if i == 0: value = f": {CONFIG['power']}"
-                    elif i == 1: value = f": {CONFIG['channel'] or 'All'}"
-                    else: value = f": {'On' if CONFIG['clients_only'] else 'Off'}"
-                    DRAW.text(f"{option}{value}", (10, y_pos), font=FONT, fill=fill)
-                DRAW.text("LEFT for Back", (20, 110), font=FONT, fill="#888")
+            # Input handling (debounced)
+            pressed = None
+            try:
+                pressed = get_pressed_button()
+            except Exception:
+                pressed = None
 
-            elif current_state == "select_interface":
-                DRAW.text((15, 10), "Interface", font=FONT_TITLE, fill="WHITE")
-                DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                interfaces = get_wifi_interfaces()
-                for i, iface in enumerate(interfaces):
-                    fill = "WHITE"; y_pos = 40 + i * 25
-                    if i == menu_sel: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
-                    DRAW.text(iface, (20, y_pos), font=FONT_TITLE, fill=fill)
-                DRAW.text("LEFT for Back", (20, 110), font=FONT, fill="#888")
+            if pressed == "KEY3" and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                last_button_press_time = current_time
+                # quick exit
+                IS_RUNNING = False
+                break
 
-            elif current_state == "select_attack_types":
-                DRAW.text((25, 10), "Attack Types", font=FONT_TITLE, fill="WHITE")
-                DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                options = {"attack_wpa": "WPA", "attack_wps": "WPS", "attack_pmkid": "PMKID"}
-                for i, key in enumerate(options):
-                    fill = "WHITE"; y_pos = 40 + i * 25
-                    if i == menu_sel: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
-                    status = "[x]" if CONFIG[key] else "[ ]"
-                    DRAW.text(f"{status} {options[key]}", (10, y_pos), font=FONT, fill=fill)
-                DRAW.text("LEFT for Back", (20, 110), font=FONT, fill="#888")
-
-            elif current_state == "select_power":
-                DRAW.text((30, 10), "Set Power", font=FONT_TITLE, fill="WHITE")
-                DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                DRAW.text(f"{CONFIG['power']}", (50, 50), font=FONT_TITLE, fill="WHITE")
-                DRAW.text("Up/Down to change", (10, 80), font=FONT, fill="WHITE")
-                DRAW.text("LEFT for Back", (20, 110), font=FONT, fill="#888")
-
-            elif current_state == "select_channel":
-                DRAW.text((25, 10), "Set Channel", font=FONT_TITLE, fill="WHITE")
-                DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                DRAW.text(f"{CONFIG['channel'] or 'All'}", (50, 50), font=FONT_TITLE, fill="WHITE")
-                DRAW.text("Up/Down to change", (10, 80), font=FONT, fill="WHITE")
-                DRAW.text("OK for 'All'", (20, 95), font=FONT, fill="WHITE")
-                DRAW.text("LEFT for Back", (20, 110), font=FONT, fill="#888")
+            # State machine input handling
+            if current_state == "menu":
+                if pressed == "OK" and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    if menu_sel == 0:
+                        start_scan()
+                    elif menu_sel == 1:
+                        with UI_LOCK:
+                            APP_STATE = "settings"; MENU_SELECTION = 0
+                    elif menu_sel == 2:
+                        IS_RUNNING = False
+                        break
+                elif pressed == "UP" and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    with UI_LOCK:
+                        MENU_SELECTION = (menu_sel - 1) % 3
+                elif pressed == "DOWN" and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    with UI_LOCK:
+                        MENU_SELECTION = (menu_sel + 1) % 3
 
             elif current_state == "scanning":
-                DRAW.text((25, 40), "Scanning...", font=FONT_TITLE, fill="WHITE")
-                if status_msg: DRAW.text((10, 60), status_msg, font=FONT, fill="#00FF00")
-                DRAW.text("KEY3=Exit | LEFT=Back", (10, 110), font=FONT, fill="#888")
+                if pressed == "LEFT" and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    with UI_LOCK:
+                        APP_STATE = "menu"
+                        MENU_SELECTION = 0
 
             elif current_state == "targets":
-                DRAW.text((20, 5), "Select Target", font=FONT_TITLE, fill="WHITE"); DRAW.line([(0, 22), (128, 22)], fill="#333", width=1)
-                with UI_LOCK: 
-                    local_networks = NETWORKS 
-                if not local_networks: DRAW.text((10, 50), "No networks found.", font=FONT_TITLE, fill="WHITE")
-                else:
-                    visible_items = 6
-                    if menu_sel < TARGET_SCROLL_OFFSET: TARGET_SCROLL_OFFSET = menu_sel
-                    if menu_sel >= TARGET_SCROLL_OFFSET + visible_items: TARGET_SCROLL_OFFSET = menu_sel - visible_items + 1
-                    for i in range(TARGET_SCROLL_OFFSET, TARGET_SCROLL_OFFSET + visible_items):
-                        if i >= len(local_networks): break
-                        network = local_networks[i]; display_y = 25 + (i - TARGET_SCROLL_OFFSET) * 16; fill = "WHITE"
-                        if i == menu_sel: DRAW.rectangle([(0, display_y - 2), (128, display_y + 13)], fill="#003366"); fill = "#FFFF00"
-                        DRAW.text(f"{network.essid[:14]}", (5, display_y), font=FONT, fill=fill)
-                        DRAW.text(f"{network.power}dBm", (90, display_y), font=FONT, fill=fill)
+                with UI_LOCK:
+                    local_len = len(NETWORKS)
+                    ms = MENU_SELECTION
+                if pressed == "UP" and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    with UI_LOCK:
+                        if local_len:
+                            MENU_SELECTION = max(0, ms - 1)
+                elif pressed == "DOWN" and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    with UI_LOCK:
+                        if local_len:
+                            MENU_SELECTION = min(local_len - 1, ms + 1)
+                elif pressed == "OK" and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    # launch attack on selection
+                    with UI_LOCK:
+                        if NETWORKS:
+                            sel = MENU_SELECTION
+                            try:
+                                start_attack(NETWORKS[sel])
+                            except Exception as e:
+                                log_exc(e)
+                elif pressed == "LEFT" and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    with UI_LOCK:
+                        APP_STATE = "menu"; MENU_SELECTION = 0
 
             elif current_state == "attacking":
-                if attack_target:
-                    DRAW.text("Attacking:", (5, 5), font=FONT, fill="WHITE")
-                    DRAW.text(attack_target.essid[:18], (5, 20), font=FONT_TITLE, fill="#FF0000"); DRAW.line([(0, 38), (128, 38)], fill="#333", width=1)
-                    if status_msg: DRAW.text(status_msg, (5, 45), font=FONT, fill="#00FF00")
-                DRAW.text("KEY3=Exit | LEFT=Back", (10, 110), font=FONT, fill="#888")
+                if pressed == "LEFT" and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    # stop current attack and return to targets
+                    stop_scan_or_attack()
+                    with UI_LOCK:
+                        APP_STATE = "targets"
+                elif pressed == "KEY2" and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    stop_scan_or_attack()
+                    with UI_LOCK:
+                        APP_STATE = "targets"
 
             elif current_state == "results":
-                DRAW.text("Result", (40, 10), font=FONT_TITLE, fill="WHITE"); DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                if cracked_password:
-                    DRAW.text("Success!", (35, 40), font=FONT_TITLE, fill="#00FF00")
-                    DRAW.text("Password:", (5, 60), font=FONT, fill="WHITE")
-                    DRAW.text(cracked_password, (5, 75), font=FONT_TITLE, fill="#00FF00")
-                else:
-                    DRAW.text("Failed", (40, 40), font=FONT_TITLE, fill="#FF0000")
-                    DRAW.text("Could not crack network.", (5, 60), font=FONT, fill="WHITE")
-                DRAW.text("Press any key...", (15, 110), font=FONT, fill="#888")
-
-            LCD.LCD_ShowImage(IMAGE, 0, 0)
-
-            # 2. Handle Input
-            # FIX: Corrected input check to use PINS
-            if GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                last_button_press_time = current_time
-                IS_RUNNING = False
-                continue
-
-            # --- State Machine Logic (writes to global state, must use lock) ---
-            if current_state == "menu":
-                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                if pressed and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
-                    if menu_sel == 0: start_scan()
-                    elif menu_sel == 1: 
-                        with UI_LOCK: APP_STATE = "settings"; MENU_SELECTION = 0
-                    elif menu_sel == 2: IS_RUNNING = False
-                elif GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK: MENU_SELECTION = (menu_sel - 1) % 3
-                # FIX: Corrected input check to use PINS
-                elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK: MENU_SELECTION = (menu_sel + 1) % 3
-            
+                    with UI_LOCK:
+                        APP_STATE = "menu"; MENU_SELECTION = 0
+
             elif current_state == "settings":
-                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                if pressed == "LEFT" and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     with UI_LOCK:
-                        if menu_sel == 0: APP_STATE = "select_interface"; MENU_SELECTION = 0
-                        elif menu_sel == 1: APP_STATE = "select_attack_types"; MENU_SELECTION = 0
-                        elif menu_sel == 2: APP_STATE = "advanced_settings"; MENU_SELECTION = 0
-                elif GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK: MENU_SELECTION = (menu_sel - 1) % 3
-                # FIX: Corrected input check to use PINS
-                elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK: MENU_SELECTION = (menu_sel + 1) % 3
-                # FIX: Corrected input check to use PINS
-                elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK: APP_STATE = "menu"; MENU_SELECTION = 0
+                        APP_STATE = "menu"; MENU_SELECTION = 1
 
-            elif current_state == "advanced_settings":
-                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK:
-                        if menu_sel == 0: APP_STATE = "select_power"
-                        elif menu_sel == 1: APP_STATE = "select_channel"
-                        elif menu_sel == 2: CONFIG["clients_only"] = not CONFIG["clients_only"]
-                elif GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK: MENU_SELECTION = (menu_sel - 1) % 3
-                # FIX: Corrected input check to use PINS
-                elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK: MENU_SELECTION = (menu_sel + 1) % 3
-                # FIX: Corrected input check to use PINS
-                elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK: APP_STATE = "settings"; MENU_SELECTION = 0
-
-            elif current_state == "select_interface":
-                interfaces = get_wifi_interfaces()
-                if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK: MENU_SELECTION = (menu_sel - 1) % len(interfaces)
-                # FIX: Corrected input check to use PINS
-                elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK: MENU_SELECTION = (menu_sel + 1) % len(interfaces)
-                elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK:
-                        CONFIG["interface"] = interfaces[menu_sel]; APP_STATE = "settings"; MENU_SELECTION = 0
-                # FIX: Corrected input check to use PINS
-                elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK: APP_STATE = "settings"; MENU_SELECTION = 0
-
-            elif current_state == "targets":
-                with UI_LOCK: 
-                    local_networks = NETWORKS
-                    menu_sel_limit = len(local_networks) - 1
-                
-                if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK: MENU_SELECTION = max(0, menu_sel - 1)
-                # FIX: Corrected input check to use PINS
-                elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    if local_networks: 
-                        with UI_LOCK: MENU_SELECTION = min(menu_sel_limit, menu_sel + 1)
-                elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    if local_networks: start_attack(local_networks[menu_sel])
-                # FIX: Corrected input check to use PINS
-                elif GPIO.input(PINS) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    with UI_LOCK: APP_STATE = "menu"
-            
-            # 4. Sleep
             time.sleep(0.05)
 
-    except SystemExit:
-        pass 
-    except Exception as e:
-        error_message = f"FATAL PYTHON ERROR: {type(e).__name__}: {e}\n"
-        # Force console output
-        sys.stderr.write(f"\nCRITICAL CRASH! {error_message} Traceback written to /tmp/wifite_gui_error.log\n")
-        
-        with open("/tmp/wifite_gui_error.log", "w") as f:
-            f.write(error_message)
-            traceback.print_exc(file=f)
-    finally:
-        print("Cleaning up GPIO...")
+        except Exception as e:
+            log_exc(e)
+            # try to recover to menu
+            with UI_LOCK:
+                APP_STATE = "menu"
+                STATUS_MSG = "Error - see logs"
+            time.sleep(1)
+
+# --------------------
+# Entrypoint
+# --------------------
+if __name__ == "__main__":
+    try:
+        # init
+        load_pin_config()
         if HARDWARE_AVAILABLE:
-            try: LCD.LCD_Clear()
-            except: pass
+            GPIO.setmode(GPIO.BCM)
+            for p in PINS.values():
+                try:
+                    GPIO.setup(p, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                except Exception:
+                    pass
+            init_lcd()
+            draw_message(["Wifite GUI", "Initializing..."])
+            time.sleep(1)
+        else:
+            print("WARNING: Hardware unavailable; running in degraded mode", file=sys.stderr)
+
+        # pick initial interface
+        if WIFI_INTEGRATION:
+            try:
+                ifaces = get_available_interfaces()
+                if ifaces:
+                    CONFIG['interface'] = ifaces[0]
+            except Exception:
+                pass
+        else:
+            # attempt to discover monitor-ish interface
+            ifaces = get_wifi_interfaces()
+            CONFIG['interface'] = ifaces[0] if ifaces else CONFIG['interface']
+
+        # quick validation: check airodump-ng and wifite presence
+        airodump_ok = (shutil.which("airodump-ng") is not None)
+        wifite_ok = (shutil.which("wifite") is not None)
+        if not airodump_ok:
+            draw_message(["airodump-ng missing", "Install aircrack-ng"], "RED")
+            time.sleep(3)
+        else:
+            log("airodump-ng found")
+        if not wifite_ok:
+            log("wifite not found; attacks via wifite will be disabled (must install)")
+
+        # Enter main loop
+        main_loop()
+
+    except SystemExit:
+        pass
+    except Exception as e:
+        # write fatal traceback
+        try:
+            with open(ERRFILE, "w") as f:
+                f.write(f"FATAL: {type(e).__name__}: {e}\n")
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
+    finally:
+        # cleanup
+        try:
+            if HARDWARE_AVAILABLE:
+                LCD.LCD_Clear()
+        except Exception:
+            pass
+        try:
             GPIO.cleanup()
+        except Exception:
+            pass
+        log("wifite_gui terminated")
