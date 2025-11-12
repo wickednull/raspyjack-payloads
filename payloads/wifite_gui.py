@@ -14,6 +14,8 @@ import signal
 import json
 import subprocess
 import threading
+import re
+import pty, fcntl
 
 # Ensure RaspyJack root is on sys.path for local wifi.* imports
 BASE_DIR = os.path.dirname(__file__)
@@ -60,6 +62,8 @@ ATTACK_TARGET, CRACKED_PASSWORD = None, None
 CAPTURED_TYPE, CAPTURED_FILE = None, None  # 'PMKID' or 'HANDSHAKE'
 STATUS_MSG = "Ready"
 TARGET_SCROLL_OFFSET = 0
+ATTACK_PID = None
+ANSI_RE = re.compile(r"\x1B\[[0-9;]*[A-Za-z]")
 
 # Wifite Configuration
 CONFIG = {
@@ -272,37 +276,80 @@ def start_attack(network):
         pass
 
     def attack_worker():
-        global ATTACK_PROCESS, STATUS_MSG, CRACKED_PASSWORD, CAPTURED_TYPE, CAPTURED_FILE, APP_STATE
+        global ATTACK_PROCESS, ATTACK_PID, STATUS_MSG, CRACKED_PASSWORD, CAPTURED_TYPE, CAPTURED_FILE, APP_STATE
         try:
-            ATTACK_PROCESS = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
-            for line in iter(ATTACK_PROCESS.stdout.readline, ''):
-                if not IS_RUNNING or APP_STATE != "attacking": break
-                line_lower = line.lower()
-                # Status hints
-                if "wps pin attack" in line_lower: STATUS_MSG = "WPS PIN Attack..."
-                elif "wpa handshake" in line_lower or ("handshake" in line_lower and "capture" in line_lower):
-                    STATUS_MSG = "WPA Handshake Capture..."
-                elif "pmkid" in line_lower and ("attack" in line_lower or "capture" in line_lower or "found" in line_lower):
-                    STATUS_MSG = "PMKID Attack..."
-                # Success signals
-                if "cracked" in line_lower:
-                    try:
-                        CRACKED_PASSWORD = line.split('"')[1]
-                    except IndexError:
-                        CRACKED_PASSWORD = "See logs"
-                if ("pmkid" in line_lower and ("found" in line_lower or "captured" in line_lower)):
-                    CAPTURED_TYPE = "PMKID"
-                if ("handshake" in line_lower and ("found" in line_lower or "captured" in line_lower)):
-                    CAPTURED_TYPE = "HANDSHAKE"
-                if "saved" in line_lower or "written" in line_lower:
-                    # try to extract a file path in quotes or after 'to'
-                    import re
-                    m = re.search(r'"([^"]+\.(?:pcap|pcapng|cap|hccapx|22000))"', line)
-                    if not m:
-                        m = re.search(r'\bto\s+([^\s]+\.(?:pcap|pcapng|cap|hccapx|22000))', line_lower)
-                    if m:
-                        CAPTURED_FILE = m.group(1)
-            ATTACK_PROCESS.wait()
+            # Run wifite in a PTY so we get CR-updated lines and colors like a real terminal
+            pid, master_fd = pty.fork()
+            if pid == 0:
+                os.execvp("wifite", cmd)
+                os._exit(1)
+            ATTACK_PID = pid
+            # Non-blocking reads
+            flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+            fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            log_path = "/tmp/wifite_gui_wifite.log"
+            try:
+                log_fp = open(log_path, "w")
+            except Exception:
+                log_fp = None
+            buf = ""
+            while IS_RUNNING and APP_STATE == "attacking":
+                try:
+                    data = os.read(master_fd, 1024)
+                    if not data:
+                        time.sleep(0.05)
+                        continue
+                    chunk = data.decode(errors="ignore")
+                except BlockingIOError:
+                    time.sleep(0.05)
+                    continue
+                if log_fp:
+                    try: log_fp.write(chunk)
+                    except Exception: pass
+                # Strip ANSI and split on both CR and LF
+                clean = ANSI_RE.sub("", chunk)
+                buf += clean
+                while True:
+                    idx_n = buf.find('\n')
+                    idx_r = buf.find('\r')
+                    idxs = [i for i in (idx_n, idx_r) if i != -1]
+                    if not idxs:
+                        break
+                    idx = min(idxs)
+                    line = buf[:idx]
+                    buf = buf[idx+1:]
+                    line_lower = line.lower()
+                    # Status hints
+                    if "wps pin" in line_lower: STATUS_MSG = "WPS PIN Attack..."
+                    elif "handshake" in line_lower and ("capture" in line_lower or "found" in line_lower):
+                        STATUS_MSG = "WPA Handshake Capture..."
+                    elif "pmkid" in line_lower and ("attack" in line_lower or "capture" in line_lower or "found" in line_lower):
+                        STATUS_MSG = "PMKID Attack..."
+                    # Success signals and heuristics
+                    if "cracked" in line_lower:
+                        try:
+                            CRACKED_PASSWORD = line.split('"')[1]
+                        except IndexError:
+                            CRACKED_PASSWORD = "See logs"
+                    if ("pmkid" in line_lower and ("found" in line_lower or "captured" in line_lower or "written" in line_lower)):
+                        CAPTURED_TYPE = "PMKID"
+                    if ("handshake" in line_lower and ("found" in line_lower or "captured" in line_lower or "written" in line_lower)):
+                        CAPTURED_TYPE = "HANDSHAKE"
+                    if re.search(r"\.(pcap|pcapng|cap|hccapx|22000)\b", line_lower):
+                        m = re.search(r'"([^"]+\.(?:pcap|pcapng|cap|hccapx|22000))"', line)
+                        if not m:
+                            m = re.search(r'\bto\s+([^\s]+\.(?:pcap|pcapng|cap|hccapx|22000))', line_lower)
+                        if not m:
+                            m = re.search(r'(\S+\.(?:pcap|pcapng|cap|hccapx|22000))', line_lower)
+                        if m:
+                            CAPTURED_FILE = m.group(1)
+                            if CAPTURED_TYPE is None:
+                                CAPTURED_TYPE = "PMKID" if CAPTURED_FILE.endswith('22000') else "HANDSHAKE"
+            # Child finished or we exited attacking state
+            try:
+                os.close(master_fd)
+            except Exception:
+                pass
             if APP_STATE == "attacking": APP_STATE = "results"
         except Exception as e:
             STATUS_MSG = f"Attack Error: {str(e)[:15]}"; time.sleep(2); APP_STATE = "targets"
@@ -598,6 +645,9 @@ if __name__ == "__main__":
                     try:
                         if ATTACK_PROCESS and ATTACK_PROCESS.poll() is None:
                             ATTACK_PROCESS.terminate()
+                        if ATTACK_PID:
+                            try: os.kill(ATTACK_PID, signal.SIGTERM)
+                            except Exception: pass
                     except Exception:
                         pass
                     APP_STATE = "targets"
