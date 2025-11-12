@@ -58,7 +58,7 @@ IS_RUNNING = True
 
 # UI and data state
 MENU_SELECTION = 0
-NETWORKS = # Restored definition
+NETWORKS = # FIX: Restored definition
 SCAN_PROCESS, ATTACK_PROCESS = None, None
 ATTACK_TARGET, CRACKED_PASSWORD = None, None
 STATUS_MSG = "Ready"
@@ -137,19 +137,19 @@ def validate_setup():
     """Checks if wifite is installed and a WiFi interface is available."""
     global STATUS_MSG, CONFIG, DRAW, LCD, IMAGE, FONT_TITLE, WIDTH, HEIGHT
     # FIX: Restored missing coordinates
-    DRAW.rectangle(, fill="BLACK")
+    DRAW.rectangle(,, fill="BLACK")
     DRAW.text((10, 40), "Checking tools...", font=FONT_TITLE, fill="WHITE")
     LCD.LCD_ShowImage(IMAGE, 0, 0)
     if subprocess.run(["which", "wifite"], capture_output=True).returncode!= 0:
         # FIX: Restored missing coordinates
-        DRAW.rectangle(, fill="BLACK")
+        DRAW.rectangle(,, fill="BLACK")
         DRAW.text((10, 40), "wifite not found!", font=FONT_TITLE, fill="RED")
         LCD.LCD_ShowImage(IMAGE, 0, 0)
         time.sleep(3)
         return False
     
     # FIX: Restored missing coordinates
-    DRAW.rectangle(, fill="BLACK")
+    DRAW.rectangle(,, fill="BLACK")
     DRAW.text((10, 40), "Checking WiFi...", font=FONT_TITLE, fill="WHITE")
     LCD.LCD_ShowImage(IMAGE, 0, 0)
     
@@ -157,7 +157,7 @@ def validate_setup():
     CONFIG['interface'] = interfaces # Corrected assignment to first item
     
     # FIX: Restored missing coordinates
-    DRAW.rectangle(, fill="BLACK")
+    DRAW.rectangle(,, fill="BLACK")
     DRAW.text((10, 40), f"Using {CONFIG['interface']}", font=FONT_TITLE, fill="WHITE")
     LCD.LCD_ShowImage(IMAGE, 0, 0)
     time.sleep(2)
@@ -172,7 +172,7 @@ def start_scan():
     with UI_LOCK: # Lock state for transition
         APP_STATE = "scanning"
         STATUS_MSG = "Starting..."
-        NETWORKS = # Restored definition
+        NETWORKS = # FIX: Restored definition
         MENU_SELECTION = 0
         TARGET_SCROLL_OFFSET = 0
     
@@ -313,7 +313,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, cleanup_handler)
 
     try:
-        # --- Init Hardware and Config (MOVED HERE) ---
+        # --- Init Hardware and Config ---
         load_pin_config()
         
         # CRITICAL FIX: All hardware setup must be inside the try block for logging
@@ -343,7 +343,7 @@ if __name__ == "__main__":
             
             # 1. Render UI based on current state FIRST
             # FIX: Restored missing coordinates
-            DRAW.rectangle(, fill="BLACK") 
+            DRAW.rectangle(,, fill="BLACK") 
             
             with UI_LOCK: 
                 current_state = APP_STATE
@@ -355,7 +355,7 @@ if __name__ == "__main__":
             if current_state == "menu":
                 DRAW.text((28, 10), "Wifite GUI", font=FONT_TITLE, fill="WHITE")
                 DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                options = # Restored definition
+                options = # FIX: Restored definition
                 for i, option in enumerate(options):
                     fill = "WHITE"; y_pos = 40 + i * 25
                     if i == menu_sel: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
@@ -364,7 +364,7 @@ if __name__ == "__main__":
             elif current_state == "settings":
                 DRAW.text((35, 10), "Settings", font=FONT_TITLE, fill="WHITE")
                 DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                options = # Restored definition
+                options = # FIX: Restored definition
                 for i, option in enumerate(options):
                     fill = "WHITE"; y_pos = 40 + i * 25
                     if i == menu_sel: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
