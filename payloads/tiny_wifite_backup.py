@@ -125,18 +125,9 @@ def set_terminal_font(size: int):
     except Exception:
         FONT_MONO = ImageFont.load_default()
     _tmp = Image.new("RGB", (10,10)); _d = ImageDraw.Draw(_tmp)
-    # Width based on textlength for accuracy; height from font metrics
-    try:
-        MONO_CHAR_W = max(1, int(_d.textlength("M", font=FONT_MONO)))
-    except Exception:
-        bbox = _d.textbbox((0,0), "M", font=FONT_MONO)
-        MONO_CHAR_W = max(1, bbox[2]-bbox[0])
-    try:
-        ascent, descent = FONT_MONO.getmetrics()
-        MONO_CHAR_H = max(1, ascent + descent + 1)  # +1 padding to prevent overlap
-    except Exception:
-        bbox = _d.textbbox((0,0), "M", font=FONT_MONO)
-        MONO_CHAR_H = max(1, (bbox[3]-bbox[1]) + 1)
+    bbox = _d.textbbox((0,0), "M", font=FONT_MONO)
+    MONO_CHAR_W = max(1, bbox[2]-bbox[0])
+    MONO_CHAR_H = max(1, bbox[3]-bbox[1])
     MONO_COLS = max(10, (WIDTH - 2) // MONO_CHAR_W)
     MONO_ROWS = max(4, (HEIGHT - 2) // MONO_CHAR_H)
 
@@ -154,35 +145,18 @@ MON_IFACE = None
 # LCD terminal buffer (like shell.py)
 scrollback = []  # type: list[str]
 current_line = ""
-STATUS_TEXT = ""
-CAPTURE_COUNT = 0
-START_TIME = None
-LAST_IMAGE = None
-HEADER_ROWS = 2
-
-def human_time(secs: int) -> str:
-    m, s = divmod(max(0, int(secs)), 60)
-    return f"{m:02d}:{s:02d}"
 
 def draw_buffer(lines: list[str], partial: str = ""):
-    global LAST_IMAGE
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
-    # Header bar (2 rows)
-    elapsed = human_time(time.time() - START_TIME) if START_TIME else "00:00"
-    header1 = f"wifite  iface:{WIFI_IFACE or '-'}  time:{elapsed}  caps:{CAPTURE_COUNT}"
-    header2 = STATUS_TEXT[:MONO_COLS]
-    d.text((0, 0), header1.ljust(MONO_COLS)[:MONO_COLS], font=FONT_MONO, fill="#AAAAFF")
-    d.text((0, MONO_CHAR_H), header2.ljust(MONO_COLS)[:MONO_COLS], font=FONT_MONO, fill="#CCCCCC")
-    # Content lines beneath header
-    visible_rows = MONO_ROWS - HEADER_ROWS
-    visible = lines[-(visible_rows-1):] + [partial]
-    y = MONO_CHAR_H * HEADER_ROWS
+    # show last MONO_ROWS-1 lines plus partial
+    visible = lines[-(MONO_ROWS-1):] + [partial]
+    y = 0
     for line in visible:
+        # pad/trim to columns
         d.text((0, y), line.ljust(MONO_COLS)[:MONO_COLS], font=FONT_MONO, fill=TERM_COLOR)
         y += MONO_CHAR_H
     LCD.LCD_ShowImage(img, 0, 0)
-    LAST_IMAGE = img
 
 def draw_message(lines, color="white"):
     if isinstance(lines, str):
@@ -229,32 +203,22 @@ def open_settings_menu():
         now = time.time()
         if GPIO.input(PINS['UP']) == 0 and now - last > 0.18:
             last = now; set_terminal_font(TERM_FONT_SIZE + 1); scrollback = []
-            while GPIO.input(PINS['UP']) == 0: time.sleep(0.05)
         elif GPIO.input(PINS['DOWN']) == 0 and now - last > 0.18:
             last = now; set_terminal_font(TERM_FONT_SIZE - 1); scrollback = []
-            while GPIO.input(PINS['DOWN']) == 0: time.sleep(0.05)
         elif GPIO.input(PINS['LEFT']) == 0 and now - last > 0.18:
             last = now; idx = (idx - 1) % len(COLORS)
-            while GPIO.input(PINS['LEFT']) == 0: time.sleep(0.05)
         elif GPIO.input(PINS['RIGHT']) == 0 and now - last > 0.18:
             last = now; idx = (idx + 1) % len(COLORS)
-            while GPIO.input(PINS['RIGHT']) == 0: time.sleep(0.05)
         elif GPIO.input(PINS['OK']) == 0 and now - last > 0.18:
-            last = now; TERM_COLOR = COLORS[idx]
-            while GPIO.input(PINS['OK']) == 0: time.sleep(0.05)
-            return
+            last = now; TERM_COLOR = COLORS[idx]; return
         elif GPIO.input(PINS['KEY3']) == 0 and now - last > 0.18:
-            last = now
-            while GPIO.input(PINS['KEY3']) == 0:
-                time.sleep(0.05)
-            return
+            last = now; return
         time.sleep(0.06)
 
 # Mirror capture files when lines show a saved filename
 CAP_RE = re.compile(r"(\S+\.(?:pcap|pcapng|cap|hccapx|22000))\b", re.I)
 
 def try_mirror_capture(line: str):
-    global CAPTURE_COUNT, STATUS_TEXT
     m = CAP_RE.search(line)
     if not m:
         return
@@ -265,9 +229,7 @@ def try_mirror_capture(line: str):
             dest = os.path.join(LOOT_DIR, base)
             if os.path.abspath(path) != os.path.abspath(dest):
                 shutil.copy2(path, dest)
-            CAPTURE_COUNT += 1
-            STATUS_TEXT = f"captured: {os.path.basename(dest)}"
-            wrap_print(f"[loot] mirrored -> {dest}")
+                wrap_print(f"[loot] mirrored -> {dest}")
     except Exception as e:
         wrap_print(f"[loot] mirror failed: {e}")
 
@@ -296,8 +258,6 @@ def btn_sender(master_fd: int):
                 os.write(master_fd, fired)
             except OSError:
                 pass
-            # simple wait for release to avoid repeats
-            time.sleep(0.05)
         time.sleep(0.03)
 
 # PTY reader → print output, wrap, mirror loot
@@ -320,16 +280,6 @@ def pty_reader(master_fd: int):
                         s = line.decode('utf-8', errors='replace')
                     except Exception:
                         s = str(line)
-                    # Update simple status from known tokens
-                    low = s.lower()
-                    if "wps pin" in low:
-                        STATUS_TEXT = "WPS PIN attack..."
-                    elif "handshake" in low and ("capture" in low or "found" in low):
-                        STATUS_TEXT = "WPA handshake capture..."
-                    elif "pmkid" in low and ("attack" in low or "capture" in low or "found" in low):
-                        STATUS_TEXT = "PMKID attack..."
-                    elif "cracked" in low:
-                        STATUS_TEXT = "CRACKED!"
                     try_mirror_capture(s)
                     wrap_print(s)
             except OSError:
@@ -364,17 +314,6 @@ if __name__ == '__main__':
 
         # Interface selection on LCD
         options = [i for i in get_available_interfaces() if i.startswith('wlan')]
-        # Load saved settings if present
-        try:
-            st_file = os.path.join(LOOT_DIR, 'tiny_wifite_settings.json')
-            if os.path.exists(st_file):
-                import json as _json
-                with open(st_file, 'r') as fp:
-                    st = _json.load(fp)
-                if 'font_size' in st: set_terminal_font(int(st['font_size']))
-                if 'color' in st: TERM_COLOR = st['color']
-        except Exception:
-            pass
         if 'wlan1' in options:
             options.remove('wlan1'); options.insert(0, 'wlan1')
         if not options:
@@ -403,20 +342,14 @@ if __name__ == '__main__':
             now = time.time()
             if GPIO.input(PINS['UP']) == 0 and now - last > 0.2:
                 last = now; sel = (sel - 1) % len(options)
-                while GPIO.input(PINS['UP']) == 0: time.sleep(0.05)
             elif GPIO.input(PINS['DOWN']) == 0 and now - last > 0.2:
                 last = now; sel = (sel + 1) % len(options)
-                while GPIO.input(PINS['DOWN']) == 0: time.sleep(0.05)
             elif GPIO.input(PINS['OK']) == 0 and now - last > 0.2:
-                last = now; WIFI_IFACE = options[sel]
-                while GPIO.input(PINS['OK']) == 0: time.sleep(0.05)
-                break
+                last = now; WIFI_IFACE = options[sel]; break
             elif GPIO.input(PINS['LEFT']) == 0 and now - last > 0.2:
-                while GPIO.input(PINS['LEFT']) == 0: time.sleep(0.05)
                 cleanup(); LCD.LCD_Clear(); GPIO.cleanup(); sys.exit(0)
             elif GPIO.input(PINS['KEY1']) == 0 and now - last > 0.2:
                 last = now; open_settings_menu()
-                while GPIO.input(PINS['KEY1']) == 0: time.sleep(0.05)
             time.sleep(0.06)
 
         # Enable monitor mode before launching wifite
@@ -426,9 +359,6 @@ if __name__ == '__main__':
             draw_message(["Monitor mode failed"], "red"); time.sleep(3)
             sys.exit(1)
         time.sleep(0.3)
-        # Start elapsed timer
-        START_TIME = time.time()
-        STATUS_TEXT = "Running..."
 
         # Launch wifite under a PTY (real TTY behaviour)
         master_fd, slave_fd = pty.openpty()
@@ -457,9 +387,8 @@ if __name__ == '__main__':
         t_btns = threading.Thread(target=btn_sender, args=(master_fd,), daemon=True)
         t_reader.start(); t_btns.start()
 
-        # Wait for child to exit, allow double-KEY3 to force kill
+        # Wait for child to exit
         exited_pid = None
-        key3_first_time = 0.0
         while RUN:
             try:
                 exited_pid, status = os.waitpid(pid, os.WNOHANG)
@@ -467,43 +396,12 @@ if __name__ == '__main__':
                     break
             except ChildProcessError:
                 break
-            # Force kill logic
-            nowt = time.time()
-            if GPIO.input(PINS['KEY3']) == 0:
-                if nowt - key3_first_time < 1.2 and key3_first_time != 0.0:
-                    try:
-                        os.killpg(os.getpgid(pid), signal.SIGKILL)
-                    except Exception:
-                        pass
-                    break
-                else:
-                    key3_first_time = nowt
-                    try:
-                        os.killpg(os.getpgid(pid), signal.SIGINT)
-                    except Exception:
-                        pass
-                    while GPIO.input(PINS['KEY3']) == 0:
-                        time.sleep(0.05)
             time.sleep(0.2)
         RUN = False
-        # Save settings on exit
-        try:
-            import json as _json
-            with open(os.path.join(LOOT_DIR, 'tiny_wifite_settings.json'), 'w') as fp:
-                _json.dump({"font_size": TERM_FONT_SIZE, "color": TERM_COLOR}, fp)
-        except Exception:
-            pass
         t_reader.join(timeout=1.0)
         t_btns.join(timeout=1.0)
         try:
             os.close(master_fd)
-        except Exception:
-            pass
-        # Save final screenshot to loot
-        try:
-            if LAST_IMAGE is not None:
-                ts = time.strftime('%Y%m%d_%H%M%S')
-                LAST_IMAGE.save(os.path.join(LOOT_DIR, f"tiny_wifite_{ts}.png"))
         except Exception:
             pass
 
