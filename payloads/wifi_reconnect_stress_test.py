@@ -23,6 +23,7 @@ import time
 import json
 import signal
 import threading
+import subprocess
 from collections import deque
 
 # RaspyJack pathing
@@ -155,16 +156,27 @@ def sniff_aps(timeout=6):
             return
         d = pkt[Dot11]
         bssid = d.addr3
-        sa = d.addr2
         # beacons/resp
         if pkt.type == 0 and pkt.subtype in (8,5):
             essid = None
+            chan = None
             try:
                 essid = pkt.info.decode(errors='ignore') if hasattr(pkt,'info') else None
             except Exception:
                 essid = None
+            # parse DS Parameter Set (channel)
+            try:
+                from scapy.layers.dot11 import Dot11Elt
+                elt = pkt.getlayer(Dot11Elt)
+                while elt is not None:
+                    if getattr(elt, 'ID', None) == 3 and elt.info:
+                        chan = int(elt.info[0])
+                        break
+                    elt = elt.payload.getlayer(Dot11Elt)
+            except Exception:
+                chan = None
             if bssid:
-                APS[bssid] = {"essid": essid or 'Hidden', "channel": None, "last": time.time()}
+                APS[bssid] = {"essid": essid or 'Hidden', "channel": chan, "last": time.time()}
     sniff(iface=MON_IFACE, prn=cb, store=0, timeout=timeout)
 
 CLIENTS_AP = set()
@@ -252,7 +264,8 @@ if __name__ == '__main__':
         sel=0; last=0
         while RUN:
             bssid, meta = ap_list[sel]
-            title = f"AP: {meta['essid'][:16]}"; sub=f"{bssid[-8:]}"
+            ch = meta.get('channel')
+            title = f"AP: {meta['essid'][:16]}"; sub=f"{bssid[-8:]} ch:{ch if ch else '?'}"
             draw([title, sub],["UP/DN=Select OK=Pick LEFT=Back"])
             now=time.time()
             if GPIO.input(PINS['UP'])==0 and now-last>db: last=now; sel=(sel-1)%len(ap_list)
@@ -261,12 +274,29 @@ if __name__ == '__main__':
                 last=now
                 TARGET_AP['bssid']=ap_list[sel][0]
                 TARGET_AP['essid']=ap_list[sel][1]['essid']
+                TARGET_AP['channel']=ap_list[sel][1].get('channel')
+                # try setting channel on monitor interface for reliability
+                try:
+                    if TARGET_AP['channel']:
+                        subprocess.run(['sudo','iw','dev', MON_IFACE, 'set', 'channel', str(TARGET_AP['channel'])], check=False)
+                except Exception:
+                    try:
+                        if TARGET_AP['channel']:
+                            subprocess.run(['sudo','iwconfig', MON_IFACE, 'channel', str(TARGET_AP['channel'])], check=False)
+                    except Exception:
+                        pass
                 break
             elif GPIO.input(PINS['LEFT'])==0 and now-last>db: sys.exit(0)
             time.sleep(0.05)
 
         # Discover clients for AP
         draw(["Discovering clients", TARGET_AP['essid'][:16]],["Please wait..."])
+        # ensure channel is set before client sniff
+        try:
+            if TARGET_AP.get('channel'):
+                subprocess.run(['sudo','iw','dev', MON_IFACE, 'set', 'channel', str(TARGET_AP['channel'])], check=False)
+        except Exception:
+            pass
         sniff_clients_for_ap(TARGET_AP['bssid'], timeout=8)
         stas = list(CLIENTS_AP)
         if not stas:

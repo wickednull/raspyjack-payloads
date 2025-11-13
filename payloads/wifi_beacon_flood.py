@@ -35,10 +35,15 @@ import threading
 def is_root():
     return os.geteuid() == 0
 
-# Dynamically add Raspyjack path
-RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
-if RASPYJACK_PATH not in sys.path:
-    sys.path.append(RASPYJACK_PATH)
+# Prefer installed RaspyJack path; fallback to repo-relative
+PREFERRED_RASPYJACK = '/root/Raspyjack'
+if os.path.isdir(PREFERRED_RASPYJACK):
+    if PREFERRED_RASPYJACK not in sys.path:
+        sys.path.insert(0, PREFERRED_RASPYJACK)
+else:
+    RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+    if os.path.isdir(RASPYJACK_PATH) and RASPYJACK_PATH not in sys.path:
+        sys.path.insert(0, RASPYJACK_PATH)
 
 # ----------------------------
 # Third-party library imports 
@@ -60,7 +65,7 @@ except ImportError as e:
 # ----------------------------
 try:
     from wifi.raspyjack_integration import get_available_interfaces
-    from monitor_mode_helper import activate_monitor_mode, deactivate_monitor_mode
+    import monitor_mode_helper
     WIFI_INTEGRATION_AVAILABLE = True
 except ImportError:
     WIFI_INTEGRATION_AVAILABLE = False
@@ -81,20 +86,37 @@ BEACON_INTERVAL = 0.1
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY3": 16}
 try:
     import json
-    conf_path = 'gui_conf.json'
-    with open(conf_path, 'r') as f:
-        data = json.load(f)
-    conf_pins = data.get("PINS", {})
-    PINS = {
-        "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
-        "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
-        "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
-        "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
-        "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
-        "KEY1": conf_pins.get("KEY1_PIN", 21),
-        "KEY2": conf_pins.get("KEY2_PIN", 20),
-        "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
-    }
+    def _find_gui_conf():
+        candidates = [
+            os.path.join(os.getcwd(), 'gui_conf.json'),
+            os.path.join('/root/Raspyjack', 'gui_conf.json'),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Raspyjack', 'gui_conf.json'),
+        ]
+        for sp in sys.path:
+            try:
+                if sp and os.path.basename(sp) == 'Raspyjack':
+                    candidates.append(os.path.join(sp, 'gui_conf.json'))
+            except Exception:
+                pass
+        for p in candidates:
+            if os.path.exists(p):
+                return p
+        return None
+    conf_path = _find_gui_conf()
+    if conf_path:
+        with open(conf_path, 'r') as f:
+            data = json.load(f)
+        conf_pins = data.get("PINS", {})
+        PINS = {
+            "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
+            "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
+            "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
+            "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
+            "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
+            "KEY1": conf_pins.get("KEY1_PIN", 21),
+            "KEY2": conf_pins.get("KEY2_PIN", 20),
+            "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
+        }
 except Exception:
     pass
 GPIO.setmode(GPIO.BCM)
@@ -112,6 +134,12 @@ ui_lock = threading.Lock()
 status_msg = "Press OK to start"
 current_menu_selection = 0
 
+# Loot directory for simple session logs (prefer installed RaspyJack)
+BASE_DIR = os.path.dirname(__file__)
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(BASE_DIR, '..', '..'))
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'WiFi_Beacon_Flood')
+os.makedirs(LOOT_DIR, exist_ok=True)
+
 def cleanup(*_):
     global running, ORIGINAL_WIFI_INTERFACE # Added ORIGINAL_WIFI_INTERFACE to global
     running = False
@@ -120,7 +148,7 @@ def cleanup(*_):
     
     if WIFI_INTERFACE: # Check if monitor mode was ever activated
         print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE}...", file=sys.stderr)
-        success = deactivate_monitor_mode(WIFI_INTERFACE)
+        success = monitor_mode_helper.deactivate_monitor_mode(WIFI_INTERFACE)
         if success:
             print(f"Successfully deactivated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
         else:
@@ -209,7 +237,7 @@ def select_interface_menu():
             print(f"Attempting to activate monitor mode on {selected_iface}...", file=sys.stderr)
             
             ORIGINAL_WIFI_INTERFACE = selected_iface # Store original interface before activation
-            monitor_iface = activate_monitor_mode(selected_iface)
+            monitor_iface = monitor_mode_helper.activate_monitor_mode(selected_iface)
             if monitor_iface:
                 WIFI_INTERFACE = monitor_iface
                 draw_message([f"Monitor mode active", f"on {WIFI_INTERFACE}"], "lime")
@@ -229,6 +257,14 @@ def select_interface_menu():
 
 def beacon_flood():
     global status_msg
+    # Start a session log
+    ts = time.strftime('%Y-%m-%d_%H%M%S')
+    session_log = os.path.join(LOOT_DIR, f'beacon_flood_{ts}.log')
+    try:
+        with open(session_log, 'w') as f:
+            f.write(f'START {ts} iface={WIFI_INTERFACE} prefix={SSID_PREFIX} count={NUM_SSIDS}\n')
+    except Exception:
+        session_log = None
     
     if not WIFI_INTERFACE:
         with ui_lock:
@@ -263,6 +299,14 @@ def beacon_flood():
         with ui_lock:
             status_msg = f"Error: {e}"
         print(f"Error during beacon flood: {e}", file=sys.stderr)
+    finally:
+        # Mark end in session log
+        try:
+            if session_log:
+                with open(session_log, 'a') as f:
+                    f.write(f"END {time.strftime('%Y-%m-%d_%H%M%S')}\n")
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     if not is_root():

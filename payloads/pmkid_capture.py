@@ -26,6 +26,9 @@ import signal
 import subprocess
 import re
 import threading
+# Prefer installed RaspyJack first, then repo parent for helpers
+if os.path.isdir('/root/Raspyjack') and '/root/Raspyjack' not in sys.path:
+    sys.path.insert(0, '/root/Raspyjack')
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
 import RPi.GPIO as GPIO
@@ -42,20 +45,37 @@ import monitor_mode_helper
 PINS: dict[str, int] = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 try:
     import json
-    conf_path = 'gui_conf.json'
-    with open(conf_path, 'r') as f:
-        data = json.load(f)
-    conf_pins = data.get("PINS", {})
-    PINS = {
-        "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
-        "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
-        "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
-        "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
-        "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
-        "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
-        "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
-        "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
-    }
+    def _find_gui_conf():
+        candidates = [
+            os.path.join(os.getcwd(), 'gui_conf.json'),
+            os.path.join('/root/Raspyjack', 'gui_conf.json'),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Raspyjack', 'gui_conf.json'),
+        ]
+        for sp in sys.path:
+            try:
+                if sp and os.path.basename(sp) == 'Raspyjack':
+                    candidates.append(os.path.join(sp, 'gui_conf.json'))
+            except Exception:
+                pass
+        for p in candidates:
+            if os.path.exists(p):
+                return p
+        return None
+    conf_path = _find_gui_conf()
+    if conf_path:
+        with open(conf_path, 'r') as f:
+            data = json.load(f)
+        conf_pins = data.get("PINS", {})
+        PINS = {
+            "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
+            "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
+            "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
+            "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
+            "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
+            "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
+            "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
+            "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
+        }
 except Exception:
     pass
 GPIO.setmode(GPIO.BCM)
@@ -69,7 +89,7 @@ FONT = ImageFont.load_default()
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT_STATUS = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 10)
 
-RASPYJACK_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+RASPYJACK_DIR = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 # Prefer wlan1 explicitly if available; otherwise fall back to best WiFi
 try:
     interfaces = get_available_interfaces()
@@ -87,19 +107,30 @@ LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "PMKID")
 running = True
 attack_process = None
 status_lines = ["Waiting to start..."]
+SESSION_LOG = None
 
 def cleanup(*_):
-    global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
-    if running:
-        running = False
+    global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE, SESSION_LOG
+    running = False
+    try:
         if attack_process:
-            try:
-                os.kill(attack_process.pid, signal.SIGINT)
-            except ProcessLookupError:
-                pass
-        
-        if WIFI_INTERFACE: # Use WIFI_INTERFACE as it holds the current monitor interface
+            os.kill(attack_process.pid, signal.SIGINT)
+    except Exception:
+        pass
+    # Close session log
+    try:
+        if SESSION_LOG:
+            ts = time.strftime('%Y-%m-%d_%H%M%S')
+            with open(SESSION_LOG, 'a') as f:
+                f.write(f"END {ts}\n")
+    except Exception:
+        pass
+    # Deactivate monitor
+    try:
+        if WIFI_INTERFACE:
             monitor_mode_helper.deactivate_monitor_mode(WIFI_INTERFACE)
+    except Exception:
+        pass
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -112,6 +143,14 @@ def run_attack():
     os.makedirs(LOOT_DIR, exist_ok=True)
     timestamp = time.strftime("%Y-%m-%d_%H%M%S")
     output_file = os.path.join(LOOT_DIR, f"pmkid_{timestamp}.pcapng")
+    # Open session log
+    global SESSION_LOG
+    try:
+        SESSION_LOG = os.path.join(LOOT_DIR, f"session_{timestamp}.log")
+        with open(SESSION_LOG, 'w') as f:
+            f.write(f"START {timestamp} iface={WIFI_INTERFACE} file={os.path.basename(output_file)}\n")
+    except Exception:
+        SESSION_LOG = None
     
     command = [
         "hcxdumptool",
@@ -215,8 +254,11 @@ if __name__ == "__main__":
                         status_lines = ["Starting attack..."]
                         threading.Thread(target=run_attack, daemon=True).start()
                     else:
-                        if attack_process:
-                            os.kill(attack_process.pid, signal.SIGINT)
+                        try:
+                            if attack_process:
+                                os.kill(attack_process.pid, signal.SIGINT)
+                        except Exception:
+                            pass
                         status_lines = ["Stopping attack..."]
                     
                     button_pressed = True

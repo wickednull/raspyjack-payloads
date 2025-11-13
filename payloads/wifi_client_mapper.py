@@ -27,8 +27,9 @@ from collections import defaultdict, deque
 # RaspyJack pathing
 BASE_DIR = os.path.dirname(__file__)
 sys.path.append(os.path.abspath(os.path.join(BASE_DIR, '..', '..')))
-if '/root/Raspyjack' not in sys.path:
-    sys.path.append('/root/Raspyjack')
+# Prefer installed RaspyJack first
+if os.path.isdir('/root/Raspyjack') and '/root/Raspyjack' not in sys.path:
+    sys.path.insert(0, '/root/Raspyjack')
 
 # Hardware/UI imports (strict order)
 try:
@@ -134,7 +135,8 @@ CLIENTS = {}
 
 # Loot/logging
 LOGGING = False
-LOOT_DIR = os.path.join(os.path.abspath(os.path.join(BASE_DIR, '..', '..')), 'loot', 'WiFiClientMapper')
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(BASE_DIR, '..', '..'))
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'WiFiClientMapper')
 CURRENT_LOG = None
 
 # ---------------------------

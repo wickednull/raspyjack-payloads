@@ -57,7 +57,8 @@ if RASPYJACK_PATH not in sys.path:
 # ----------------------------
 try:
     import RPi.GPIO as GPIO
-    import LCD_1in44, LCD_Config
+    import LCD_Config
+    import LCD_1in44
     from PIL import Image, ImageDraw, ImageFont
 except ImportError:
     print("ERROR: Hardware libraries (RPi.GPIO, LCD, PIL) not found.", file=sys.stderr)
@@ -129,6 +130,11 @@ CAPTIVE_PORTAL_BASE_PATH = os.path.join(RASPYJACK_DIR, "DNSSpoof", "sites")
 CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, "wifi")
 LOOT_FILE = os.path.join(CAPTIVE_PORTAL_PATH, "loot.txt") # Changed to loot.txt
 TEMP_CONF_DIR = "/tmp/raspyjack_eviltwin/"
+# Ensure loot directory exists (for portal writes)
+try:
+    os.makedirs(os.path.dirname(LOOT_FILE), exist_ok=True)
+except Exception:
+    pass
 
 WIFI_INTERFACE = get_best_interface()
 FAKE_AP_SSID = "Free_WiFi"

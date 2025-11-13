@@ -50,10 +50,15 @@ import threading # Added threading import as it was missing
 def is_root():
     return os.geteuid() == 0
 
-# Dynamically add Raspyjack path
-RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
-if RASPYJACK_PATH not in sys.path:
-    sys.path.append(RASPYJACK_PATH)
+# Prefer installed RaspyJack path; fallback to repo-relative
+PREFERRED_RASPYJACK = '/root/Raspyjack'
+if os.path.isdir(PREFERRED_RASPYJACK):
+    if PREFERRED_RASPYJACK not in sys.path:
+        sys.path.insert(0, PREFERRED_RASPYJACK)
+else:
+    RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+    if os.path.isdir(RASPYJACK_PATH) and RASPYJACK_PATH not in sys.path:
+        sys.path.insert(0, RASPYJACK_PATH)
 
 # ----------------------------
 # Third-party library imports 
@@ -97,20 +102,37 @@ LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "Handshakes")
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 try:
     import json
-    conf_path = 'gui_conf.json'
-    with open(conf_path, 'r') as f:
-        data = json.load(f)
-    conf_pins = data.get("PINS", {})
-    PINS = {
-        "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
-        "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
-        "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
-        "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
-        "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
-        "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
-        "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
-        "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
-    }
+    def _find_gui_conf():
+        candidates = [
+            os.path.join(os.getcwd(), 'gui_conf.json'),
+            os.path.join('/root/Raspyjack', 'gui_conf.json'),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Raspyjack', 'gui_conf.json'),
+        ]
+        for sp in sys.path:
+            try:
+                if sp and os.path.basename(sp) == 'Raspyjack':
+                    candidates.append(os.path.join(sp, 'gui_conf.json'))
+            except Exception:
+                pass
+        for p in candidates:
+            if os.path.exists(p):
+                return p
+        return None
+    conf_path = _find_gui_conf()
+    if conf_path:
+        with open(conf_path, 'r') as f:
+            data = json.load(f)
+        conf_pins = data.get("PINS", {})
+        PINS = {
+            "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
+            "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
+            "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
+            "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
+            "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
+            "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
+            "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
+            "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
+        }
 except Exception:
     pass
 GPIO.setmode(GPIO.BCM)
@@ -123,7 +145,8 @@ FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bol
 FONT = ImageFont.load_default()
 
 running = True
-attack_thread = None
+attack_thread = None  # UI thread wrapper
+ATTACK_PROC = None     # subprocess running airodump
 status_msg = "Press OK to start"
 # wifi_manager = WiFiManager() # No longer needed for monitor mode
 
@@ -136,11 +159,13 @@ status_msg = "Press OK to start"
 # def _deactivate_monitor_mode(...): ...
 
 def cleanup(*_):
-    global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
+    global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE, ATTACK_PROC
     running = False
-    if attack_thread:
-        try: os.kill(attack_thread.pid, signal.SIGTERM) 
-        except: pass
+    try:
+        if ATTACK_PROC and ATTACK_PROC.poll() is None:
+            ATTACK_PROC.terminate()
+    except Exception:
+        pass
     
     if WIFI_INTERFACE: # Check if monitor mode was ever activated
         print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE}...", file=sys.stderr)
@@ -360,8 +385,8 @@ def run_attack():
     try:
         command = f"airodump-ng --bssid {TARGET_BSSID} -c {TARGET_CHANNEL} -w {output_prefix} {WIFI_INTERFACE}"
         
-        global attack_thread
-        attack_thread = subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        global ATTACK_PROC
+        ATTACK_PROC = subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         deauth_proc = None
         if SEND_DEAUTH:
@@ -386,8 +411,14 @@ def run_attack():
         status_msg = "Attack failed!"
         print(f"Airodump attack failed: {e}", file=sys.stderr)
     finally:
-        if attack_thread: attack_thread.terminate()
-        if deauth_proc: deauth_proc.terminate()
+        try:
+            if ATTACK_PROC: ATTACK_PROC.terminate()
+        except Exception:
+            pass
+        try:
+            if deauth_proc: deauth_proc.terminate()
+        except Exception:
+            pass
 
 def check_dependencies():
     """Check for required command-line tools."""
@@ -487,7 +518,8 @@ if __name__ == '__main__':
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 elif GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
-                    threading.Thread(target=run_attack, daemon=True).start()
+                    attack_thread = threading.Thread(target=run_attack, daemon=True)
+                    attack_thread.start()
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                     while status_msg not in ["Handshake captured!", "Timeout reached.", "Attack failed!"]:
                         if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):

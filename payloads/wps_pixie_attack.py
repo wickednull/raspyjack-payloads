@@ -13,10 +13,15 @@ import threading
 def is_root():
     return os.geteuid() == 0
 
-# Dynamically add Raspyjack path
-RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
-if RASPYJACK_PATH not in sys.path:
-    sys.path.append(RASPYJACK_PATH)
+# Prefer installed RaspyJack path; fallback to repo-relative
+PREFERRED_RASPYJACK = '/root/Raspyjack'
+if os.path.isdir(PREFERRED_RASPYJACK):
+    if PREFERRED_RASPYJACK not in sys.path:
+        sys.path.insert(0, PREFERRED_RASPYJACK)
+else:
+    RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+    if os.path.isdir(RASPYJACK_PATH) and RASPYJACK_PATH not in sys.path:
+        sys.path.insert(0, RASPYJACK_PATH)
 
 # ----------------------------
 # Third-party library imports 
@@ -51,20 +56,37 @@ except ImportError:
 PINS: dict[str, int] = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 try:
     import json
-    conf_path = 'gui_conf.json'
-    with open(conf_path, 'r') as f:
-        data = json.load(f)
-    conf_pins = data.get("PINS", {})
-    PINS = {
-        "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
-        "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
-        "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
-        "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
-        "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
-        "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
-        "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
-        "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
-    }
+    def _find_gui_conf():
+        candidates = [
+            os.path.join(os.getcwd(), 'gui_conf.json'),
+            os.path.join('/root/Raspyjack', 'gui_conf.json'),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Raspyjack', 'gui_conf.json'),
+        ]
+        for sp in sys.path:
+            try:
+                if sp and os.path.basename(sp) == 'Raspyjack':
+                    candidates.append(os.path.join(sp, 'gui_conf.json'))
+            except Exception:
+                pass
+        for p in candidates:
+            if os.path.exists(p):
+                return p
+        return None
+    conf_path = _find_gui_conf()
+    if conf_path:
+        with open(conf_path, 'r') as f:
+            data = json.load(f)
+        conf_pins = data.get("PINS", {})
+        PINS = {
+            "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
+            "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
+            "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
+            "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
+            "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
+            "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
+            "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
+            "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
+        }
 except Exception:
     pass
 GPIO.setmode(GPIO.BCM)
@@ -217,31 +239,67 @@ def select_interface_menu():
         time.sleep(0.1)
 
 def check_dependencies():
-    deps = ["reaver", "wash"]
+    deps = ["reaver", "wash", "iw"]
     for dep in deps:
-        if subprocess.run(f"which {dep}", shell=True, capture_output=True).returncode != 0:
+        if subprocess.run(["which", dep], capture_output=True).returncode != 0:
             return dep
     return None
 
 def scan_for_targets():
     draw_message("Scanning with wash...")
     targets = []
+    attempts = [
+        ["wash", "-i", WIFI_INTERFACE, "-j"],
+        ["wash", "-i", WIFI_INTERFACE, "--json"],
+    ]
     try:
-        proc = subprocess.Popen(f"wash -i {WIFI_INTERFACE} -j", shell=True, stdout=subprocess.PIPE, text=True)
-        time.sleep(10)
-        proc.terminate()
-        
-        for line in proc.stdout:
+        for cmd in attempts:
             try:
-                import json
-                data = json.loads(line)
-                if not data.get('is_locked'):
-                    targets.append({
-                        "bssid": data['bssid'],
-                        "essid": data['essid'],
-                        "channel": data['channel']
-                    })
-            except (json.JSONDecodeError, KeyError):
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    stdout, _ = proc.communicate(timeout=12)
+                except subprocess.TimeoutExpired:
+                    proc.terminate()
+                    try:
+                        stdout, _ = proc.communicate(timeout=2)
+                    except Exception:
+                        stdout = ""
+                if not stdout:
+                    continue
+                parsed = False
+                s = stdout.strip()
+                try:
+                    if s.startswith("["):
+                        import json
+                        arr = json.loads(s)
+                        for data in arr:
+                            bssid = data.get('bssid')
+                            essid = data.get('essid') or data.get('ssid') or 'Hidden'
+                            channel = data.get('channel')
+                            if bssid and channel:
+                                targets.append({"bssid": bssid, "essid": essid, "channel": channel})
+                        parsed = True
+                    else:
+                        for line in s.splitlines():
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                import json
+                                data = json.loads(line)
+                                bssid = data.get('bssid')
+                                essid = data.get('essid') or data.get('ssid') or 'Hidden'
+                                channel = data.get('channel')
+                                if bssid and channel:
+                                    targets.append({"bssid": bssid, "essid": essid, "channel": channel})
+                                parsed = True
+                            except Exception:
+                                continue
+                except Exception:
+                    parsed = False
+                if targets or parsed:
+                    break
+            except Exception:
                 continue
     except Exception as e:
         print(f"Wash scan failed: {e}", file=sys.stderr)

@@ -39,6 +39,9 @@ import time
 import signal
 import subprocess
 import threading
+# Prefer installed RaspyJack for imports, keep repo parent for local helper fallback
+if os.path.isdir('/root/Raspyjack') and '/root/Raspyjack' not in sys.path:
+    sys.path.insert(0, '/root/Raspyjack')
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))) # Add parent directory for monitor_mode_helper
 
@@ -55,26 +58,49 @@ import monitor_mode_helper
 WIFI_INTERFACE = None
 ORIGINAL_WIFI_INTERFACE = None
 TARGET_CLIENT_MAC = "AA:BB:CC:DD:EE:FF"
-LOOT_DIR = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')), "loot", "Handshakes")
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, "loot", "Handshakes")
+# Ensure loot directory exists
+try:
+    os.makedirs(LOOT_DIR, exist_ok=True)
+except Exception:
+    pass
 
 # Load PINS from RaspyJack gui_conf.json
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 try:
     import json
-    conf_path = 'gui_conf.json'
-    with open(conf_path, 'r') as f:
-        data = json.load(f)
-    conf_pins = data.get("PINS", {})
-    PINS = {
-        "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
-        "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
-        "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
-        "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
-        "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
-        "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
-        "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
-        "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
-    }
+    def _find_gui_conf():
+        candidates = [
+            os.path.join(os.getcwd(), 'gui_conf.json'),
+            os.path.join('/root/Raspyjack', 'gui_conf.json'),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Raspyjack', 'gui_conf.json'),
+        ]
+        for sp in sys.path:
+            try:
+                if sp and os.path.basename(sp) == 'Raspyjack':
+                    candidates.append(os.path.join(sp, 'gui_conf.json'))
+            except Exception:
+                pass
+        for p in candidates:
+            if os.path.exists(p):
+                return p
+        return None
+    conf_path = _find_gui_conf()
+    if conf_path:
+        with open(conf_path, 'r') as f:
+            data = json.load(f)
+        conf_pins = data.get("PINS", {})
+        PINS = {
+            "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
+            "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
+            "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
+            "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
+            "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
+            "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
+            "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
+            "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
+        }
 except Exception:
     pass
 GPIO.setmode(GPIO.BCM)
@@ -99,8 +125,13 @@ def cleanup(*_):
     global running, WIFI_INTERFACE, ORIGINAL_WIFI_INTERFACE
     running = False
     for proc in attack_procs.values():
-        try: os.kill(proc.pid, signal.SIGTERM) 
-        except: pass
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except Exception:
+            try:
+                os.kill(proc.pid, signal.SIGTERM)
+            except Exception:
+                pass
     
     if WIFI_INTERFACE: # Check if monitor mode was ever activated
         print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE}...", file=sys.stderr)
@@ -315,7 +346,7 @@ def run_attack():
         f.write("hw_mode=g\n")
         f.write("channel=6\n")
 
-    attack_procs['hostapd'] = subprocess.Popen(["hostapd", hostapd_conf_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    attack_procs['hostapd'] = subprocess.Popen(["hostapd", hostapd_conf_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setsid)
     time.sleep(2)
 
     status_msg = f"Deauthing {TARGET_CLIENT_MAC}"

@@ -79,6 +79,12 @@ CONFIG = {
     "attack_pmkid": True, "power": 50, "channel": None, "clients_only": False,
     "aggressive_kill": True
 }
+# Loot dir to mirror captures
+LOOT_DIR = os.path.join(os.path.abspath(os.path.join(BASE_DIR, '..', '..')), 'loot', 'WifiteGUI')
+try:
+    os.makedirs(LOOT_DIR, exist_ok=True)
+except Exception:
+    pass
 class Network:
     def __init__(self, bssid, essid, channel, power, encryption):
         self.bssid, self.essid, self.channel, self.power, self.encryption = bssid, essid if essid else "Hidden", channel, power, encryption
@@ -380,6 +386,17 @@ def start_attack(network):
                         if CAPTURED_TYPE is None:
                             CAPTURED_TYPE = "PMKID" if CAPTURED_FILE.endswith('22000') else "HANDSHAKE"
             ATTACK_PROCESS.wait()
+            # Mirror capture into loot directory if possible
+            try:
+                import shutil
+                if CAPTURED_FILE and os.path.exists(CAPTURED_FILE):
+                    base = os.path.basename(CAPTURED_FILE)
+                    dest = os.path.join(LOOT_DIR, base)
+                    if os.path.abspath(CAPTURED_FILE) != os.path.abspath(dest):
+                        shutil.copy2(CAPTURED_FILE, dest)
+                        CAPTURED_FILE = dest
+            except Exception:
+                pass
             if APP_STATE == "attacking":
                 APP_STATE = "results"
             try:

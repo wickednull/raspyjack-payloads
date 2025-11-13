@@ -23,7 +23,8 @@ import signal
 import subprocess
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
+import LCD_Config
+import LCD_1in44
 from PIL import Image, ImageDraw, ImageFont
 
 RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))

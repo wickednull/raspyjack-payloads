@@ -47,17 +47,23 @@ import threading # Added threading import as it was missing
 def is_root():
     return os.geteuid() == 0
 
-# Dynamically add Raspyjack path
-RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
-if RASPYJACK_PATH not in sys.path:
-    sys.path.append(RASPYJACK_PATH)
+# Prefer installed RaspyJack path; fallback to repo-relative
+PREFERRED_RASPYJACK = '/root/Raspyjack'
+if os.path.isdir(PREFERRED_RASPYJACK):
+    if PREFERRED_RASPYJACK not in sys.path:
+        sys.path.insert(0, PREFERRED_RASPYJACK)
+else:
+    RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+    if os.path.isdir(RASPYJACK_PATH) and RASPYJACK_PATH not in sys.path:
+        sys.path.insert(0, RASPYJACK_PATH)
 
 # ----------------------------
 # Third-party library imports 
 # ----------------------------
 try:
     import RPi.GPIO as GPIO
-    import LCD_1in44, LCD_Config
+    import LCD_Config
+    import LCD_1in44
     from PIL import Image, ImageDraw, ImageFont
 except ImportError:
     print("ERROR: Hardware libraries (RPi.GPIO, LCD, PIL) not found.", file=sys.stderr)
@@ -86,9 +92,46 @@ ROGUE_SSID = "Free_WiFi"
 ROGUE_CHANNEL = 6
 TEMP_CONF_DIR = "/tmp/raspyjack_rogue_ap" # Defined globally
 
-PINS = { "UP": 6, "DOWN": 19, "OK": 13, "KEY3": 16, "KEY2": 20 }
+# Load PINS from RaspyJack gui_conf.json
+PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+try:
+    import json
+    def _find_gui_conf():
+        candidates = [
+            os.path.join(os.getcwd(), 'gui_conf.json'),
+            os.path.join('/root/Raspyjack', 'gui_conf.json'),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Raspyjack', 'gui_conf.json'),
+        ]
+        for sp in sys.path:
+            try:
+                if sp and os.path.basename(sp) == 'Raspyjack':
+                    candidates.append(os.path.join(sp, 'gui_conf.json'))
+            except Exception:
+                pass
+        for p in candidates:
+            if os.path.exists(p):
+                return p
+        return None
+    conf_path = _find_gui_conf()
+    if conf_path:
+        with open(conf_path, 'r') as f:
+            data = json.load(f)
+        conf_pins = data.get("PINS", {})
+        PINS = {
+            "UP": conf_pins.get("KEY_UP_PIN", PINS["UP"]),
+            "DOWN": conf_pins.get("KEY_DOWN_PIN", PINS["DOWN"]),
+            "LEFT": conf_pins.get("KEY_LEFT_PIN", PINS["LEFT"]),
+            "RIGHT": conf_pins.get("KEY_RIGHT_PIN", PINS["RIGHT"]),
+            "OK": conf_pins.get("KEY_PRESS_PIN", PINS["OK"]),
+            "KEY1": conf_pins.get("KEY1_PIN", PINS["KEY1"]),
+            "KEY2": conf_pins.get("KEY2_PIN", PINS["KEY2"]),
+            "KEY3": conf_pins.get("KEY3_PIN", PINS["KEY3"]),
+        }
+except Exception:
+    pass
 GPIO.setmode(GPIO.BCM)
-for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+for pin in PINS.values():
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 WIDTH, HEIGHT = 128, 128
@@ -98,7 +141,11 @@ FONT = ImageFont.load_default()
 running = True
 rogue_ap_proc = None
 status_msg = "Press OK to start"
-# wifi_manager = WiFiManager() # No longer needed for monitor mode
+
+# Loot directory and session log
+BASE_DIR = os.path.dirname(__file__)
+LOOT_DIR = os.path.join(os.path.abspath(os.path.join(BASE_DIR, '..', '..')), 'loot', 'WiFi_Rogue_AP')
+os.makedirs(LOOT_DIR, exist_ok=True)
 
 # --- Local Monitor Mode Functions ---
 # These functions will be removed and replaced by monitor_mode_helper
@@ -113,17 +160,20 @@ def cleanup(*_):
     running = False
     if rogue_ap_proc:
         try:
-            rogue_ap_proc.terminate()
+            os.killpg(rogue_ap_proc.pid, signal.SIGTERM)
         except Exception:
-            pass
+            try:
+                rogue_ap_proc.terminate()
+            except Exception:
+                pass
     
-    if WIFI_INTERFACE: # Check if monitor mode was ever activated
-        print(f"Attempting to deactivate monitor mode on {WIFI_INTERFACE}...", file=sys.stderr)
-        success = monitor_mode_helper.deactivate_monitor_mode(WIFI_INTERFACE)
-        if success:
-            print(f"Successfully deactivated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
-        else:
-            print(f"ERROR: Failed to deactivate monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
+    # Restore NetworkManager management for the interface
+    try:
+        if WIFI_INTERFACE:
+            subprocess.run(["nmcli", "device", "set", WIFI_INTERFACE, "managed", "yes"], check=False)
+            subprocess.run(["nmcli", "device", "connect", WIFI_INTERFACE], check=False)
+    except Exception:
+        pass
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -204,22 +254,11 @@ def select_interface_menu():
         elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
             last_button_press_time = current_time
             selected_iface = available_interfaces[current_menu_selection]
-            draw_message(f"Activating monitor\nmode on {selected_iface}...", "yellow")
-            print(f"Attempting to activate monitor mode on {selected_iface}...", file=sys.stderr)
-            
-            ORIGINAL_WIFI_INTERFACE = selected_iface # Store original interface before activation
-            monitor_iface = monitor_mode_helper.activate_monitor_mode(selected_iface)
-            if monitor_iface:
-                WIFI_INTERFACE = monitor_iface
-                draw_message(f"Monitor mode active\non {WIFI_INTERFACE}", "lime")
-                print(f"Successfully activated monitor mode on {WIFI_INTERFACE}", file=sys.stderr)
-                time.sleep(2)
-                return True
-            else:
-                draw_message(["ERROR:", "Monitor mode failed!", "Check stderr for details."], "red")
-                print(f"ERROR: monitor_mode_helper.activate_monitor_mode failed for {selected_iface}. See stderr for details from helper.", file=sys.stderr)
-                time.sleep(3)
-                return False
+            WIFI_INTERFACE = selected_iface
+            ORIGINAL_WIFI_INTERFACE = selected_iface
+            draw_message(f"Selected interface\n{WIFI_INTERFACE}", "lime")
+            time.sleep(1)
+            return True
         elif GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
             last_button_press_time = current_time
             return False
@@ -340,6 +379,13 @@ def start_attack():
     
     print(f"Starting hostapd on {WIFI_INTERFACE} with SSID {ROGUE_SSID}...", file=sys.stderr)
     rogue_ap_proc = subprocess.Popen(f"hostapd {hostapd_conf_path}", shell=True, preexec_fn=os.setsid)
+    # Session log
+    try:
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        with open(os.path.join(LOOT_DIR, f"session_{ts}.log"), 'w') as f:
+            f.write(f"START {ts} iface={WIFI_INTERFACE} ssid={ROGUE_SSID} channel={ROGUE_CHANNEL}\n")
+    except Exception:
+        pass
     status_msg = "Rogue AP Running!"
     return True
 
@@ -440,6 +486,13 @@ if __name__ == '__main__':
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
+        # Write END to last session log if possible
+        try:
+            ts = time.strftime('%Y-%m-%d_%H%M%S')
+            with open(os.path.join(LOOT_DIR, f"session_{ts}.log"), 'a') as f:
+                f.write(f"END {ts}\n")
+        except Exception:
+            pass
         cleanup()
         LCD.LCD_Clear()
         GPIO.cleanup()
