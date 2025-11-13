@@ -306,90 +306,61 @@ def start_attack(network):
     def attack_worker():
         global ATTACK_PROCESS, ATTACK_PID, ATTACK_MASTER_FD, STATUS_MSG, CRACKED_PASSWORD, CAPTURED_TYPE, CAPTURED_FILE, APP_STATE
         try:
-            # Run wifite in a PTY so we get CR-updated lines and colors like a real terminal
-            pid, master_fd = pty.fork()
-            if pid == 0:
-                os.execvp("wifite", cmd)
-                os._exit(1)
-            ATTACK_PID = pid
-            ATTACK_MASTER_FD = master_fd
-            # Non-blocking reads
-            flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
-            fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            # Run wifite as a normal subprocess (no PTY), parse lines and update status
             log_path = "/tmp/wifite_gui_wifite.log"
+            ATTACK_PROCESS = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True,
+                preexec_fn=os.setsid,
+            )
             try:
                 log_fp = open(log_path, "w")
             except Exception:
                 log_fp = None
-            buf = ""
-            while IS_RUNNING and APP_STATE == "attacking":
-                try:
-                    data = os.read(master_fd, 1024)
-                    if not data:
-                        # EOF from child: stop loop
-                        break
-                    chunk = data.decode(errors="ignore")
-                except BlockingIOError:
-                    time.sleep(0.05)
-                    continue
+            for line in iter(ATTACK_PROCESS.stdout.readline, ''):
+                if not IS_RUNNING or APP_STATE != "attacking":
+                    break
                 if log_fp:
-                    try: log_fp.write(chunk)
+                    try: log_fp.write(line)
                     except Exception: pass
-                # Strip ANSI and split on both CR and LF
-                clean = ANSI_RE.sub("", chunk)
-                buf += clean
-                while True:
-                    idx_n = buf.find('\n')
-                    idx_r = buf.find('\r')
-                    idxs = [i for i in (idx_n, idx_r) if i != -1]
-                    if not idxs:
-                        break
-                    idx = min(idxs)
-                    line = buf[:idx]
-                    buf = buf[idx+1:]
-                    line_lower = line.lower()
-                    # Append raw line for terminal-like display (wrapped to columns)
-                    def _wrap_to_cols(s: str, cols: int):
-                        if cols <= 0: return [s]
-                        out = []
-                        i = 0
-                        while i < len(s):
-                            out.append(s[i:i+cols])
-                            i += cols
-                        return out
-                    for seg in _wrap_to_cols(line, MONO_COLS):
-                        RAW_LINES.append(seg)
-                    if len(RAW_LINES) > 400:
-                        del RAW_LINES[:len(RAW_LINES)-400]
-                    # Status hints
-                    if "wps pin" in line_lower: STATUS_MSG = "WPS PIN Attack..."
-                    elif "handshake" in line_lower and ("capture" in line_lower or "found" in line_lower):
-                        STATUS_MSG = "WPA Handshake Capture..."
-                    elif "pmkid" in line_lower and ("attack" in line_lower or "capture" in line_lower or "found" in line_lower):
-                        STATUS_MSG = "PMKID Attack..."
-                    # Success signals and heuristics
-                    if "cracked" in line_lower:
-                        try:
-                            CRACKED_PASSWORD = line.split('"')[1]
-                        except IndexError:
-                            CRACKED_PASSWORD = "See logs"
-                    if ("pmkid" in line_lower and ("found" in line_lower or "captured" in line_lower or "written" in line_lower)):
-                        CAPTURED_TYPE = "PMKID"
-                    if ("handshake" in line_lower and ("found" in line_lower or "captured" in line_lower or "written" in line_lower)):
-                        CAPTURED_TYPE = "HANDSHAKE"
-                    if re.search(r"\.(pcap|pcapng|cap|hccapx|22000)\b", line_lower):
-                        m = re.search(r'"([^"]+\.(?:pcap|pcapng|cap|hccapx|22000))"', line)
-                        if not m:
-                            m = re.search(r'\bto\s+([^\s]+\.(?:pcap|pcapng|cap|hccapx|22000))', line_lower)
-                        if not m:
-                            m = re.search(r'(\S+\.(?:pcap|pcapng|cap|hccapx|22000))', line_lower)
-                        if m:
-                            CAPTURED_FILE = m.group(1)
-                            if CAPTURED_TYPE is None:
-                                CAPTURED_TYPE = "PMKID" if CAPTURED_FILE.endswith('22000') else "HANDSHAKE"
-            # Child finished or we exited attacking state
+                line_lower = line.lower()
+                # Status hints
+                if "wps pin" in line_lower: STATUS_MSG = "WPS PIN Attack..."
+                elif "handshake" in line_lower and ("capture" in line_lower or "found" in line_lower):
+                    STATUS_MSG = "WPA Handshake Capture..."
+                elif "pmkid" in line_lower and ("attack" in line_lower or "capture" in line_lower or "found" in line_lower):
+                    STATUS_MSG = "PMKID Attack..."
+                # Success signals and heuristics
+                if "cracked" in line_lower:
+                    try:
+                        CRACKED_PASSWORD = line.split('"')[1]
+                    except IndexError:
+                        CRACKED_PASSWORD = "See logs"
+                if ("pmkid" in line_lower and ("found" in line_lower or "captured" in line_lower or "written" in line_lower)):
+                    CAPTURED_TYPE = "PMKID"
+                if ("handshake" in line_lower and ("found" in line_lower or "captured" in line_lower or "written" in line_lower)):
+                    CAPTURED_TYPE = "HANDSHAKE"
+                if re.search(r"\.(pcap|pcapng|cap|hccapx|22000)\b", line_lower):
+                    m = re.search(r'"([^"]+\.(?:pcap|pcapng|cap|hccapx|22000))"', line)
+                    if not m:
+                        m = re.search(r'\bto\s+([^\s]+\.(?:pcap|pcapng|cap|hccapx|22000))', line_lower)
+                    if not m:
+                        m = re.search(r'(\S+\.(?:pcap|pcapng|cap|hccapx|22000))', line_lower)
+                    if m:
+                        CAPTURED_FILE = m.group(1)
+                        if CAPTURED_TYPE is None:
+                            CAPTURED_TYPE = "PMKID" if CAPTURED_FILE.endswith('22000') else "HANDSHAKE"
+            ATTACK_PROCESS.wait()
+            if APP_STATE == "attacking":
+                APP_STATE = "results"
             try:
-                os.close(master_fd)
+                if log_fp: log_fp.close()
+            except Exception:
+                pass
             except Exception:
                 pass
             ATTACK_MASTER_FD = None
@@ -538,22 +509,11 @@ if __name__ == "__main__":
                         DRAW.text((90, display_y), f"{network.power}dBm", font=FONT, fill=fill)
 
             elif APP_STATE == "attacking":
-                # Terminal-style view of wifite output (small mono font)
-                header = f"wifite - {ATTACK_TARGET.essid[:16] if ATTACK_TARGET else ''}"
-                DRAW.text((2, 1), header, font=FONT_MONO, fill="#00FF00")
-                DRAW.line([(0, MONO_CHAR_H+2), (WIDTH, MONO_CHAR_H+2)], fill="#003300", width=1)
-                # Compute visible rows based on font height and margins
-                top = MONO_CHAR_H + 4
-                bottom = 12
-                avail_h = max(0, HEIGHT - top - bottom)
-                visible = max(1, avail_h // MONO_CHAR_H)
-                start = max(0, len(RAW_LINES) - visible - RAW_SCROLL_OFFSET)
-                end = max(0, len(RAW_LINES) - RAW_SCROLL_OFFSET)
-                y = top
-                for ln in RAW_LINES[start:end]:
-                    DRAW.text((2, y), ln[:MONO_COLS], font=FONT_MONO, fill="WHITE")
-                    y += MONO_CHAR_H
-                DRAW.text((2, HEIGHT - bottom + 2), "UP/DN=Scroll KEY1=^C KEY2=Enter LEFT=Stop", font=FONT_MONO, fill="#888")
+                if ATTACK_TARGET:
+                    DRAW.text((5, 5), "Attacking:", font=FONT, fill="WHITE")
+                    DRAW.text((5, 20), ATTACK_TARGET.essid[:18], font=FONT_TITLE, fill="#FF0000"); DRAW.line([(0, 38), (128, 38)], fill="#333", width=1)
+                    if STATUS_MSG: DRAW.text((5, 45), STATUS_MSG, font=FONT, fill="#00FF00")
+                DRAW.text((10, 110), "KEY1/LEFT=Stop", font=FONT, fill="#888")
 
             elif APP_STATE == "results":
                 DRAW.text((40, 10), "Result", font=FONT_TITLE, fill="WHITE"); DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
@@ -708,39 +668,30 @@ if __name__ == "__main__":
                     APP_STATE = "menu"
 
             elif APP_STATE == "attacking":
-                # Allow abort/scroll and send terminal keys (KEY1=Ctrl+C, KEY2=Enter)
+                # Allow abort; make KEY1 mirror LEFT for convenience
                 if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
+                    # Graceful stop: SIGINT to process group, then SIGTERM fallback
                     try:
-                        if ATTACK_MASTER_FD is not None:
-                            os.write(ATTACK_MASTER_FD, b"\x03")
+                        if ATTACK_PROCESS and ATTACK_PROCESS.poll() is None:
+                            os.killpg(ATTACK_PROCESS.pid, signal.SIGINT)
+                            time.sleep(0.5)
+                            if ATTACK_PROCESS.poll() is None:
+                                os.killpg(ATTACK_PROCESS.pid, signal.SIGTERM)
                     except Exception:
                         pass
-                elif GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    try:
-                        if ATTACK_MASTER_FD is not None:
-                            os.write(ATTACK_MASTER_FD, b"\n")
-                    except Exception:
-                        pass
-                elif GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    RAW_SCROLL_OFFSET = min(max(0, len(RAW_LINES) - 1), RAW_SCROLL_OFFSET + 1)
-                elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    RAW_SCROLL_OFFSET = max(0, RAW_SCROLL_OFFSET - 1)
+                    APP_STATE = "targets"
                 elif GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     try:
                         if ATTACK_PROCESS and ATTACK_PROCESS.poll() is None:
-                            ATTACK_PROCESS.terminate()
+                            os.killpg(ATTACK_PROCESS.pid, signal.SIGINT)
+                            time.sleep(0.5)
+                            if ATTACK_PROCESS.poll() is None:
+                                os.killpg(ATTACK_PROCESS.pid, signal.SIGTERM)
                     except Exception:
                         pass
-                    if ATTACK_PID:
-                        try: os.kill(ATTACK_PID, signal.SIGTERM)
-                        except Exception: pass
                     APP_STATE = "targets"
-                    RAW_SCROLL_OFFSET = 0
 
             elif APP_STATE == "results":
                 # Any key returns to main menu
@@ -760,6 +711,9 @@ if __name__ == "__main__":
                 elif GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     if NETWORKS: start_attack(NETWORKS[MENU_SELECTION])
+                elif GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    start_scan()
                 elif GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     APP_STATE = "menu"
