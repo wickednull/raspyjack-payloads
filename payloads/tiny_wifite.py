@@ -34,6 +34,9 @@ import shutil
 import re
 import select
 
+# Strip ANSI escape sequences (colors, cursor moves)
+ansi_escape = re.compile(r"\x1B\[[0-9;]*[A-Za-z]")
+
 # RaspyJack pathing
 BASE_DIR = os.path.dirname(__file__)
 sys.path.append(os.path.abspath(os.path.join(BASE_DIR, '..', '..')))
@@ -161,6 +164,18 @@ LAST_IMAGE = None
 HEADER_ROWS = 2
 LAST_DRAW = 0.0
 
+# Append a full line to scrollback with hard wrapping
+def push_line(line: str):
+    global scrollback
+    s = line
+    while len(s) > MONO_COLS:
+        scrollback.append(s[:MONO_COLS])
+        s = s[MONO_COLS:]
+    if s:
+        scrollback.append(s)
+    if len(scrollback) > 256:
+        scrollback = scrollback[-256:]
+
 def human_time(secs: int) -> str:
     m, s = divmod(max(0, int(secs)), 60)
     return f"{m:02d}:{s:02d}"
@@ -197,21 +212,29 @@ def draw_message(lines, color="white"):
         y += 14
     LCD.LCD_ShowImage(img, 0, 0)
 
-def wrap_print(s: str):
-    global current_line, scrollback
-    s = s.rstrip('\n')
-    # split into soft-wrapped chunks for LCD terminal
-    while len(s) > MONO_COLS:
-        scrollback.append(s[:MONO_COLS])
-        s = s[MONO_COLS:]
-    if s:
-        scrollback.append(s)
-    # cap scrollback
-    if len(scrollback) > 256:
-        scrollback = scrollback[-256:]
-    # rate-limit redraws to avoid tearing
+def process_stream(data: str):
+    """Process PTY data: strip ANSI, handle \r, \n, backspace; keep a single current_line."""
+    global current_line
+    # Keep carriage return and backspace; strip other ANSI sequences
+    clean = ansi_escape.sub("", data)
+    for ch in clean:
+        if ch == "\n":
+            push_line(current_line)
+            current_line = ""
+        elif ch == "\r":
+            # return to start of line: discard current_line contents
+            current_line = ""
+        elif ch in ("\x08", "\x7f"):  # backspace/DEL
+            current_line = current_line[:-1]
+        else:
+            current_line += ch
+            # Hard wrap current_line if it grows too long
+            while len(current_line) > MONO_COLS:
+                push_line(current_line[:MONO_COLS])
+                current_line = current_line[MONO_COLS:]
+    # redraw (rate-limited)
     if time.time() - LAST_DRAW > 0.1:
-        draw_buffer(scrollback, "")
+        draw_buffer(scrollback, current_line)
 
 # Settings menu (font size & color)
 COLORS = ["#00FF00", "white", "cyan", "yellow", "red", "#00FFFF", "#FF00FF"]
@@ -335,17 +358,17 @@ def pty_reader(master_fd: int):
                     elif "cracked" in low:
                         STATUS_TEXT = "CRACKED!"
                     try_mirror_capture(s)
-                    wrap_print(s)
+                    process_stream(s)
                     # ensure periodic refresh even if rate-limited
                     if time.time() - LAST_DRAW > 0.5:
-                        draw_buffer(scrollback, "")
+                        draw_buffer(scrollback, current_line)
             except OSError:
                 break
     # Flush remainder
     if buf:
         try:
             s = buf.decode('utf-8', errors='replace')
-            wrap_print(s)
+            process_stream(s)
         except Exception:
             pass
 
@@ -426,14 +449,8 @@ if __name__ == '__main__':
                 while GPIO.input(PINS['KEY1']) == 0: time.sleep(0.05)
             time.sleep(0.06)
 
-        # Enable monitor mode before launching wifite
-        draw_message([f"Enabling monitor", f"on {WIFI_IFACE}..."], "yellow")
-        MON_IFACE = monitor_mode_helper.activate_monitor_mode(WIFI_IFACE)
-        if not MON_IFACE:
-            draw_message(["Monitor mode failed"], "red"); time.sleep(3)
-            sys.exit(1)
-        time.sleep(0.3)
-        # Start elapsed timer
+        # Let wifite manage monitor mode itself; use managed/base iface
+        run_iface = WIFI_IFACE[:-3] if WIFI_IFACE and WIFI_IFACE.endswith('mon') else WIFI_IFACE
         START_TIME = time.time()
         STATUS_TEXT = "Running..."
 
@@ -451,8 +468,8 @@ if __name__ == '__main__':
                     os.close(slave_fd)
                 if master_fd > 2:
                     os.close(master_fd)
-                # Run full wifite with our monitor iface; let wifite own everything else
-                os.execvp('wifite', ['wifite', '-i', MON_IFACE, '--kill'])
+                # Run full wifite with managed iface; let wifite switch modes
+                os.execvp('wifite', ['wifite', '-i', run_iface, '--kill'])
             except Exception as e:
                 print(f"exec error: {e}")
                 os._exit(127)
