@@ -159,13 +159,14 @@ CAPTURE_COUNT = 0
 START_TIME = None
 LAST_IMAGE = None
 HEADER_ROWS = 2
+LAST_DRAW = 0.0
 
 def human_time(secs: int) -> str:
     m, s = divmod(max(0, int(secs)), 60)
     return f"{m:02d}:{s:02d}"
 
 def draw_buffer(lines: list[str], partial: str = ""):
-    global LAST_IMAGE
+    global LAST_IMAGE, LAST_DRAW
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
     # Header bar (2 rows)
@@ -183,6 +184,7 @@ def draw_buffer(lines: list[str], partial: str = ""):
         y += MONO_CHAR_H
     LCD.LCD_ShowImage(img, 0, 0)
     LAST_IMAGE = img
+    LAST_DRAW = time.time()
 
 def draw_message(lines, color="white"):
     if isinstance(lines, str):
@@ -207,7 +209,9 @@ def wrap_print(s: str):
     # cap scrollback
     if len(scrollback) > 256:
         scrollback = scrollback[-256:]
-    draw_buffer(scrollback, "")
+    # rate-limit redraws to avoid tearing
+    if time.time() - LAST_DRAW > 0.1:
+        draw_buffer(scrollback, "")
 
 # Settings menu (font size & color)
 COLORS = ["#00FF00", "white", "cyan", "yellow", "red", "#00FFFF", "#FF00FF"]
@@ -332,6 +336,9 @@ def pty_reader(master_fd: int):
                         STATUS_TEXT = "CRACKED!"
                     try_mirror_capture(s)
                     wrap_print(s)
+                    # ensure periodic refresh even if rate-limited
+                    if time.time() - LAST_DRAW > 0.5:
+                        draw_buffer(scrollback, "")
             except OSError:
                 break
     # Flush remainder
@@ -457,6 +464,28 @@ if __name__ == '__main__':
         t_btns = threading.Thread(target=btn_sender, args=(master_fd,), daemon=True)
         t_reader.start(); t_btns.start()
 
+        # KEY2 long-press quick help overlay
+        def show_help():
+            img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+            d = ImageDraw.Draw(img)
+            d.text((8, 8), "tiny_wifite help", font=FONT_TITLE, fill="white")
+            y=28
+            lines=["OK/RIGHT: Enter","LEFT/KEY3: Stop (^C)","UP/DOWN: Navigate","KEY1: '1'  KEY2: '2'","KEY2 (hold): Help","KEY1 (hold): Settings"]
+            for ln in lines:
+                d.text((8,y), ln, font=FONT_MONO, fill="cyan"); y+=MONO_CHAR_H+2
+            LCD.LCD_ShowImage(img,0,0)
+            # wait for any release and tap
+            timeout=time.time()+5
+            while time.time()<timeout:
+                any_pressed = any(GPIO.input(p)==0 for p in PINS.values())
+                if any_pressed:
+                    while any(GPIO.input(p)==0 for p in PINS.values()):
+                        time.sleep(0.05)
+                    break
+                time.sleep(0.05)
+            # redraw last terminal view
+            draw_buffer(scrollback, "")
+
         # Wait for child to exit, allow double-KEY3 to force kill
         exited_pid = None
         key3_first_time = 0.0
@@ -467,7 +496,14 @@ if __name__ == '__main__':
                     break
             except ChildProcessError:
                 break
-            # Force kill logic
+            # KEY2 long press help
+            if GPIO.input(PINS['KEY2']) == 0:
+                t0 = time.time()
+                while GPIO.input(PINS['KEY2']) == 0 and (time.time()-t0) < 0.7:
+                    time.sleep(0.05)
+                if time.time()-t0 >= 0.7:
+                    show_help()
+            # Force kill logic (KEY3)
             nowt = time.time()
             if GPIO.input(PINS['KEY3']) == 0:
                 if nowt - key3_first_time < 1.2 and key3_first_time != 0.0:
