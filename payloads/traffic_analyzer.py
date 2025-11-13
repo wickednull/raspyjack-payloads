@@ -29,7 +29,14 @@ import signal
 import subprocess
 import threading
 from collections import Counter
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+# Also add wifi subdir if present
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -64,6 +71,9 @@ ip_counts = Counter()
 current_interface_input = ETH_INTERFACE
 interface_input_cursor_pos = 0
 wifi_manager = WiFiManager()
+
+# Loot directory under RaspyJack
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'Traffic_Analyzer')
 
 def draw_ui_interface_selection(interfaces, current_selection):
     img = Image.new("RGB", (128, 128), "black")
@@ -113,6 +123,22 @@ def select_interface_menu():
 def cleanup(*_):
     global running
     running = False
+    # Save a final snapshot to loot
+    try:
+        os.makedirs(LOOT_DIR, exist_ok=True)
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        loot_file = os.path.join(LOOT_DIR, f'summary_{ETH_INTERFACE}_{ts}.txt')
+        with open(loot_file, 'w') as f:
+            f.write(f'Interface: {ETH_INTERFACE}\n')
+            f.write(f'Total packets: {packet_count}\n')
+            f.write('Protocol counts:\n')
+            for k in ['TCP','UDP','ICMP','ARP']:
+                f.write(f'  {k}: {protocol_counts[k]}\n')
+            f.write('Top talkers:\n')
+            for ip, cnt in ip_counts.most_common(10):
+                f.write(f'  {ip}: {cnt}\n')
+    except Exception as e:
+        print(f'[WARN] Failed to write loot: {e}', file=sys.stderr)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -222,6 +248,31 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
         
         time.sleep(0.1)
     return None
+
+# Packet processing and sniffer
+
+def _process_packet(pkt):
+    global packet_count, protocol_counts, ip_counts
+    try:
+        packet_count += 1
+        if pkt.haslayer(TCP):
+            protocol_counts['TCP'] += 1
+        elif pkt.haslayer(UDP):
+            protocol_counts['UDP'] += 1
+        elif pkt.haslayer(ICMP):
+            protocol_counts['ICMP'] += 1
+        elif pkt.haslayer(ARP):
+            protocol_counts['ARP'] += 1
+        if pkt.haslayer(IP):
+            ip_counts[pkt[IP].src] += 1
+    except Exception:
+        pass
+
+def sniffer_worker():
+    try:
+        sniff(prn=_process_packet, store=False, iface=ETH_INTERFACE, stop_filter=lambda x: not running)
+    except Exception as e:
+        print(f'[WARN] Sniffer error: {e}', file=sys.stderr)
 
 if __name__ == "__main__":
     current_screen = "main"

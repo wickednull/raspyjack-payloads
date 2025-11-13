@@ -33,12 +33,22 @@ import os
 import time
 import signal
 import subprocess
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
+
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from scapy.all import *
 conf.verb = 0
+
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'vlan_hopper')
+os.makedirs(LOOT_DIR, exist_ok=True)
 
 PINS: dict[str, int] = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13,
@@ -202,6 +212,15 @@ def run_vlan_hop_attack(src_mac, target_ip, native_vlan, target_vlan):
             raise Exception("Gateway MAC not found")
     except Exception as e:
         draw_message(f"Error: {e}", "red")
+        try:
+            ts = time.strftime('%Y-%m-%d_%H%M%S')
+            with open(os.path.join(LOOT_DIR, f"vlan_hopper_{ts}.txt"), 'w') as f:
+                f.write("VLAN Hopper Attempt FAILED\n")
+                f.write(f"Reason: {e}\n")
+                f.write(f"Target IP: {target_ip}\nNative VLAN: {native_vlan}\nTarget VLAN: {target_vlan}\n")
+                f.write(f"Interface: {ETH_INTERFACE}\nTimestamp: {ts}\n")
+        except Exception as le:
+            print(f"Loot save failed: {le}", file=sys.stderr)
         time.sleep(3)
         return
 
@@ -215,6 +234,21 @@ def run_vlan_hop_attack(src_mac, target_ip, native_vlan, target_vlan):
     
     ans = srp1(packet, iface=ETH_INTERFACE, timeout=5, verbose=0)
     
+    ts = time.strftime('%Y-%m-%d_%H%M%S')
+    loot_path = os.path.join(LOOT_DIR, f"vlan_hopper_{target_ip}_{native_vlan}_{target_vlan}_{ts}.txt")
+    try:
+        with open(loot_path, 'w') as f:
+            f.write("VLAN Hopper Attempt\n")
+            f.write(f"Target IP: {target_ip}\nNative VLAN: {native_vlan}\nTarget VLAN: {target_vlan}\n")
+            f.write(f"Interface: {ETH_INTERFACE}\nTimestamp: {ts}\n")
+            f.write("Result: ")
+            if ans and ans.haslayer(ICMP) and ans[ICMP].type == 0:
+                f.write("SUCCESS - ICMP Reply received\n")
+            else:
+                f.write("FAIL - No reply\n")
+    except Exception as le:
+        print(f"Loot save failed: {le}", file=sys.stderr)
+
     if ans and ans.haslayer(ICMP) and ans[ICMP].type == 0:
         draw_message("SUCCESS!\nGot ICMP Reply.", "lime")
     else:

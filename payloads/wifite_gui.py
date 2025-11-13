@@ -21,11 +21,10 @@ import pty, fcntl
 BASE_DIR = os.path.dirname(__file__)
 sys.path.append(os.path.abspath(os.path.join(BASE_DIR, '..', '..')))
 
-# This hardcoded path is used by other working WiFi payloads.
+# Prefer installed RaspyJack for imports
 try:
-    # Add Raspyjack root so `wifi.*` package resolves
-    if '/root/Raspyjack' not in sys.path:
-        sys.path.append('/root/Raspyjack')
+    if os.path.isdir('/root/Raspyjack') and '/root/Raspyjack' not in sys.path:
+        sys.path.insert(0, '/root/Raspyjack')
     from wifi.raspyjack_integration import get_available_interfaces
     WIFI_INTEGRATION = True
 except ImportError:
@@ -79,8 +78,9 @@ CONFIG = {
     "attack_pmkid": True, "power": 50, "channel": None, "clients_only": False,
     "aggressive_kill": True
 }
-# Loot dir to mirror captures
-LOOT_DIR = os.path.join(os.path.abspath(os.path.join(BASE_DIR, '..', '..')), 'loot', 'WifiteGUI')
+# Loot dir to mirror captures (prefer installed RaspyJack)
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(BASE_DIR, '..', '..'))
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'WifiteGUI')
 try:
     os.makedirs(LOOT_DIR, exist_ok=True)
 except Exception:

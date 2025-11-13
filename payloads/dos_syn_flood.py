@@ -48,10 +48,14 @@ import random
 def is_root():
     return os.geteuid() == 0
 
-# Dynamically add Raspyjack path
-RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
-if RASPYJACK_PATH not in sys.path:
-    sys.path.append(RASPYJACK_PATH)
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+# Also add wifi subdir if present
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
 
 # ----------------------------
 # Third-party library imports 
@@ -86,6 +90,9 @@ except ImportError:
 
 TARGET_IP = "192.168.1.1"
 TARGET_PORT = "80"
+# Loot directory under RaspyJack
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'dos_syn_flood')
+os.makedirs(LOOT_DIR, exist_ok=True)
 
 PINS = { "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
@@ -111,9 +118,25 @@ def cleanup(*_):
     if running:
         running = False
         attack_stop_event.set()
+        if attack_thread and attack_thread.is_alive():
+            attack_thread.join(timeout=2)
+        save_loot_snapshot()
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
+
+def save_loot_snapshot():
+    try:
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        loot_file = os.path.join(LOOT_DIR, f'syn_flood_{TARGET_IP}_{TARGET_PORT}_{ts}.txt')
+        with open(loot_file, 'w') as f:
+            f.write('TCP SYN Flood\n')
+            f.write(f'Target: {TARGET_IP}:{TARGET_PORT}\n')
+            f.write(f'Packets sent: {packet_count}\n')
+            f.write(f'Timestamp: {ts}\n')
+        print(f"Loot saved to {loot_file}")
+    except Exception as e:
+        print(f"[WARN] Failed to write loot: {e}", file=sys.stderr)
 
 def show_message(lines, color="lime"):
     img = Image.new("RGB", (128, 128), "black")
@@ -260,7 +283,7 @@ def handle_port_input_logic(initial_port):
         elif btn == "UP" or btn == "DOWN":
             if port_input_cursor_pos < len(current_port_input):
                 char_list = list(current_port_input)
-                current_char = char_list[ip_input_cursor_pos]
+                current_char = char_list[port_input_cursor_pos]
                 
                 if current_char.isdigit():
                     digit = int(current_char)
@@ -268,7 +291,7 @@ def handle_port_input_logic(initial_port):
                         digit = (digit + 1) % 10
                     else:
                         digit = (digit - 1 + 10) % 10
-                    char_list[ip_input_cursor_pos] = str(digit)
+                    char_list[port_input_cursor_pos] = str(digit)
                     current_port_input = "".join(char_list)
                 draw_ui("port_input")
         
@@ -297,6 +320,16 @@ def stop_attack():
     attack_stop_event.set()
     if attack_thread:
         attack_thread.join(timeout=2)
+    # Save summary loot on stop
+    try:
+        os.makedirs(LOOT_DIR, exist_ok=True)
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        loot_file = os.path.join(LOOT_DIR, f'summary_{TARGET_IP}_{TARGET_PORT}_{ts}.txt')
+        with open(loot_file, 'w') as f:
+            f.write(f'Target: {TARGET_IP}:{TARGET_PORT}\n')
+            f.write(f'Packets sent: {packet_count}\n')
+    except Exception as e:
+        print(f'[WARN] Failed to write loot: {e}', file=sys.stderr)
 
 if __name__ == "__main__":
     if not is_root():
@@ -358,13 +391,18 @@ if __name__ == "__main__":
             elif current_screen == "port_input":
                 new_port = handle_port_input_logic(current_port_input)
                 if new_port:
-                    TARGET_PORT = int(new_port)
+                    TARGET_PORT = new_port
                 current_screen = "main"
                 time.sleep(BUTTON_DEBOUNCE_TIME)
             
             elif current_screen == "attacking":
                 draw_ui("attacking", "ACTIVE")
-                if (GPIO.input(PINS["KEY3"]) == 0 or GPIO.input(PINS["OK"]) == 0) and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    stop_attack()
+                    cleanup()
+                    break
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     stop_attack()
                     current_screen = "main"

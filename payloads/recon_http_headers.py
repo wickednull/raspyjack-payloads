@@ -1,3 +1,62 @@
+# Utility: simple centered message on LCD
+def show_message(lines, color="lime"):
+    if isinstance(lines, str):
+        lines = [lines]
+    img = Image.new("RGB", (128, 128), "black")
+    d = ImageDraw.Draw(img)
+    y = 40
+    for line in lines:
+        bbox = d.textbbox((0, 0), line, font=FONT_TITLE)
+        w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        x = (128 - w) // 2
+        d.text((x, y), line, font=FONT_TITLE, fill=color)
+        y += h + 5
+    LCD.LCD_ShowImage(img, 0, 0)
+
+# Fetch headers via HEAD request and save to loot
+def get_headers(interface):
+    global headers
+    try:
+        if set_raspyjack_interface(interface):
+            show_message([f"Interface {interface}", "activated."], "lime")
+            time.sleep(1)
+        else:
+            show_message([f"Failed to activate", f"{interface}."], "red")
+            return
+
+        # Create socket and send minimal HEAD request
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(5)
+        s.connect((TARGET_IP, TARGET_PORT))
+        req = f"HEAD / HTTP/1.1\r\nHost: {TARGET_IP}\r\nConnection: close\r\n\r\n"
+        s.sendall(req.encode())
+        data = b""
+        while True:
+            try:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            except socket.timeout:
+                break
+        s.close()
+        text = data.decode(errors='ignore')
+        # Split headers
+        header_block = text.split("\r\n\r\n", 1)[0]
+        lines = header_block.split("\r\n")
+        headers = lines[:]
+        # Save to loot
+        os.makedirs(LOOT_DIR, exist_ok=True)
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        loot_file = os.path.join(LOOT_DIR, f"headers_{TARGET_IP}_{TARGET_PORT}_{ts}.txt")
+        with open(loot_file, 'w') as f:
+            for line in lines:
+                f.write(line + "\n")
+        show_message(["Headers fetched", "and saved."], "lime")
+        time.sleep(1)
+    except Exception as e:
+        show_message(["Fetch failed!", str(e)[:18]], "red")
+
 #!/usr/bin/env python3
 """
 RaspyJack *payload* – **HTTP Header Viewer**
@@ -37,7 +96,14 @@ import time
 import signal
 import subprocess
 import socket
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+# Also add wifi subdir if present
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -62,6 +128,9 @@ ip_input_cursor_pos = 0
 current_port_input = str(TARGET_PORT)
 port_input_cursor_pos = 0
 wifi_manager = WiFiManager()
+
+# Loot directory under RaspyJack
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'HTTP_Headers')
 
 def draw_ui_interface_selection(interfaces, current_selection):
     img = Image.new("RGB", (128, 128), "black")
@@ -259,12 +328,14 @@ if __name__ == '__main__':
                         break
                     if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                         last_button_press_time = current_time
-                        selected_index = (selected_index - 1) % len(headers)
+                        if headers:
+                            selected_index = (selected_index - 1) % len(headers)
                         draw_ui("main")
                         time.sleep(BUTTON_DEBOUNCE_TIME)
                     elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                         last_button_press_time = current_time
-                        selected_index = (selected_index + 1) % len(headers)
+                        if headers:
+                            selected_index = (selected_index + 1) % len(headers)
                         draw_ui("main")
                         time.sleep(BUTTON_DEBOUNCE_TIME)
                     time.sleep(0.05)
@@ -294,7 +365,10 @@ if __name__ == '__main__':
             char_set = "0123456789"
             new_port = handle_text_input_logic(current_port_input, "port_input", char_set)
             if new_port:
-                TARGET_PORT = int(new_port)
+                try:
+                    TARGET_PORT = int(new_port)
+                except ValueError:
+                    TARGET_PORT = 80
             current_screen = "main"
             time.sleep(BUTTON_DEBOUNCE_TIME)
         

@@ -30,10 +30,14 @@ import threading
 def is_root():
     return os.geteuid() == 0
 
-# Dynamically add Raspyjack path
-RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
-if RASPYJACK_PATH not in sys.path:
-    sys.path.append(RASPYJACK_PATH)
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+# Also add wifi subdir if present (some helpers may live there)
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
 
 # ----------------------------
 # Third-party library imports 
@@ -55,8 +59,7 @@ try:
     WIFI_INTEGRATION_AVAILABLE = True
 except ImportError:
     WIFI_INTEGRATION_AVAILABLE = False
-    def activate_monitor_mode(interface):
-        return None
+    monitor_mode_helper = None
 
 TARGET_INTERFACE = "wlan1"
 MONITOR_INTERFACE = None
@@ -102,6 +105,8 @@ def main():
 
     print(f"Attempting to activate monitor mode on {TARGET_INTERFACE}...", file=sys.stderr)
     try:
+        if not monitor_mode_helper:
+            raise ImportError("monitor_mode_helper not available in path")
         MONITOR_INTERFACE = monitor_mode_helper.activate_monitor_mode(TARGET_INTERFACE)
         if MONITOR_INTERFACE:
             draw_message(["Monitor mode", "ACTIVE!", f"Interface: {MONITOR_INTERFACE}"], "lime")

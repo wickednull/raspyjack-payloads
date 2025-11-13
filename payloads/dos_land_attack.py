@@ -41,7 +41,13 @@ import time
 import signal
 import subprocess
 import threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+wifi_subdir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(wifi_subdir) and wifi_subdir not in sys.path:
+    sys.path.insert(0, wifi_subdir)
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -51,6 +57,9 @@ conf.verb = 0
 
 TARGET_IP = "192.168.1.10"
 TARGET_PORT = "80"
+
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'dos_land_attack')
+os.makedirs(LOOT_DIR, exist_ok=True)
 
 PINS = { "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
@@ -74,13 +83,29 @@ def cleanup(*_):
     global running
     if running:
         running = False
-        attack_stop_event.set() # Signal the attack thread to stop
+        attack_stop_event.set()
         if attack_thread and attack_thread.is_alive():
-            attack_thread.join(timeout=2) # Wait for the thread to finish
+            attack_thread.join(timeout=2)
+        save_loot_snapshot()
         print("Land Attack cleanup complete.", file=sys.stderr)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
+
+def save_loot_snapshot():
+    """Save a loot snapshot with attack stats."""
+    try:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        loot_file = os.path.join(LOOT_DIR, f"land_attack_{timestamp}.txt")
+        with open(loot_file, 'w') as f:
+            f.write("Land Attack\n")
+            f.write(f"Target IP: {TARGET_IP}\n")
+            f.write(f"Target Port: {TARGET_PORT}\n")
+            f.write(f"Interface: {ATTACK_INTERFACE}\n")
+            f.write(f"Timestamp: {timestamp}\n")
+        print(f"Loot saved to {loot_file}")
+    except Exception as e:
+        print(f"Error saving loot: {e}", file=sys.stderr)
 
 def draw_ui(screen_state="main", message_lines=None):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
@@ -340,6 +365,7 @@ if __name__ == "__main__":
                 draw_ui("attacking")
                 if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
+                    stop_attack()
                     cleanup()
                     break
                 time.sleep(0.1)

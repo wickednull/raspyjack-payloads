@@ -36,14 +36,22 @@ import os
 import time
 import signal
 import subprocess
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
+
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
-SANDBOX_DIR = os.path.join(RASPYJACK_DIR, "Desktop", "RANSOMWARE_TEST_FILES")
+SANDBOX_DIR = os.path.join(RASPYJACK_ROOT, "Desktop", "RANSOMWARE_TEST_FILES")
 XOR_KEY = 0xDE
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'fs_encryptor')
+os.makedirs(LOOT_DIR, exist_ok=True)
 
 PINS = { "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
@@ -237,6 +245,7 @@ def run_encryption():
     
     draw_ui("encrypting")
     encrypted_count = 0
+    processed = []
     
     if not os.path.isdir(SANDBOX_DIR):
         show_message(["Test directory", "not found!"], "red")
@@ -261,9 +270,25 @@ def run_encryption():
                 
                 os.remove(filepath)
                 encrypted_count += 1
+                processed.append(encrypted_filepath)
             except Exception as e:
                 print(f"Could not encrypt {filepath}: {e}", file=sys.stderr)
         
+    # Save loot log
+    try:
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        loot_file = os.path.join(LOOT_DIR, f"fs_encryptor_{ts}.txt")
+        with open(loot_file, 'w') as f:
+            f.write("FS Encryptor Run\n")
+            f.write(f"Sandbox: {SANDBOX_DIR}\n")
+            f.write(f"XOR Key: {XOR_KEY}\n")
+            f.write(f"Encrypted count: {encrypted_count}\n")
+            for p in processed:
+                f.write(p + "\n")
+        print(f"Loot saved to {loot_file}")
+    except Exception as e:
+        print(f"Failed to save encryptor loot: {e}", file=sys.stderr)
+
     show_message([f"{encrypted_count} files", "encrypted!", "Check the test", "directory."])
     time.sleep(3)
 

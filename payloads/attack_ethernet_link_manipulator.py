@@ -34,7 +34,14 @@ import signal
 import subprocess
 import threading
 from collections import deque
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
+
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -67,6 +74,9 @@ link_flap_active = False
 ui_lock = threading.Lock()
 status_msg = "Ready"
 
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'attack_ethernet_link_manipulator')
+os.makedirs(LOOT_DIR, exist_ok=True)
+
 # --- Signal Handling and Cleanup ---
 def cleanup(*_):
     global running
@@ -84,9 +94,26 @@ def cleanup(*_):
             print(f"Restored autonegotiation for {current_interface}.", file=sys.stderr)
         except Exception as e:
             print(f"Error restoring link settings: {e}", file=sys.stderr)
+    save_loot_snapshot()
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
+
+def save_loot_snapshot():
+    try:
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        loot_file = os.path.join(LOOT_DIR, f"eth_link_manipulator_{ts}.txt")
+        with open(loot_file, 'w') as f:
+            f.write("Ethernet Link Manipulator Session\n")
+            f.write(f"Interface: {current_interface or 'N/A'}\n")
+            f.write(f"Speed option: {speed_options[current_speed_index]}\n")
+            f.write(f"Duplex option: {duplex_options[current_duplex_index]}\n")
+            f.write(f"Link flap active: {link_flap_active}\n")
+            f.write(f"Last status: {status_msg}\n")
+            f.write(f"Timestamp: {ts}\n")
+        print(f"Loot saved to {loot_file}")
+    except Exception as e:
+        print(f"Loot save failed: {e}", file=sys.stderr)
 
 # --- UI Drawing Functions ---
 def draw_message(lines, color="yellow"):

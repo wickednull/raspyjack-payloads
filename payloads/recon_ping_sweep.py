@@ -29,7 +29,14 @@ import time
 import signal
 import subprocess
 import threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+# Also add wifi subdir if present
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -56,6 +63,9 @@ selected_index = 0
 current_interface_input = ETH_INTERFACE
 interface_input_cursor_pos = 0
 wifi_manager = WiFiManager()
+
+# Loot directory under RaspyJack
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'Ping_Sweep')
 
 def draw_ui_interface_selection(interfaces, current_selection):
     img = Image.new("RGB", (128, 128), "black")
@@ -248,6 +258,16 @@ def run_scan(interface):
         with ui_lock:
             live_hosts = sorted(list(set(temp_hosts)), key=lambda ip: [int(y) for y in ip.split('.')])
             status_msg = "Scan Finished"
+        # Save results to loot
+        try:
+            os.makedirs(LOOT_DIR, exist_ok=True)
+            ts = time.strftime('%Y-%m-%d_%H%M%S')
+            loot_file = os.path.join(LOOT_DIR, f'hosts_{interface}_{ts}.txt')
+            with open(loot_file, 'w') as f:
+                for host in live_hosts:
+                    f.write(host + "\n")
+        except Exception as e:
+            print(f"[WARN] Failed to write loot: {e}", file=sys.stderr)
             
     except Exception as e:
         with ui_lock: status_msg = "Scan Failed!"

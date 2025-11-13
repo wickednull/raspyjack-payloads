@@ -35,8 +35,14 @@ import subprocess
 import threading
 import re # For IP validation
 
-# Ensure RaspyJack root on sys.path
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+# Also add wifi subdir if present
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
 import RPi.GPIO as GPIO
 import LCD_Config
 import LCD_1in44
@@ -44,8 +50,6 @@ from PIL import Image, ImageDraw, ImageFont
 
 # WiFi Integration - Import dynamic interface support
 try:
-
-    sys.path.append('/root/Raspyjack/wifi/')
     from wifi.raspyjack_integration import get_best_interface
     WIFI_INTEGRATION_AVAILABLE = True
 except ImportError:
@@ -53,10 +57,10 @@ except ImportError:
     def get_best_interface():
         return "eth0" # Fallback
 
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
-USER_LIST = os.path.join(RASPYJACK_DIR, "wordlists", "ftp_users.txt")
-PASS_LIST = os.path.join(RASPYJACK_DIR, "wordlists", "ftp_pass.txt")
-LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "Bruteforce")
+# Paths prefer /root/Raspyjack
+USER_LIST = os.path.join(RASPYJACK_ROOT, "wordlists", "ftp_users.txt")
+PASS_LIST = os.path.join(RASPYJACK_ROOT, "wordlists", "ftp_pass.txt")
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, "loot", "Bruteforce")
 
 # Load PINS from RaspyJack gui_conf.json
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}

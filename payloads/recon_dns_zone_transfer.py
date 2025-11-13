@@ -37,7 +37,15 @@ import time
 import signal
 import subprocess
 import threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+# Also add wifi subdir if present
+wifi_subdir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(wifi_subdir) and wifi_subdir not in sys.path:
+    sys.path.insert(0, wifi_subdir)
+
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -53,6 +61,8 @@ FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bol
 FONT = ImageFont.load_default()
 
 TARGET_DOMAIN = "example.com"
+# Loot under /root/Raspyjack when available
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, "loot", "DNS_Zone_Transfer")
 running = True
 scan_thread = None
 results = []
@@ -255,8 +265,8 @@ def run_scan(interface):
                     results = axfr_proc.stdout.strip().split('\n')
                     status_msg = "SUCCESS!"
                 
-                os.makedirs(os.path.join(RASPYJACK_DIR, "loot", "DNS_Zone_Transfer"), exist_ok=True)
-                loot_file = os.path.join(RASPYJACK_DIR, "loot", "DNS_Zone_Transfer", f"{TARGET_DOMAIN}.txt")
+                os.makedirs(LOOT_DIR, exist_ok=True)
+                loot_file = os.path.join(LOOT_DIR, f"{TARGET_DOMAIN}.txt")
                 with open(loot_file, "w") as f:
                     f.write(f"Zone transfer results for {TARGET_DOMAIN} from {ns}\n\n")
                     f.write(axfr_proc.stdout)

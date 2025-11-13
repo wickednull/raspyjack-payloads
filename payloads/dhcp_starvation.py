@@ -26,7 +26,10 @@ import signal
 import subprocess
 import threading
 import random
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -35,7 +38,6 @@ conf.verb = 0
 
 # WiFi Integration - Import dynamic interface support
 try:
-    sys.path.append('/root/Raspyjack/wifi/')
     from wifi.raspyjack_integration import get_best_interface
     WIFI_INTEGRATION_AVAILABLE = True
 except ImportError:
@@ -75,6 +77,9 @@ attack_thread = None
 attack_stop_event = threading.Event()
 packet_count = 0
 
+# Loot directory under RaspyJack
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'DHCP_Starvation')
+
 def cleanup(*_):
     global running
     if running:
@@ -82,6 +87,16 @@ def cleanup(*_):
         attack_stop_event.set()
         if attack_thread and attack_thread.is_alive():
             attack_thread.join(timeout=2) # Wait for the thread to finish
+        # Save summary loot
+        try:
+            os.makedirs(LOOT_DIR, exist_ok=True)
+            ts = time.strftime('%Y-%m-%d_%H%M%S')
+            loot_file = os.path.join(LOOT_DIR, f'summary_{ETH_INTERFACE}_{ts}.txt')
+            with open(loot_file, 'w') as f:
+                f.write(f'Interface: {ETH_INTERFACE}\n')
+                f.write(f'Packets sent: {packet_count}\n')
+        except Exception as e:
+            print(f'[WARN] Failed to write loot: {e}', file=sys.stderr)
         print("DHCP Starvation cleanup complete.", file=sys.stderr)
 
 signal.signal(signal.SIGINT, cleanup)

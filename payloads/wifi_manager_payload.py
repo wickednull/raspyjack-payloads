@@ -25,8 +25,15 @@ import os
 import sys
 import subprocess
 
-# Add WiFi system to path
-sys.path.append('/root/Raspyjack/wifi/')
+# Add WiFi system to path (prefer installed RaspyJack); fallback to repo wifi if needed
+if os.path.isdir('/root/Raspyjack/wifi') and '/root/Raspyjack' not in sys.path:
+    sys.path.insert(0, '/root/Raspyjack')
+    sys.path.insert(1, '/root/Raspyjack/wifi')
+else:
+    # Fallback to sibling Raspyjack checkout
+    repo_wifi = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'wifi'))
+    if os.path.isdir(repo_wifi) and repo_wifi not in sys.path:
+        sys.path.insert(0, repo_wifi)
 
 def main():
     """Launch the WiFi management interface."""

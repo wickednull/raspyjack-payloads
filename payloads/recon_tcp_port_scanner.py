@@ -36,12 +36,17 @@ import signal
 import subprocess
 import threading
 import socket
-# Ensure RaspyJack root on sys.path
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
 import RPi.GPIO as GPIO
 import LCD_Config
 import LCD_1in44
 from PIL import Image, ImageDraw, ImageFont
+
+# Loot directory under RaspyJack
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'TCP_Port_Scanner')
 
 TARGET_IP = "192.168.1.1"
 PORTS_TO_SCAN = [21, 22, 23, 25, 53, 80, 110, 139, 443, 445, 3389, 8080]
@@ -320,6 +325,19 @@ def run_scan():
     with ui_lock:
         status_msg = "Scan Finished"
     
+    # Save results to loot under RaspyJack
+    try:
+        os.makedirs(LOOT_DIR, exist_ok=True)
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        loot_file = os.path.join(LOOT_DIR, f'scan_{TARGET_IP}_{ts}.txt')
+        with open(loot_file, 'w') as f:
+            f.write(f'Target: {TARGET_IP}\n')
+            f.write('Open ports:\n')
+            for p in open_ports:
+                f.write(f'{p}\n')
+    except Exception as e:
+        print(f"[WARN] Failed to write loot: {e}", file=sys.stderr)
+
     return open_ports
 
 if __name__ == '__main__':

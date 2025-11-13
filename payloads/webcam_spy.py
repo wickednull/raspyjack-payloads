@@ -21,14 +21,16 @@ import os
 import time
 import signal
 import subprocess
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
 import RPi.GPIO as GPIO
 import LCD_Config
 import LCD_1in44
 from PIL import Image, ImageDraw, ImageFont
 
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
-LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "Webcam_Spy")
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, "loot", "Webcam_Spy")
 
 PINS = { "OK": 13, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)

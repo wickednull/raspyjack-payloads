@@ -29,8 +29,8 @@ from collections import deque
 # RaspyJack pathing
 BASE_DIR = os.path.dirname(__file__)
 sys.path.append(os.path.abspath(os.path.join(BASE_DIR, '..', '..')))
-if '/root/Raspyjack' not in sys.path:
-    sys.path.append('/root/Raspyjack')
+if os.path.isdir('/root/Raspyjack') and '/root/Raspyjack' not in sys.path:
+    sys.path.insert(0, '/root/Raspyjack')
 
 # Hardware/UI imports
 try:
@@ -125,7 +125,8 @@ RESULTS = {
     "fail": 0,
 }
 
-LOOT_DIR = os.path.join(os.path.abspath(os.path.join(BASE_DIR, '..', '..')), 'loot', 'WiFi_Reconnect_Test')
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(BASE_DIR, '..', '..'))
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'WiFi_Reconnect_Test')
 os.makedirs(LOOT_DIR, exist_ok=True)
 
 # ---------------- UI helpers ----------------

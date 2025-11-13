@@ -36,7 +36,14 @@ import os
 import time
 import signal
 import subprocess
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+# Also add wifi subdir if present
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -53,6 +60,9 @@ ip_input_cursor_pos = 0
 current_port_input = str(TARGET_PORT)
 port_input_cursor_pos = 0
 wifi_manager = WiFiManager()
+
+# Loot directory under RaspyJack
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'OS_Fingerprint')
 
 PINS: dict[str, int] = { "OK": 13, "KEY3": 16, "KEY1": 21, "KEY2": 20, "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26 }
 GPIO.setmode(GPIO.BCM)
@@ -322,6 +332,17 @@ def run_scan(interface):
     except Exception as e:
         scan_results = ["Scan failed!", str(e)[:20]]
         print(f"OS Scan failed: {e}", file=sys.stderr)
+    
+    # Save results to loot
+    try:
+        os.makedirs(LOOT_DIR, exist_ok=True)
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        loot_file = os.path.join(LOOT_DIR, f'os_{TARGET_IP}_{TARGET_PORT}_{ts}.txt')
+        with open(loot_file, 'w') as f:
+            for line in scan_results:
+                f.write(line + '\n')
+    except Exception as e:
+        print(f'[WARN] Failed to write loot: {e}', file=sys.stderr)
     
     return scan_results
 

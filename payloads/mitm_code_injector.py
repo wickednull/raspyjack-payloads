@@ -39,10 +39,18 @@ import time
 import signal
 import subprocess
 import threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
+
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from scapy.all import Ether, ARP, srp # Needed for get_mac()
 
 PINS: dict[str, int] = { "OK": 13, "KEY3": 16, "KEY1": 21, "KEY2": 20, "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26 }
 GPIO.setmode(GPIO.BCM)
@@ -67,6 +75,9 @@ interface_input_cursor_pos = 0
 current_ip_input = TARGET_IP
 ip_input_cursor_pos = 0
 
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'mitm_code_injector')
+os.makedirs(LOOT_DIR, exist_ok=True)
+
 INJECTOR_SCRIPT_CONTENT = """
 import re
 from mitmproxy import http
@@ -85,6 +96,29 @@ class Injector:
 addons = [Injector()]
 """
 INJECTOR_SCRIPT_PATH = "/tmp/raspyjack_injector.py"
+
+def save_loot_snapshot():
+    try:
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        inj = 0
+        try:
+            if os.path.exists("/tmp/raspyjack_injector.log"):
+                with open("/tmp/raspyjack_injector.log", "r") as f:
+                    inj = len(f.readlines())
+        except Exception:
+            inj = injection_count
+        loot_file = os.path.join(LOOT_DIR, f"mitm_injector_{ts}.txt")
+        with open(loot_file, 'w') as f:
+            f.write("MITM Code Injector Session\n")
+            f.write(f"Interface: {ETH_INTERFACE}\n")
+            f.write(f"Target IP: {TARGET_IP or 'N/A'}\n")
+            f.write(f"Mitmproxy port: {MITMPROXY_PORT}\n")
+            f.write(f"Injection count: {inj}\n")
+            f.write(f"Status: {status_message}\n")
+            f.write(f"Timestamp: {ts}\n")
+        print(f"Loot saved to {loot_file}")
+    except Exception as e:
+        print(f"Loot save failed: {e}", file=sys.stderr)
 
 def cleanup(*_):
     global running
@@ -106,6 +140,7 @@ def cleanup(*_):
             os.remove(INJECTOR_SCRIPT_PATH)
         if os.path.exists("/tmp/raspyjack_injector.log"):
             os.remove("/tmp/raspyjack_injector.log")
+        save_loot_snapshot()
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -162,15 +197,12 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
     global current_interface_input, interface_input_cursor_pos, current_ip_input, ip_input_cursor_pos
     
     if screen_state_name == "iface_input":
-        current_input_ref = current_interface_input
-        cursor_pos_ref = interface_input_cursor_pos
+        current_interface_input = initial_text
+        interface_input_cursor_pos = len(initial_text) - 1
     else:
-        current_input_ref = current_ip_input
-        cursor_pos_ref = ip_input_cursor_pos
+        current_ip_input = initial_text
+        ip_input_cursor_pos = len(initial_text) - 1
 
-    current_input_ref = initial_text
-    cursor_pos_ref = len(initial_text) - 1
-    
     draw_ui(screen_state_name)
     
     while running:
@@ -186,38 +218,48 @@ def handle_text_input_logic(initial_text, screen_state_name, char_set):
             return None
         
         if btn == "OK":
-            if current_input_ref:
-                return current_input_ref
+            if screen_state_name == "iface_input":
+                return current_interface_input
             else:
-                show_message(["Input cannot", "be empty!"])
-                time.sleep(2)
-                current_input_ref = initial_text
-                cursor_pos_ref = len(initial_text) - 1
-                draw_ui(screen_state_name)
+                return current_ip_input
         
         if btn == "LEFT":
-            cursor_pos_ref = max(0, cursor_pos_ref - 1)
+            if screen_state_name == "iface_input":
+                interface_input_cursor_pos = max(0, interface_input_cursor_pos - 1)
+            else:
+                ip_input_cursor_pos = max(0, ip_input_cursor_pos - 1)
             draw_ui(screen_state_name)
         elif btn == "RIGHT":
-            cursor_pos_ref = min(len(current_input_ref), cursor_pos_ref + 1)
+            if screen_state_name == "iface_input":
+                interface_input_cursor_pos = min(len(current_interface_input), interface_input_cursor_pos + 1)
+            else:
+                ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
             draw_ui(screen_state_name)
-        elif btn == "UP" or btn == "DOWN":
-            if cursor_pos_ref < len(current_input_ref):
-                char_list = list(current_input_ref)
-                current_char = char_list[cursor_pos_ref]
-                
-                try:
-                    char_index = char_set.index(current_char)
-                    if btn == "UP":
-                        char_index = (char_index + 1) % len(char_set)
-                    else:
-                        char_index = (char_index - 1 + len(char_set)) % len(char_set)
-                    char_list[cursor_pos_ref] = char_set[char_index]
-                    current_input_ref = "".join(char_list)
-                except ValueError:
-                    char_list[cursor_pos_ref] = char_set[0]
-                    current_input_ref = "".join(char_list)
-                draw_ui(screen_state_name)
+        elif btn in ("UP", "DOWN"):
+            if screen_state_name == "iface_input":
+                if interface_input_cursor_pos < len(current_interface_input):
+                    char_list = list(current_interface_input)
+                    current_char = char_list[interface_input_cursor_pos]
+                    try:
+                        char_index = char_set.index(current_char)
+                        char_index = (char_index + 1) % len(char_set) if btn == "UP" else (char_index - 1 + len(char_set)) % len(char_set)
+                        char_list[interface_input_cursor_pos] = char_set[char_index]
+                    except ValueError:
+                        char_list[interface_input_cursor_pos] = char_set[0]
+                    current_interface_input = "".join(char_list)
+                    draw_ui(screen_state_name)
+            else:
+                if ip_input_cursor_pos < len(current_ip_input):
+                    char_list = list(current_ip_input)
+                    current_char = char_list[ip_input_cursor_pos]
+                    try:
+                        char_index = char_set.index(current_char)
+                        char_index = (char_index + 1) % len(char_set) if btn == "UP" else (char_index - 1 + len(char_set)) % len(char_set)
+                        char_list[ip_input_cursor_pos] = char_set[char_index]
+                    except ValueError:
+                        char_list[ip_input_cursor_pos] = char_set[0]
+                    current_ip_input = "".join(char_list)
+                    draw_ui(screen_state_name)
         
         time.sleep(0.1)
     return None

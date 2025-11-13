@@ -32,10 +32,13 @@ from typing import List, Tuple
 def is_root():
     return os.geteuid() == 0
 
-# Dynamically add Raspyjack path
-RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
-if RASPYJACK_PATH not in sys.path:
-    sys.path.append(RASPYJACK_PATH)
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
 
 # ----------------------------
 # Third-party library imports 
@@ -65,6 +68,9 @@ FONT = ImageFont.load_default()
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 
 running = True
+
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'bluetooth_scanner')
+os.makedirs(LOOT_DIR, exist_ok=True)
 
 def run_bt_command(command_parts, error_message, display_error=True):
     try:
@@ -181,7 +187,18 @@ def discover_devices() -> List[Tuple[str, str]]:
         time.sleep(1)
         proc.terminate()
 
-    return sorted(seen.items(), key=lambda t: (t[1].lower(), t[0]))
+    devices = sorted(seen.items(), key=lambda t: (t[1].lower(), t[0]))
+    try:
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        loot_file = os.path.join(LOOT_DIR, f"scan_{ts}.txt")
+        with open(loot_file, 'w') as f:
+            f.write(f"Bluetooth scan results ({ts})\n")
+            for mac, name in devices:
+                f.write(f"{mac} {name}\n")
+        print(f"Loot saved to {loot_file}")
+    except Exception as e:
+        print(f"Failed to save scan loot: {e}", file=sys.stderr)
+    return devices
 
 class Payload:
     def run(self):

@@ -27,7 +27,14 @@ import time
 import signal
 import subprocess
 import re
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
+
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -44,6 +51,9 @@ WIDTH, HEIGHT = 128, 128
 running = True
 selected_index = 0
 results = []
+
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'ble_service_explorer')
+os.makedirs(LOOT_DIR, exist_ok=True)
 
 def run_bt_command(command_parts, error_message, display_error=True):
     try:
@@ -196,6 +206,18 @@ def run_scan():
         print(f"BLE scan failed: {e}", file=sys.stderr)
         draw_ui(message_lines=["Scan error!", f"{str(e)[:20]}"])
         time.sleep(3)
+    finally:
+        # Save loot snapshot of results
+        try:
+            ts = time.strftime('%Y-%m-%d_%H%M%S')
+            loot_file = os.path.join(LOOT_DIR, f"ble_services_{ts}.txt")
+            with open(loot_file, 'w') as f:
+                f.write(f"BLE Service Explorer results ({ts})\n")
+                for line in results:
+                    f.write(line + "\n")
+            print(f"Loot saved to {loot_file}")
+        except Exception as e:
+            print(f"Failed to save BLE loot: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
     try:

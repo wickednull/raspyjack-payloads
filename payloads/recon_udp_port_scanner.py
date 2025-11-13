@@ -36,7 +36,10 @@ import signal
 import subprocess
 import threading
 import socket
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -62,6 +65,9 @@ LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
+
+# Loot directory under RaspyJack
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'UDP_Port_Scanner')
 
 def cleanup(*_):
     global running
@@ -285,12 +291,25 @@ def run_scan():
             print(f"Scapy error on port {port}: {e}", file=sys.stderr)
             
     with ui_lock:
+
         status_msg = "Scan Finished"
+    # Save results to loot
+    try:
+        os.makedirs(LOOT_DIR, exist_ok=True)
+        ts = time.strftime('%Y-%m-%d_%H%M%S')
+        loot_file = os.path.join(LOOT_DIR, f'scan_{TARGET_IP}_{ts}.txt')
+        with open(loot_file, 'w') as f:
+            for p in open_ports:
+                f.write(f'{p}\n')
+    except Exception as e:
+        print(f'[WARN] Failed to write loot: {e}', file=sys.stderr)
 
 if __name__ == '__main__':
     current_screen = "main"
     last_scan_results = []
     try:
+        last_button_press_time = 0
+        BUTTON_DEBOUNCE_TIME = 0.3 # seconds
         while running:
             current_time = time.time()
             

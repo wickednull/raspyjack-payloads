@@ -38,15 +38,21 @@ import subprocess
 import threading
 import re # For IP validation
 
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+# Also add wifi subdir if present (some environments rely on it directly)
+wifi_subdir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(wifi_subdir) and wifi_subdir not in sys.path:
+    sys.path.insert(0, wifi_subdir)
+
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
 # WiFi Integration - Import dynamic interface support
 try:
-
-    sys.path.append('/root/Raspyjack/wifi/')
     from wifi.raspyjack_integration import get_best_interface, get_available_interfaces
     WIFI_INTEGRATION_AVAILABLE = True
 except ImportError:
@@ -61,9 +67,8 @@ except ImportError:
         except:
             return ["eth0"]
 
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
 TARGET_IP = "192.168.1.1"
-LOOT_DIR = os.path.join(RASPYJACK_DIR, "loot", "Nmap_Vuln")
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, "loot", "Nmap_Vuln")
 
 PINS = { "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
 GPIO.setmode(GPIO.BCM)
@@ -158,7 +163,7 @@ def select_interface_menu():
     
     available_interfaces = get_available_interfaces()
     if not available_interfaces:
-        draw_ui(message_lines=["No network", "interfaces found!"], color="red")
+        draw_ui(message_lines=["No network", "interfaces found!"])
         time.sleep(3)
         return None
 
@@ -183,7 +188,7 @@ def select_interface_menu():
             current_menu_selection = (current_menu_selection + 1) % len(available_interfaces)
         elif btn == "OK":
             selected_iface = available_interfaces[current_menu_selection]
-            draw_ui(message_lines=[f"Selected:", f"{selected_iface}"], color="lime")
+            draw_ui(message_lines=[f"Selected:", f"{selected_iface}"])
             time.sleep(1)
             return selected_iface
         

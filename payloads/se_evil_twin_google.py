@@ -42,10 +42,15 @@ import threading
 def is_root():
     return os.geteuid() == 0
 
-# Dynamically add Raspyjack path
-RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
-if RASPYJACK_PATH not in sys.path:
-    sys.path.append(RASPYJACK_PATH)
+# Prefer installed RaspyJack path; fallback to repo-relative
+PREFERRED_RASPYJACK = '/root/Raspyjack'
+if os.path.isdir(PREFERRED_RASPYJACK):
+    if PREFERRED_RASPYJACK not in sys.path:
+        sys.path.insert(0, PREFERRED_RASPYJACK)
+else:
+    RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
+    if os.path.isdir(RASPYJACK_PATH) and RASPYJACK_PATH not in sys.path:
+        sys.path.insert(0, RASPYJACK_PATH)
 
 # ----------------------------
 # Third-party library imports 
@@ -73,7 +78,7 @@ except ImportError:
 WIFI_INTERFACE = get_best_interface() # Hardcoded to wlan1 as per user request for evil twin attacks
 FAKE_AP_SSID = "Free WiFi"
 FAKE_AP_CHANNEL = "6"
-RASPYJACK_DIR = os.path.abspath(os.path.join(__file__, '..', '..', '..', 'Raspyjack'))
+RASPYJACK_DIR = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..', '..', 'Raspyjack'))
 CAPTIVE_PORTAL_BASE_PATH = os.path.join(RASPYJACK_DIR, "DNSSpoof", "sites")
 CAPTIVE_PORTAL_PATH = os.path.join(CAPTIVE_PORTAL_BASE_PATH, "google")
 LOOT_FILE = os.path.join(CAPTIVE_PORTAL_PATH, "loot.txt")

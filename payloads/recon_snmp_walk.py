@@ -40,7 +40,14 @@ import os
 import time
 import signal
 import subprocess
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+# Prefer /root/Raspyjack for imports; fallback to repo-relative
+RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
+if RASPYJACK_ROOT not in sys.path:
+    sys.path.insert(0, RASPYJACK_ROOT)
+# Also add wifi subdir if present
+_wifi_dir = os.path.join(RASPYJACK_ROOT, 'wifi')
+if os.path.isdir(_wifi_dir) and _wifi_dir not in sys.path:
+    sys.path.insert(0, _wifi_dir)
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
@@ -65,6 +72,9 @@ ip_input_cursor_pos = 0
 current_community_input = COMMUNITY_STRING
 community_input_cursor_pos = 0
 wifi_manager = WiFiManager()
+
+# Loot directory under RaspyJack
+LOOT_DIR = os.path.join(RASPYJACK_ROOT, 'loot', 'SNMP')
 
 def draw_ui_interface_selection(interfaces, current_selection):
     img = Image.new("RGB", (128, 128), "black")
@@ -322,10 +332,10 @@ def run_scan(interface):
                 results.append("Walk complete.")
                 results.append("No common info found.")
             
-            os.makedirs(os.path.join(RASPYJACK_DIR, "loot", "SNMP"), exist_ok=True)
-            loot_file = os.path.join(RASPYJACK_DIR, "loot", "SNMP", f"{TARGET_IP}_walk.txt")
+            os.makedirs(LOOT_DIR, exist_ok=True)
+            loot_file = os.path.join(LOOT_DIR, f"{TARGET_IP}_walk.txt")
             with open(loot_file, "w") as f:
-                f.write(f"Zone transfer results for {TARGET_IP} from {COMMUNITY_STRING}\n\n")
+                f.write(f"SNMP walk results for {TARGET_IP} (community: {COMMUNITY_STRING})\n\n")
                 f.write(proc.stdout)
             results.append(f"Saved to loot!")
 
