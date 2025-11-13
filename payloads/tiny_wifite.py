@@ -492,7 +492,7 @@ if __name__ == '__main__':
                 if master_fd > 2:
                     os.close(master_fd)
                 # Run full wifite with managed iface; let wifite switch modes
-                os.execvp('wifite', ['wifite', '--no-color', '-i', run_iface, '--kill'])
+                os.execvp('wifite', ['wifite', '-i', run_iface, '--kill'])
             except Exception as e:
                 print(f"exec error: {e}")
                 os._exit(127)
@@ -567,6 +567,7 @@ if __name__ == '__main__':
         # Wait for child to exit, allow double-KEY3 to force kill
         exited_pid = None
         key3_first_time = 0.0
+        child_started = time.time()
         while RUN:
             try:
                 exited_pid, status = os.waitpid(pid, os.WNOHANG)
@@ -632,6 +633,24 @@ if __name__ == '__main__':
                             pass
             time.sleep(0.15)
         RUN = False
+        # If wifite exited immediately, show a brief error overlay
+        try:
+            elapsed_child = time.time() - child_started
+            if elapsed_child < 2.0:
+                img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                d = ImageDraw.Draw(img)
+                d.text((10, 8), "wifite exited quickly", font=FONT_TITLE, fill="red")
+                d.text((8, 30), "Check install/iface/perms", font=FONT_MONO, fill="#888")
+                # show last few lines
+                tail = (scrollback + ([current_line] if current_line else []))[-6:]
+                y = 50
+                for ln in tail:
+                    d.text((0, y), ln.ljust(MONO_COLS)[:MONO_COLS], font=FONT_MONO, fill=TERM_COLOR)
+                    y += MONO_CHAR_H
+                LCD.LCD_ShowImage(img, 0, 0)
+                time.sleep(3)
+        except Exception:
+            pass
         # Save settings on exit
         try:
             import json as _json
