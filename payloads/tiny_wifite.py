@@ -174,6 +174,12 @@ PTY_MASTER_FD = None
 # Prompt detection
 NEEDS_TARGET_NUMBER = False
 
+# Overlay control flag (disables PTY key injection during overlays)
+IN_OVERLAY = False
+
+# Visible version tag in header so you can confirm updates
+VERSION_TAG = "tw2"
+
 # Append a full line to scrollback with hard wrapping
 def push_line(line: str):
     global scrollback
@@ -196,7 +202,7 @@ def draw_buffer(lines: list[str], partial: str = ""):
     d = ImageDraw.Draw(img)
     # Header bar (2 rows)
     elapsed = human_time(time.time() - START_TIME) if START_TIME else "00:00"
-    header1 = f"wifite  iface:{WIFI_IFACE or '-'}  time:{elapsed}  caps:{CAPTURE_COUNT}"
+    header1 = f"{VERSION_TAG} iface:{WIFI_IFACE or '-'}  time:{elapsed}  caps:{CAPTURE_COUNT}"
     # Marquee for long status text
     status_text = STATUS_TEXT or ""
     if len(status_text) > MONO_COLS:
@@ -322,6 +328,10 @@ def btn_sender(master_fd: int):
     debounce = 0.18
     last = 0.0
     while RUN:
+        # Do not inject keys while an overlay is active
+        if IN_OVERLAY:
+            time.sleep(0.03)
+            continue
         now = time.time()
         fired = None
         if GPIO.input(PINS["LEFT"]) == 0 or GPIO.input(PINS["KEY3"]) == 0:
@@ -506,8 +516,10 @@ if __name__ == '__main__':
 
         # Number selection overlay
         def number_selector():
+            global IN_OVERLAY
             if PTY_MASTER_FD is None:
                 return
+            IN_OVERLAY = True
             val = 1
             last = 0.0
             while True:
@@ -535,10 +547,12 @@ if __name__ == '__main__':
                     last=now
                     os.write(PTY_MASTER_FD, str(val).encode()+b"\n")
                     while GPIO.input(PINS['OK'])==0: time.sleep(0.05)
+                    IN_OVERLAY = False
                     return
                 elif GPIO.input(PINS['LEFT']) == 0 and now-last>0.15:
                     last=now
                     while GPIO.input(PINS['LEFT'])==0: time.sleep(0.05)
+                    IN_OVERLAY = False
                     return
                 time.sleep(0.06)
 
@@ -564,6 +578,31 @@ if __name__ == '__main__':
             # redraw last terminal view
             draw_buffer(scrollback, "")
 
+        # Helper: Stop scan and immediately open number selector
+        def stop_scan_and_select():
+            global IN_OVERLAY, NEEDS_TARGET_NUMBER
+            IN_OVERLAY = True
+            # Send Ctrl+C to stop scanning
+            try:
+                if PTY_MASTER_FD is not None:
+                    os.write(PTY_MASTER_FD, b"\x03")
+            except Exception:
+                pass
+            # Display short overlay while waiting for targets prompt
+            img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+            d = ImageDraw.Draw(img)
+            d.text((8, 8), "Stopping scan...", font=FONT_TITLE, fill="yellow")
+            d.text((8, 28), "Opening selector", font=FONT_MONO, fill="#888")
+            LCD.LCD_ShowImage(img, 0, 0)
+            t0 = time.time()
+            while time.time() - t0 < 1.5:
+                if NEEDS_TARGET_NUMBER:
+                    NEEDS_TARGET_NUMBER = False
+                    break
+                time.sleep(0.05)
+            number_selector()
+            IN_OVERLAY = False
+
         # Wait for child to exit, allow double-KEY3 to force kill
         exited_pid = None
         key3_first_time = 0.0
@@ -579,6 +618,13 @@ if __name__ == '__main__':
             if NEEDS_TARGET_NUMBER:
                 NEEDS_TARGET_NUMBER = False
                 number_selector()
+            # KEY1 short press: Stop & Select (don’t wait for prompt)
+            if GPIO.input(PINS['KEY1']) == 0 and not IN_OVERLAY:
+                t0 = time.time()
+                while GPIO.input(PINS['KEY1']) == 0 and (time.time()-t0) < 0.7:
+                    time.sleep(0.05)
+                if time.time()-t0 < 0.7:
+                    stop_scan_and_select()
             # KEY2 long press help / short tap raw overlay
             if GPIO.input(PINS['KEY2']) == 0:
                 t0 = time.time()
@@ -588,6 +634,7 @@ if __name__ == '__main__':
                     show_help()
                 else:
                     # Short tap: temporary raw overlay of last lines
+                    IN_OVERLAY = True
                     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
                     d = ImageDraw.Draw(img)
                     d.text((8, 6), "Raw tail", font=FONT_TITLE, fill="white")
@@ -603,6 +650,7 @@ if __name__ == '__main__':
                     while any(GPIO.input(p)==0 for p in PINS.values()):
                         time.sleep(0.05)
                     draw_buffer(scrollback, current_line)
+                    IN_OVERLAY = False
             # KEY3 behavior: short press sends only Ctrl+C via btn_sender; long press confirms stop
             if GPIO.input(PINS['KEY3']) == 0:
                 t1 = time.time()
