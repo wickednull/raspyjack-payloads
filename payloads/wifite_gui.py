@@ -66,6 +66,11 @@ ATTACK_PID = None
 ANSI_RE = re.compile(r"\x1B\[[0-9;]*[A-Za-z]")
 RAW_LINES = []
 RAW_SCROLL_OFFSET = 0
+# Small monospace font for terminal view
+FONT_MONO = None
+MONO_CHAR_W = 6
+MONO_CHAR_H = 8
+MONO_COLS = 20
 
 # Wifite Configuration
 CONFIG = {
@@ -341,10 +346,19 @@ def start_attack(network):
                     line = buf[:idx]
                     buf = buf[idx+1:]
                     line_lower = line.lower()
-                    # Append raw line for terminal-like display
-                    RAW_LINES.append(line)
-                    if len(RAW_LINES) > 200:
-                        del RAW_LINES[:len(RAW_LINES)-200]
+                    # Append raw line for terminal-like display (wrapped to columns)
+                    def _wrap_to_cols(s: str, cols: int):
+                        if cols <= 0: return [s]
+                        out = []
+                        i = 0
+                        while i < len(s):
+                            out.append(s[i:i+cols])
+                            i += cols
+                        return out
+                    for seg in _wrap_to_cols(line, MONO_COLS):
+                        RAW_LINES.append(seg)
+                    if len(RAW_LINES) > 400:
+                        del RAW_LINES[:len(RAW_LINES)-400]
                     # Status hints
                     if "wps pin" in line_lower: STATUS_MSG = "WPS PIN Attack..."
                     elif "handshake" in line_lower and ("capture" in line_lower or "found" in line_lower):
@@ -405,6 +419,16 @@ if __name__ == "__main__":
         try: FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
         except IOError: FONT_TITLE = ImageFont.load_default()
         FONT = ImageFont.load_default()
+        # Load small monospace font for terminal-like output
+        try:
+            FONT_MONO = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 8)
+        except Exception:
+            FONT_MONO = ImageFont.load_default()
+        # Measure mono char metrics
+        _tmp = Image.new("RGB", (10,10)); _d = ImageDraw.Draw(_tmp)
+        bbox = _d.textbbox((0,0), "M", font=FONT_MONO)
+        MONO_CHAR_W = max(1, bbox[2]-bbox[0]); MONO_CHAR_H = max(1, bbox[3]-bbox[1])
+        MONO_COLS = max(10, (WIDTH - 4) // MONO_CHAR_W)
         
         if not validate_setup():
             raise SystemExit()
@@ -511,18 +535,22 @@ if __name__ == "__main__":
                         DRAW.text((90, display_y), f"{network.power}dBm", font=FONT, fill=fill)
 
             elif APP_STATE == "attacking":
-                # Terminal-style view of wifite output
-                DRAW.text((3, 2), f"wifite - {ATTACK_TARGET.essid[:16] if ATTACK_TARGET else ''}", font=FONT, fill="#00FF00")
-                DRAW.line([(0, 14), (128, 14)], fill="#003300", width=1)
-                # Determine visible lines
-                visible = 9
+                # Terminal-style view of wifite output (small mono font)
+                header = f"wifite - {ATTACK_TARGET.essid[:16] if ATTACK_TARGET else ''}"
+                DRAW.text((2, 1), header, font=FONT_MONO, fill="#00FF00")
+                DRAW.line([(0, MONO_CHAR_H+2), (WIDTH, MONO_CHAR_H+2)], fill="#003300", width=1)
+                # Compute visible rows based on font height and margins
+                top = MONO_CHAR_H + 4
+                bottom = 12
+                avail_h = max(0, HEIGHT - top - bottom)
+                visible = max(1, avail_h // MONO_CHAR_H)
                 start = max(0, len(RAW_LINES) - visible - RAW_SCROLL_OFFSET)
                 end = max(0, len(RAW_LINES) - RAW_SCROLL_OFFSET)
-                y = 18
+                y = top
                 for ln in RAW_LINES[start:end]:
-                    DRAW.text((2, y), ln[:20], font=FONT, fill="WHITE")
-                    y += 12
-                DRAW.text((2, 115), "UP/DN=Scroll LEFT=Stop", font=FONT, fill="#888")
+                    DRAW.text((2, y), ln[:MONO_COLS], font=FONT_MONO, fill="WHITE")
+                    y += MONO_CHAR_H
+                DRAW.text((2, HEIGHT - bottom + 2), "UP/DN=Scroll LEFT=Stop", font=FONT_MONO, fill="#888")
 
             elif APP_STATE == "results":
                 DRAW.text((40, 10), "Result", font=FONT_TITLE, fill="WHITE"); DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
@@ -680,7 +708,7 @@ if __name__ == "__main__":
                 # Allow abort attack and return to targets; scroll with UP/DOWN
                 if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
-                    RAW_SCROLL_OFFSET = min(len(RAW_LINES), RAW_SCROLL_OFFSET + 1)
+                    RAW_SCROLL_OFFSET = min(max(0, len(RAW_LINES) - 1), RAW_SCROLL_OFFSET + 1)
                 elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     RAW_SCROLL_OFFSET = max(0, RAW_SCROLL_OFFSET - 1)
