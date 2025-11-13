@@ -63,6 +63,7 @@ CAPTURED_TYPE, CAPTURED_FILE = None, None  # 'PMKID' or 'HANDSHAKE'
 STATUS_MSG = "Ready"
 TARGET_SCROLL_OFFSET = 0
 ATTACK_PID = None
+ATTACK_MASTER_FD = None
 ANSI_RE = re.compile(r"\x1B\[[0-9;]*[A-Za-z]")
 RAW_LINES = []
 RAW_SCROLL_OFFSET = 0
@@ -303,7 +304,7 @@ def start_attack(network):
         pass
 
     def attack_worker():
-        global ATTACK_PROCESS, ATTACK_PID, STATUS_MSG, CRACKED_PASSWORD, CAPTURED_TYPE, CAPTURED_FILE, APP_STATE
+        global ATTACK_PROCESS, ATTACK_PID, ATTACK_MASTER_FD, STATUS_MSG, CRACKED_PASSWORD, CAPTURED_TYPE, CAPTURED_FILE, APP_STATE
         try:
             # Run wifite in a PTY so we get CR-updated lines and colors like a real terminal
             pid, master_fd = pty.fork()
@@ -311,6 +312,7 @@ def start_attack(network):
                 os.execvp("wifite", cmd)
                 os._exit(1)
             ATTACK_PID = pid
+            ATTACK_MASTER_FD = master_fd
             # Non-blocking reads
             flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
             fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
@@ -390,6 +392,7 @@ def start_attack(network):
                 os.close(master_fd)
             except Exception:
                 pass
+            ATTACK_MASTER_FD = None
             # ensure we close log file
             try:
                 if log_fp: log_fp.close()
@@ -550,7 +553,7 @@ if __name__ == "__main__":
                 for ln in RAW_LINES[start:end]:
                     DRAW.text((2, y), ln[:MONO_COLS], font=FONT_MONO, fill="WHITE")
                     y += MONO_CHAR_H
-                DRAW.text((2, HEIGHT - bottom + 2), "UP/DN=Scroll LEFT=Stop", font=FONT_MONO, fill="#888")
+                DRAW.text((2, HEIGHT - bottom + 2), "UP/DN=Scroll KEY1=^C KEY2=Enter LEFT=Stop", font=FONT_MONO, fill="#888")
 
             elif APP_STATE == "results":
                 DRAW.text((40, 10), "Result", font=FONT_TITLE, fill="WHITE"); DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
@@ -705,8 +708,22 @@ if __name__ == "__main__":
                     APP_STATE = "menu"
 
             elif APP_STATE == "attacking":
-                # Allow abort attack and return to targets; scroll with UP/DOWN
-                if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                # Allow abort/scroll and send terminal keys (KEY1=Ctrl+C, KEY2=Enter)
+                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    try:
+                        if ATTACK_MASTER_FD is not None:
+                            os.write(ATTACK_MASTER_FD, b"\x03")
+                    except Exception:
+                        pass
+                elif GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    try:
+                        if ATTACK_MASTER_FD is not None:
+                            os.write(ATTACK_MASTER_FD, b"\n")
+                    except Exception:
+                        pass
+                elif GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     RAW_SCROLL_OFFSET = min(max(0, len(RAW_LINES) - 1), RAW_SCROLL_OFFSET + 1)
                 elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
