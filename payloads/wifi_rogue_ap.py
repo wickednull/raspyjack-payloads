@@ -114,7 +114,7 @@ def cleanup(*_):
     if rogue_ap_proc:
         try:
             rogue_ap_proc.terminate()
-        except:
+        except Exception:
             pass
     
     if WIFI_INTERFACE: # Check if monitor mode was ever activated
@@ -134,7 +134,7 @@ def draw_message(message: str, color: str = "yellow"):
     bbox = d.textbbox((0, 0), message, font=FONT_TITLE)
     w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
     x = (WIDTH - w) // 2
-    y = (WIDTH - h) // 2
+    y = (HEIGHT - h) // 2
     d.text((x, y), message, font=FONT_TITLE, fill=color)
     LCD.LCD_ShowImage(img, 0, 0)
 
@@ -319,7 +319,7 @@ def get_user_number(prompt, initial_value, min_val=1, max_val=165):
         time.sleep(0.05)
 
 def start_attack():
-    global attack_process, ORIGINAL_WIFI_INTERFACE, status_msg
+    global rogue_ap_proc, ORIGINAL_WIFI_INTERFACE, status_msg
     
     print(f"Attempting to activate {WIFI_INTERFACE} as primary interface...", file=sys.stderr)
     # if not set_raspyjack_interface(WIFI_INTERFACE): # set_raspyjack_interface is not imported
@@ -339,7 +339,7 @@ def start_attack():
     with open(hostapd_conf_path, "w") as f: f.write(f"interface={WIFI_INTERFACE}\ndriver=nl80211\nssid={ROGUE_SSID}\nhw_mode=g\nchannel={ROGUE_CHANNEL}\n")
     
     print(f"Starting hostapd on {WIFI_INTERFACE} with SSID {ROGUE_SSID}...", file=sys.stderr)
-    attack_process = subprocess.Popen(f"hostapd {hostapd_conf_path}", shell=True, preexec_fn=os.setsid)
+    rogue_ap_proc = subprocess.Popen(f"hostapd {hostapd_conf_path}", shell=True, preexec_fn=os.setsid)
     status_msg = "Rogue AP Running!"
     return True
 

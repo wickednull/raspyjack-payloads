@@ -76,7 +76,8 @@ MONO_COLS = 20
 # Wifite Configuration
 CONFIG = {
     "interface": "wlan1mon", "attack_wpa": True, "attack_wps": True,
-    "attack_pmkid": True, "power": 50, "channel": None, "clients_only": False
+    "attack_pmkid": True, "power": 50, "channel": None, "clients_only": False,
+    "aggressive_kill": True
 }
 class Network:
     def __init__(self, bssid, essid, channel, power, encryption):
@@ -281,6 +282,27 @@ def start_scan():
             STATUS_MSG = f"Scan error"; time.sleep(2); APP_STATE = "menu"
     threading.Thread(target=scan_worker, daemon=True).start()
 
+def aggressive_kill_setup(iface: str):
+    try:
+        subprocess.run(["systemctl", "stop", "avahi-daemon"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["systemctl", "stop", "NetworkManager"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["systemctl", "stop", "wpa_supplicant"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["pkill", "-9", "dhclient"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["pkill", "-9", "wpa_supplicant"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["rfkill", "unblock", "all"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["iw", "dev", iface, "set", "power_save", "off"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+def aggressive_kill_restore():
+    try:
+        subprocess.run(["systemctl", "start", "NetworkManager"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["systemctl", "start", "wpa_supplicant"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["systemctl", "start", "avahi-daemon"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 def start_attack(network):
     global APP_STATE, ATTACK_TARGET, CRACKED_PASSWORD, CAPTURED_TYPE, CAPTURED_FILE, STATUS_MSG, ATTACK_PROCESS
     APP_STATE = "attacking"; ATTACK_TARGET = network; CRACKED_PASSWORD = None; CAPTURED_TYPE = None; CAPTURED_FILE = None; STATUS_MSG = "Initializing..."
@@ -306,6 +328,9 @@ def start_attack(network):
     def attack_worker():
         global ATTACK_PROCESS, ATTACK_PID, ATTACK_MASTER_FD, STATUS_MSG, CRACKED_PASSWORD, CAPTURED_TYPE, CAPTURED_FILE, APP_STATE
         try:
+            # Optional aggressive kill of conflicting services
+            if CONFIG.get("aggressive_kill", False):
+                aggressive_kill_setup(run_iface)
             # Run wifite as a normal subprocess (no PTY), parse lines and update status
             log_path = "/tmp/wifite_gui_wifite.log"
             ATTACK_PROCESS = subprocess.Popen(
@@ -361,17 +386,11 @@ def start_attack(network):
                 if log_fp: log_fp.close()
             except Exception:
                 pass
-            except Exception:
-                pass
-            ATTACK_MASTER_FD = None
-            # ensure we close log file
-            try:
-                if log_fp: log_fp.close()
-            except Exception:
-                pass
-            if APP_STATE == "attacking": APP_STATE = "results"
         except Exception as e:
             STATUS_MSG = f"Attack Error: {str(e)[:15]}"; time.sleep(2); APP_STATE = "targets"
+        finally:
+            if CONFIG.get("aggressive_kill", False):
+                aggressive_kill_restore()
     threading.Thread(target=attack_worker, daemon=True).start()
 
 # ============================================================================
@@ -439,13 +458,14 @@ if __name__ == "__main__":
             elif APP_STATE == "advanced_settings":
                 DRAW.text((10, 10), "Advanced", font=FONT_TITLE, fill="WHITE")
                 DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
-                options = ["Power", "Channel", "Clients Only"]
+                options = ["Power", "Channel", "Clients Only", "Aggressive Kill"]
                 for i, option in enumerate(options):
                     fill = "WHITE"; y_pos = 40 + i * 25
                     if i == MENU_SELECTION: DRAW.rectangle([(5, y_pos - 2), (123, y_pos + 15)], fill="#003366"); fill = "#FFFF00"
                     if i == 0: value = f": {CONFIG['power']}"
                     elif i == 1: value = f": {CONFIG['channel'] or 'All'}"
-                    else: value = f": {'On' if CONFIG['clients_only'] else 'Off'}"
+                    elif i == 2: value = f": {'On' if CONFIG['clients_only'] else 'Off'}"
+                    else: value = f": {'On' if CONFIG['aggressive_kill'] else 'Off'}"
                     DRAW.text((10, y_pos), f"{option}{value}", font=FONT, fill=fill)
                 DRAW.text((20, 110), "LEFT for Back", font=FONT, fill="#888")
 
@@ -577,12 +597,13 @@ if __name__ == "__main__":
                     if MENU_SELECTION == 0: APP_STATE = "select_power"
                     elif MENU_SELECTION == 1: APP_STATE = "select_channel"
                     elif MENU_SELECTION == 2: CONFIG["clients_only"] = not CONFIG["clients_only"]
+                    elif MENU_SELECTION == 3: CONFIG["aggressive_kill"] = not CONFIG["aggressive_kill"]
                 elif GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
-                    MENU_SELECTION = (MENU_SELECTION - 1) % 3
+                    MENU_SELECTION = (MENU_SELECTION - 1) % 4
                 elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
-                    MENU_SELECTION = (MENU_SELECTION + 1) % 3
+                    MENU_SELECTION = (MENU_SELECTION + 1) % 4
                 elif GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     APP_STATE = "settings"; MENU_SELECTION = 0

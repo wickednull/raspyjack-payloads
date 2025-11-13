@@ -82,6 +82,7 @@ for pin in PINS.values():
     GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = 128, 128
 FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
 FONT = ImageFont.load_default()
 
@@ -384,7 +385,7 @@ if __name__ == '__main__':
                     last_button_press_time = current_time
                     threading.Thread(target=run_attack, daemon=True).start()
                     time.sleep(BUTTON_DEBOUNCE_TIME)
-                    while status_msg not in ["No probes found.", "Attack finished!"]:
+                    while status_msg not in ["No probes found.", "Attack finished."]:
                         if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                             last_button_press_time = current_time
                             cleanup()

@@ -287,28 +287,6 @@ def save_loot():
                 f.write(f"  SSID: {ssid}\n")
             f.write("\n") # Add a blank line for readability
 
-def draw_ui():
-    img = Image.new("RGB", (128, 128), "black")
-    d = ImageDraw.Draw(img)
-    d.text((5, 5), "WiFi Probe Sniffer", font=FONT_TITLE, fill="#00FF00")
-    d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
-
-    with ui_lock:
-        if not PROBES: # Changed from probed_ssids to PROBES
-            d.text((10, 60), "Sniffing...", font=FONT, fill="yellow")
-        else:
-            sorted_probes = list(PROBES.keys()) # Changed from probed_ssids to PROBES
-            start_index = max(0, selected_probe_index - 4)
-            end_index = min(len(sorted_probes), start_index + 8)
-            y_pos = 25
-            for i in range(start_index, end_index):
-                color = "yellow" if i == selected_probe_index else "white"
-                ssid = sorted_probes[i]
-                d.text((5, y_pos), ssid[:20], font=FONT, fill=color)
-                y_pos += 11
-
-    d.text((5, 115), "OK=Start | KEY3=Exit", font=FONT, fill="cyan")
-    LCD.LCD_ShowImage(img, 0, 0)
 
 if __name__ == "__main__":
     if not is_root():
