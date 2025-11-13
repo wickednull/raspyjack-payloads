@@ -64,8 +64,6 @@ STATUS_MSG = "Ready"
 TARGET_SCROLL_OFFSET = 0
 ATTACK_PID = None
 ANSI_RE = re.compile(r"\x1B\[[0-9;]*[A-Za-z]")
-RAW_LINES = []
-RAW_SCROLL_OFFSET = 0
 
 # Wifite Configuration
 CONFIG = {
@@ -281,12 +279,18 @@ def start_attack(network):
     # Use managed iface for wifite; it will toggle monitor mode itself
     run_iface = CONFIG['interface'][:-3] if CONFIG['interface'].endswith('mon') else CONFIG['interface']
     cmd = ["wifite", "--bssid", network.bssid, "-i", run_iface, "--kill"]
-    # Only pass disabling flags; let wifite's defaults pick enabled attacks
-    if not CONFIG['attack_wps']:
+    # Explicitly enable/disable attack types
+    if CONFIG['attack_wps']:
+        cmd.append('--wps')
+    else:
         cmd.append('--no-wps')
-    if not CONFIG['attack_wpa']:
+    if CONFIG['attack_wpa']:
+        cmd.append('--wpa')
+    else:
         cmd.append('--no-wpa')
-    if not CONFIG['attack_pmkid']:
+    if CONFIG['attack_pmkid']:
+        cmd.append('--pmkid')
+    else:
         cmd.append('--no-pmkid')
     if CONFIG['clients_only']:
         cmd.append('--clients-only')
@@ -319,8 +323,8 @@ def start_attack(network):
                 try:
                     data = os.read(master_fd, 1024)
                     if not data:
-                        # EOF from child: stop loop
-                        break
+                        time.sleep(0.05)
+                        continue
                     chunk = data.decode(errors="ignore")
                 except BlockingIOError:
                     time.sleep(0.05)
@@ -341,10 +345,6 @@ def start_attack(network):
                     line = buf[:idx]
                     buf = buf[idx+1:]
                     line_lower = line.lower()
-                    # Append raw line for terminal-like display
-                    RAW_LINES.append(line)
-                    if len(RAW_LINES) > 200:
-                        del RAW_LINES[:len(RAW_LINES)-200]
                     # Status hints
                     if "wps pin" in line_lower: STATUS_MSG = "WPS PIN Attack..."
                     elif "handshake" in line_lower and ("capture" in line_lower or "found" in line_lower):
@@ -374,11 +374,6 @@ def start_attack(network):
             # Child finished or we exited attacking state
             try:
                 os.close(master_fd)
-            except Exception:
-                pass
-            # ensure we close log file
-            try:
-                if log_fp: log_fp.close()
             except Exception:
                 pass
             if APP_STATE == "attacking": APP_STATE = "results"
@@ -511,18 +506,11 @@ if __name__ == "__main__":
                         DRAW.text((90, display_y), f"{network.power}dBm", font=FONT, fill=fill)
 
             elif APP_STATE == "attacking":
-                # Terminal-style view of wifite output
-                DRAW.text((3, 2), f"wifite - {ATTACK_TARGET.essid[:16] if ATTACK_TARGET else ''}", font=FONT, fill="#00FF00")
-                DRAW.line([(0, 14), (128, 14)], fill="#003300", width=1)
-                # Determine visible lines
-                visible = 9
-                start = max(0, len(RAW_LINES) - visible - RAW_SCROLL_OFFSET)
-                end = max(0, len(RAW_LINES) - RAW_SCROLL_OFFSET)
-                y = 18
-                for ln in RAW_LINES[start:end]:
-                    DRAW.text((2, y), ln[:20], font=FONT, fill="WHITE")
-                    y += 12
-                DRAW.text((2, 115), "UP/DN=Scroll LEFT=Stop", font=FONT, fill="#888")
+                if ATTACK_TARGET:
+                    DRAW.text((5, 5), "Attacking:", font=FONT, fill="WHITE")
+                    DRAW.text((5, 20), ATTACK_TARGET.essid[:18], font=FONT_TITLE, fill="#FF0000"); DRAW.line([(0, 38), (128, 38)], fill="#333", width=1)
+                    if STATUS_MSG: DRAW.text((5, 45), STATUS_MSG, font=FONT, fill="#00FF00")
+                DRAW.text((10, 110), "KEY3=Exit | LEFT=Back", font=FONT, fill="#888")
 
             elif APP_STATE == "results":
                 DRAW.text((40, 10), "Result", font=FONT_TITLE, fill="WHITE"); DRAW.line([(10, 30), (118, 30)], fill="#333", width=1)
@@ -677,25 +665,18 @@ if __name__ == "__main__":
                     APP_STATE = "menu"
 
             elif APP_STATE == "attacking":
-                # Allow abort attack and return to targets; scroll with UP/DOWN
-                if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    RAW_SCROLL_OFFSET = min(len(RAW_LINES), RAW_SCROLL_OFFSET + 1)
-                elif GPIO.input(PINS["DOWN"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    RAW_SCROLL_OFFSET = max(0, RAW_SCROLL_OFFSET - 1)
-                elif GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                # Allow abort attack and return to targets
+                if GPIO.input(PINS["LEFT"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     try:
                         if ATTACK_PROCESS and ATTACK_PROCESS.poll() is None:
                             ATTACK_PROCESS.terminate()
+                        if ATTACK_PID:
+                            try: os.kill(ATTACK_PID, signal.SIGTERM)
+                            except Exception: pass
                     except Exception:
                         pass
-                    if ATTACK_PID:
-                        try: os.kill(ATTACK_PID, signal.SIGTERM)
-                        except Exception: pass
                     APP_STATE = "targets"
-                    RAW_SCROLL_OFFSET = 0
 
             elif APP_STATE == "results":
                 # Any key returns to main menu
