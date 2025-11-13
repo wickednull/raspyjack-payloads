@@ -164,6 +164,16 @@ LAST_IMAGE = None
 HEADER_ROWS = 2
 LAST_DRAW = 0.0
 
+# Marquee state for status line
+MARQ_IDX = 0
+MARQ_LAST = 0.0
+
+# PTY master fd global for overlays to write
+PTY_MASTER_FD = None
+
+# Prompt detection
+NEEDS_TARGET_NUMBER = False
+
 # Append a full line to scrollback with hard wrapping
 def push_line(line: str):
     global scrollback
@@ -181,15 +191,24 @@ def human_time(secs: int) -> str:
     return f"{m:02d}:{s:02d}"
 
 def draw_buffer(lines: list[str], partial: str = ""):
-    global LAST_IMAGE, LAST_DRAW
+    global LAST_IMAGE, LAST_DRAW, MARQ_IDX, MARQ_LAST
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
     # Header bar (2 rows)
     elapsed = human_time(time.time() - START_TIME) if START_TIME else "00:00"
     header1 = f"wifite  iface:{WIFI_IFACE or '-'}  time:{elapsed}  caps:{CAPTURE_COUNT}"
-    header2 = STATUS_TEXT[:MONO_COLS]
+    # Marquee for long status text
+    status_text = STATUS_TEXT or ""
+    if len(status_text) > MONO_COLS:
+        if time.time() - MARQ_LAST > 0.3:
+            MARQ_IDX = (MARQ_IDX + 1) % (len(status_text) + 3)
+            MARQ_LAST = time.time()
+        pad = "   "
+        s2 = (status_text + pad + status_text)[MARQ_IDX:MARQ_IDX+MONO_COLS]
+    else:
+        s2 = status_text
     d.text((0, 0), header1.ljust(MONO_COLS)[:MONO_COLS], font=FONT_MONO, fill="#AAAAFF")
-    d.text((0, MONO_CHAR_H), header2.ljust(MONO_COLS)[:MONO_COLS], font=FONT_MONO, fill="#CCCCCC")
+    d.text((0, MONO_CHAR_H), s2.ljust(MONO_COLS)[:MONO_COLS], font=FONT_MONO, fill="#CCCCCC")
     # Content lines beneath header
     visible_rows = MONO_ROWS - HEADER_ROWS
     visible = lines[-(visible_rows-1):] + [partial]
@@ -357,6 +376,9 @@ def pty_reader(master_fd: int):
                         STATUS_TEXT = "PMKID attack..."
                     elif "cracked" in low:
                         STATUS_TEXT = "CRACKED!"
+                    # Detect numeric selection prompt
+                    if ("select" in low and "target" in low and ("number" in low or "#" in low)) or ("enter" in low and "number" in low):
+                        globals()['NEEDS_TARGET_NUMBER'] = True
                     try_mirror_capture(s)
                     process_stream(s)
                     # ensure periodic refresh even if rate-limited
@@ -456,6 +478,7 @@ if __name__ == '__main__':
 
         # Launch wifite under a PTY (real TTY behaviour)
         master_fd, slave_fd = pty.openpty()
+        PTY_MASTER_FD = master_fd
         # child uses the slave end as stdio
         pid = os.fork()
         if pid == 0:
@@ -469,7 +492,7 @@ if __name__ == '__main__':
                 if master_fd > 2:
                     os.close(master_fd)
                 # Run full wifite with managed iface; let wifite switch modes
-                os.execvp('wifite', ['wifite', '-i', run_iface, '--kill'])
+                os.execvp('wifite', ['wifite', '--no-color', '-i', run_iface, '--kill'])
             except Exception as e:
                 print(f"exec error: {e}")
                 os._exit(127)
@@ -480,6 +503,44 @@ if __name__ == '__main__':
         t_reader = threading.Thread(target=pty_reader, args=(master_fd,), daemon=True)
         t_btns = threading.Thread(target=btn_sender, args=(master_fd,), daemon=True)
         t_reader.start(); t_btns.start()
+
+        # Number selection overlay
+        def number_selector():
+            if PTY_MASTER_FD is None:
+                return
+            val = 1
+            last = 0.0
+            while True:
+                img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                d = ImageDraw.Draw(img)
+                d.text((14, 8), "Select target #", font=FONT_TITLE, fill="white")
+                d.text((14, 32), f"Value: {val}", font=FONT_TITLE, fill="yellow")
+                d.text((8, 100), "KEY1=-1 KEY2=+1  UP/DOWN=±5", font=FONT_MONO, fill="#888")
+                d.text((8, 112), "OK=Send  LEFT=Cancel", font=FONT_MONO, fill="#888")
+                LCD.LCD_ShowImage(img, 0, 0)
+                now = time.time()
+                if GPIO.input(PINS['KEY1']) == 0 and now-last>0.15:
+                    last=now; val=max(1, val-1); 
+                    while GPIO.input(PINS['KEY1'])==0: time.sleep(0.05)
+                elif GPIO.input(PINS['KEY2']) == 0 and now-last>0.15:
+                    last=now; val=val+1; 
+                    while GPIO.input(PINS['KEY2'])==0: time.sleep(0.05)
+                elif GPIO.input(PINS['UP']) == 0 and now-last>0.15:
+                    last=now; val=max(1, val-5);
+                    while GPIO.input(PINS['UP'])==0: time.sleep(0.05)
+                elif GPIO.input(PINS['DOWN']) == 0 and now-last>0.15:
+                    last=now; val=val+5;
+                    while GPIO.input(PINS['DOWN'])==0: time.sleep(0.05)
+                elif GPIO.input(PINS['OK']) == 0 and now-last>0.15:
+                    last=now
+                    os.write(PTY_MASTER_FD, str(val).encode()+b"\n")
+                    while GPIO.input(PINS['OK'])==0: time.sleep(0.05)
+                    return
+                elif GPIO.input(PINS['LEFT']) == 0 and now-last>0.15:
+                    last=now
+                    while GPIO.input(PINS['LEFT'])==0: time.sleep(0.05)
+                    return
+                time.sleep(0.06)
 
         # KEY2 long-press quick help overlay
         def show_help():
@@ -513,31 +574,63 @@ if __name__ == '__main__':
                     break
             except ChildProcessError:
                 break
-            # KEY2 long press help
+            # If wifite asked for a number, open selector automatically
+            if NEEDS_TARGET_NUMBER:
+                NEEDS_TARGET_NUMBER = False
+                number_selector()
+            # KEY2 long press help / short tap raw overlay
             if GPIO.input(PINS['KEY2']) == 0:
                 t0 = time.time()
                 while GPIO.input(PINS['KEY2']) == 0 and (time.time()-t0) < 0.7:
                     time.sleep(0.05)
                 if time.time()-t0 >= 0.7:
                     show_help()
-            # Force kill logic (KEY3)
-            nowt = time.time()
-            if GPIO.input(PINS['KEY3']) == 0:
-                if nowt - key3_first_time < 1.2 and key3_first_time != 0.0:
-                    try:
-                        os.killpg(os.getpgid(pid), signal.SIGKILL)
-                    except Exception:
-                        pass
-                    break
                 else:
-                    key3_first_time = nowt
-                    try:
-                        os.killpg(os.getpgid(pid), signal.SIGINT)
-                    except Exception:
-                        pass
-                    while GPIO.input(PINS['KEY3']) == 0:
+                    # Short tap: temporary raw overlay of last lines
+                    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                    d = ImageDraw.Draw(img)
+                    d.text((8, 6), "Raw tail", font=FONT_TITLE, fill="white")
+                    tail = (scrollback + ([current_line] if current_line else []))[-10:]
+                    y = 24
+                    for ln in tail:
+                        d.text((0, y), ln.ljust(MONO_COLS)[:MONO_COLS], font=FONT_MONO, fill=TERM_COLOR)
+                        y += MONO_CHAR_H
+                    LCD.LCD_ShowImage(img, 0, 0)
+                    # Dismiss on any key
+                    while all(GPIO.input(p)==1 for p in PINS.values()):
                         time.sleep(0.05)
-            time.sleep(0.2)
+                    while any(GPIO.input(p)==0 for p in PINS.values()):
+                        time.sleep(0.05)
+                    draw_buffer(scrollback, current_line)
+            # KEY3 behavior: short press sends only Ctrl+C via btn_sender; long press confirms stop
+            if GPIO.input(PINS['KEY3']) == 0:
+                t1 = time.time()
+                while GPIO.input(PINS['KEY3']) == 0 and (time.time()-t1) < 1.0:
+                    time.sleep(0.05)
+                if time.time()-t1 >= 1.0:
+                    # Confirm overlay
+                    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                    d = ImageDraw.Draw(img)
+                    d.text((12, 8), "Stop wifite?", font=FONT_TITLE, fill="white")
+                    d.text((10, 40), "OK=Yes  LEFT=No", font=FONT_MONO, fill="#888")
+                    LCD.LCD_ShowImage(img, 0, 0)
+                    # wait choice
+                    choice = None
+                    while choice is None:
+                        if GPIO.input(PINS['OK']) == 0:
+                            choice = 'yes'
+                            while GPIO.input(PINS['OK']) == 0: time.sleep(0.05)
+                        elif GPIO.input(PINS['LEFT']) == 0:
+                            choice = 'no'
+                            while GPIO.input(PINS['LEFT']) == 0: time.sleep(0.05)
+                        time.sleep(0.05)
+                    draw_buffer(scrollback, current_line)
+                    if choice == 'yes':
+                        try:
+                            os.killpg(os.getpgid(pid), signal.SIGINT)
+                        except Exception:
+                            pass
+            time.sleep(0.15)
         RUN = False
         # Save settings on exit
         try:
