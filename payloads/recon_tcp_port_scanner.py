@@ -138,20 +138,6 @@ def draw_ui(screen_state="main"):
         d.text((5, 60), "Ports:", font=FONT, fill="white")
         d.text((5, 75), ",".join(map(str, PORTS_TO_SCAN))[:16] + "...", font=FONT_TITLE, fill="yellow")
         d.text((5, 115), "OK=Scan | KEY1=Edit IP | KEY2=Edit Ports | KEY3=Exit", font=FONT, fill="cyan")
-    elif screen_state == "ip_input":
-        d.text((5, 30), "Enter Target IP:", font=FONT, fill="white")
-        display_ip = list(current_ip_input)
-        if ip_input_cursor_pos < len(display_ip):
-            display_ip[ip_input_cursor_pos] = '_'
-        d.text((5, 50), "".join(display_ip), font=FONT_TITLE, fill="yellow")
-        d.text((5, 115), "UP/DOWN=Digit | LEFT/RIGHT=Move | OK=Confirm", font=FONT, fill="cyan")
-    elif screen_state == "ports_input":
-        d.text((5, 30), "Enter Ports (CSV):", font=FONT, fill="white")
-        display_ports = list(current_ports_input)
-        if ports_input_cursor_pos < len(display_ports):
-            display_ports[ports_input_cursor_pos] = '_'
-        d.text((5, 50), "".join(display_ports[:16]), font=FONT_TITLE, fill="yellow")
-        d.text((5, 115), "UP/DOWN=Char | LEFT/RIGHT=Move | OK=Confirm", font=FONT, fill="cyan")
     elif screen_state == "scanning":
         d.text((5, 50), "Scanning...", font=FONT_TITLE, fill="yellow")
         d.text((5, 70), f"Target: {TARGET_IP}", font=FONT, fill="white")
@@ -169,11 +155,30 @@ def draw_ui(screen_state="main"):
 def handle_ip_input_logic(initial_ip):
     global current_ip_input, ip_input_cursor_pos
     current_ip_input = initial_ip
-    ip_input_cursor_pos = len(initial_ip) - 1
     
-    draw_ui("ip_input")
+    # The character set for IP address input
+    char_set = "0123456789."
+    char_index = 0
+    
+    input_ip = ""
     
     while running:
+        # Draw the UI for IP input
+        img = Image.new("RGB", (128, 128), "black")
+        d = ImageDraw.Draw(img)
+        d.text((5, 5), "Enter Target IP", font=FONT_TITLE, fill="cyan")
+        d.line([(0, 22), (128, 22)], fill="cyan", width=1)
+        
+        # Display the current input
+        d.text((5, 40), f"IP: {input_ip}", font=FONT, fill="white")
+        
+        # Display the character selection
+        d.text((5, 70), f"Select: < {char_set[char_index]} >", font=FONT_TITLE, fill="yellow")
+        
+        d.text((5, 100), "UP/DOWN=Char | OK=Add", font=FONT, fill="cyan")
+        d.text((5, 115), "KEY1=Del | KEY2=Save | KEY3=Cancel", font=FONT, fill="cyan")
+        LCD.LCD_ShowImage(img, 0, 0)
+
         btn = None
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
@@ -186,55 +191,58 @@ def handle_ip_input_logic(initial_ip):
             return None
         
         if btn == "OK":
-            parts = current_ip_input.split('.')
+            input_ip += char_set[char_index]
+            time.sleep(0.2)
+
+        if btn == "KEY1": # Backspace
+            input_ip = input_ip[:-1]
+            time.sleep(0.2)
+
+        if btn == "UP":
+            char_index = (char_index + 1) % len(char_set)
+            time.sleep(0.2)
+        
+        if btn == "DOWN":
+            char_index = (char_index - 1 + len(char_set)) % len(char_set)
+            time.sleep(0.2)
+
+        # Let's use KEY2 to confirm the IP
+        if GPIO.input(PINS["KEY2"]) == 0:
+            parts = input_ip.split('.')
             if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
-                return current_ip_input
+                return input_ip
             else:
                 show_message(["Invalid IP!", "Try again."], "red")
                 time.sleep(2)
-                current_ip_input = initial_ip
-                ip_input_cursor_pos = len(initial_ip) - 1
-                draw_ui("ip_input")
-        
-        if btn == "LEFT":
-            ip_input_cursor_pos = max(0, ip_input_cursor_pos - 1)
-            draw_ui("ip_input")
-        elif btn == "RIGHT":
-            ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
-            draw_ui("ip_input")
-        elif btn == "UP" or btn == "DOWN":
-            if ip_input_cursor_pos < len(current_ip_input):
-                char_list = list(current_ip_input)
-                current_char = char_list[ip_input_cursor_pos]
-                
-                if current_char.isdigit():
-                    digit = int(current_char)
-                    if btn == "UP":
-                        digit = (digit + 1) % 10
-                    else:
-                        digit = (digit - 1 + 10) % 10
-                    char_list[ip_input_cursor_pos] = str(digit)
-                    current_ip_input = "".join(char_list)
-                elif current_char == '.':
-                    if btn == "UP":
-                        ip_input_cursor_pos = min(len(current_ip_input), ip_input_cursor_pos + 1)
-                    else:
-                        ip_input_cursor_pos = max(0, ip_input_cursor_pos - 1)
-                draw_ui("ip_input")
+                input_ip = "" # Reset on invalid
         
         time.sleep(0.1)
     return None
 
 def handle_ports_input_logic(initial_ports_str):
-    global current_ports_input, ports_input_cursor_pos
-    current_ports_input = initial_ports_str
-    ports_input_cursor_pos = len(initial_ports_str) - 1
-    
-    draw_ui("ports_input")
-    
+    # The character set for port numbers input
     char_set = "0123456789,"
+    char_index = 0
+    
+    input_ports = ""
     
     while running:
+        # Draw the UI for port input
+        img = Image.new("RGB", (128, 128), "black")
+        d = ImageDraw.Draw(img)
+        d.text((5, 5), "Enter Target Ports", font=FONT_TITLE, fill="cyan")
+        d.line([(0, 22), (128, 22)], fill="cyan", width=1)
+        
+        # Display the current input
+        d.text((5, 40), f"Ports: {input_ports}", font=FONT, fill="white")
+        
+        # Display the character selection
+        d.text((5, 70), f"Select: < {char_set[char_index]} >", font=FONT_TITLE, fill="yellow")
+        
+        d.text((5, 100), "UP/DOWN=Char | OK=Add", font=FONT, fill="cyan")
+        d.text((5, 115), "KEY1=Del | KEY2=Save | KEY3=Cancel", font=FONT, fill="cyan")
+        LCD.LCD_ShowImage(img, 0, 0)
+
         btn = None
         for name, pin in PINS.items():
             if GPIO.input(pin) == 0:
@@ -247,53 +255,37 @@ def handle_ports_input_logic(initial_ports_str):
             return None
         
         if btn == "OK":
-            if current_ports_input:
+            input_ports += char_set[char_index]
+            time.sleep(0.2)
+
+        if btn == "KEY1": # Backspace
+            input_ports = input_ports[:-1]
+            time.sleep(0.2)
+
+        if btn == "UP":
+            char_index = (char_index + 1) % len(char_set)
+            time.sleep(0.2)
+        
+        if btn == "DOWN":
+            char_index = (char_index - 1 + len(char_set)) % len(char_set)
+            time.sleep(0.2)
+
+        # Let's use KEY2 to confirm the ports
+        if GPIO.input(PINS["KEY2"]) == 0:
+            if input_ports:
                 try:
-                    ports = [int(p.strip()) for p in current_ports_input.split(',') if p.strip().isdigit()]
+                    ports = [int(p.strip()) for p in input_ports.split(',') if p.strip().isdigit()]
                     if all(1 <= p <= 65535 for p in ports):
-                        return current_ports_input
+                        return input_ports
                     else:
                         show_message(["Invalid Port Range!", "1-65535 only."], "red")
                         time.sleep(2)
-                        current_ports_input = initial_ports_str
-                        ports_input_cursor_pos = len(initial_ports_str) - 1
-                        draw_ui("ports_input")
                 except ValueError:
                     show_message(["Invalid Format!", "Use comma-sep", "numbers."], "red")
                     time.sleep(2)
-                    current_ports_input = initial_ports_str
-                    ports_input_cursor_pos = len(initial_ports_str) - 1
-                    draw_ui("ports_input")
             else:
                 show_message(["Input cannot", "be empty!"], "red")
                 time.sleep(2)
-                current_ports_input = initial_ports_str
-                ports_input_cursor_pos = len(initial_ports_str) - 1
-                draw_ui("ports_input")
-        
-        if btn == "LEFT":
-            ports_input_cursor_pos = max(0, ports_input_cursor_pos - 1)
-            draw_ui("ports_input")
-        elif btn == "RIGHT":
-            ports_input_cursor_pos = min(len(current_ports_input), ports_input_cursor_pos + 1)
-            draw_ui("ports_input")
-        elif btn == "UP" or btn == "DOWN":
-            if ports_input_cursor_pos < len(current_ports_input):
-                char_list = list(current_ports_input)
-                current_char = char_list[ports_input_cursor_pos]
-                
-                try:
-                    char_index = char_set.index(current_char)
-                    if btn == "UP":
-                        char_index = (char_index + 1) % len(char_set)
-                    else:
-                        char_index = (char_index - 1 + len(char_set)) % len(char_set)
-                    char_list[ports_input_cursor_pos] = char_set[char_index]
-                    current_ports_input = "".join(char_list)
-                except ValueError:
-                    char_list[ports_input_cursor_pos] = char_set[0]
-                    current_ports_input = "".join(char_list)
-                draw_ui("ports_input")
         
         time.sleep(0.1)
     return None
@@ -341,7 +333,6 @@ def run_scan():
     return open_ports
 
 if __name__ == '__main__':
-    current_screen = "main"
     is_scanning = False
     selected_index = 0 # Initialize selected_index for results screen
     try:
@@ -351,81 +342,24 @@ if __name__ == '__main__':
         while running:
             current_time = time.time()
             
-            if current_screen == "main":
-                draw_ui("main")
-                
-                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    cleanup()
-                    break
-                
-                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    # Start scan in a thread
-                    scan_thread = threading.Thread(target=run_scan, daemon=True)
-                    scan_thread.start()
-                    current_screen = "scanning"
-                    time.sleep(BUTTON_DEBOUNCE_TIME)
-                
-                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    current_ip_input = TARGET_IP
-                    current_screen = "ip_input"
-                    time.sleep(BUTTON_DEBOUNCE_TIME)
-                
-                if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-                    last_button_press_time = current_time
-                    current_ports_input = ",".join(map(str, PORTS_TO_SCAN))
-                    current_screen = "ports_input"
-                    time.sleep(BUTTON_DEBOUNCE_TIME)
-            
-            elif current_screen == "ip_input":
-                char_set = "0123456789."
-                new_ip = handle_ip_input_logic(current_ip_input)
-                if new_ip:
-                    TARGET_IP = new_ip
-                current_screen = "main"
-                time.sleep(BUTTON_DEBOUNCE_TIME)
-            
-            elif current_screen == "ports_input":
-                char_set = "0123456789,"
-                new_ports_str = handle_ports_input_logic(current_ports_input)
-                if new_ports_str:
-                    try:
-                        parsed_ports = [int(p.strip()) for p in new_ports_str.split(',') if p.strip().isdigit()]
-                        if all(1 <= p <= 65535 for p in parsed_ports):
-                            PORTS_TO_SCAN = parsed_ports
-                        else:
-                            show_message(["Invalid Port Range!", "1-65535 only."], "red")
-                            time.sleep(2)
-                    except ValueError:
-                        show_message(["Invalid Format!", "Use comma-sep", "numbers."], "red")
-                        time.sleep(2)
-                current_screen = "main"
-                time.sleep(BUTTON_DEBOUNCE_TIME)
-            
-            elif current_screen == "scanning":
+            if scan_thread and scan_thread.is_alive():
                 draw_ui("scanning")
                 if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     cleanup()
                     break
-                if not (scan_thread and scan_thread.is_alive()):
-                    current_screen = "results"
                 time.sleep(0.1)
-            
-            elif current_screen == "results":
+            elif open_ports:
                 draw_ui("results")
                 if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
-                    current_screen = "main"
+                    open_ports = []
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
                     last_button_press_time = current_time
                     # Start scan in a thread
                     scan_thread = threading.Thread(target=run_scan, daemon=True)
                     scan_thread.start()
-                    current_screen = "scanning"
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 
                 if GPIO.input(PINS["UP"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
@@ -440,6 +374,43 @@ if __name__ == '__main__':
                     time.sleep(BUTTON_DEBOUNCE_TIME)
                 
                 time.sleep(0.1)
+            else:
+                draw_ui("main")
+                
+                if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    cleanup()
+                    break
+                
+                if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    # Start scan in a thread
+                    scan_thread = threading.Thread(target=run_scan, daemon=True)
+                    scan_thread.start()
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                
+                if GPIO.input(PINS["KEY1"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    new_ip = handle_ip_input_logic(TARGET_IP)
+                    if new_ip:
+                        TARGET_IP = new_ip
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
+                
+                if GPIO.input(PINS["KEY2"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+                    last_button_press_time = current_time
+                    new_ports_str = handle_ports_input_logic(",".join(map(str, PORTS_TO_SCAN)))
+                    if new_ports_str:
+                        try:
+                            parsed_ports = [int(p.strip()) for p in new_ports_str.split(',') if p.strip().isdigit()]
+                            if all(1 <= p <= 65535 for p in parsed_ports):
+                                PORTS_TO_SCAN = parsed_ports
+                            else:
+                                show_message(["Invalid Port Range!", "1-65535 only."], "red")
+                                time.sleep(2)
+                        except ValueError:
+                            show_message(["Invalid Format!", "Use comma-sep", "numbers."], "red")
+                            time.sleep(2)
+                    time.sleep(BUTTON_DEBOUNCE_TIME)
     
             time.sleep(0.1)
     except (KeyboardInterrupt, SystemExit):
