@@ -34,6 +34,7 @@ except ImportError as e:
 # Import scapy for pcap processing
 try:
     from scapy.all import rdpcap, Dot11, Dot11Elt, EAPOL
+    from scapy.utils import wrpcap
     SCAPY_AVAILABLE = True
 except ImportError as e:
     print(f"Scapy import error: {e}")
@@ -234,7 +235,7 @@ class PwnagotchiPayload:
         try:
             # Start bettercap with the caplet in a non-interactive way
             self.bettercap_process = subprocess.Popen(
-                ['sudo', 'bettercap', '-iface', self.monitor_interface, '-caplet', caplet_path],
+                ['bettercap', '-iface', self.monitor_interface, '-caplet', caplet_path],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -324,7 +325,6 @@ class PwnagotchiPayload:
                 final_pcap_name = f"handshake_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pcap"
                 final_pcap_path = os.path.join(PWNAGOTCHI_HANDSHAKE_DIR, final_pcap_name)
                 
-                from scapy.utils import wrpcap
                 wrpcap(final_pcap_path, handshake_packets)
 
                 log(f"Saved {count} handshake packets to {final_pcap_path}")
