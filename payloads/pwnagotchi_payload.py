@@ -8,7 +8,11 @@ from datetime import datetime
 
 # Add Raspyjack root to sys.path for imports
 sys.path.append('/root/Raspyjack/')
-sys.path.append('/home/null/testing/raspyjack-payloads/') # For monitor_mode_helper
+
+# Add the parent directory of the current script to sys.path to find helpers
+script_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(script_dir)
+sys.path.append(parent_dir)
 
 # Import Raspyjack LCD modules
 try:
@@ -57,7 +61,7 @@ class PwnagotchiUI:
         self.lcd = lcd_display
         self.width = self.lcd.width
         self.height = self.lcd.height
-        self.image = Image.new("RGB", (self.width, self.height), LCD_1in44.BLACK)
+        self.image = Image.new("RGB", (self.width, self.height), "BLACK")
         self.draw = ImageDraw.Draw(self.image)
         
         # Fonts (assuming these are available from LCD_1in44 or similar)
@@ -78,38 +82,38 @@ class PwnagotchiUI:
 
     def _draw_face(self):
         # Simple Pwnagotchi-like face based on state
-        self.draw.rectangle([(self.width - 30, 5), (self.width - 5, 30)], fill=LCD_1in44.BLACK, outline=LCD_1in44.WHITE)
+        self.draw.rectangle([(self.width - 30, 5), (self.width - 5, 30)], fill="BLACK", outline="WHITE")
         
         if self.face_state == 0: # Neutral
-            self.draw.ellipse([(self.width - 25, 10), (self.width - 20, 15)], fill=LCD_1in44.WHITE) # Left eye
-            self.draw.ellipse([(self.width - 15, 10), (self.width - 10, 15)], fill=LCD_1in44.WHITE) # Right eye
-            self.draw.line([(self.width - 20, 20), (self.width - 15, 20)], fill=LCD_1in44.WHITE, width=1) # Mouth
+            self.draw.ellipse([(self.width - 25, 10), (self.width - 20, 15)], fill="WHITE") # Left eye
+            self.draw.ellipse([(self.width - 15, 10), (self.width - 10, 15)], fill="WHITE") # Right eye
+            self.draw.line([(self.width - 20, 20), (self.width - 15, 20)], fill="WHITE", width=1) # Mouth
         elif self.face_state == 1: # Happy
-            self.draw.ellipse([(self.width - 25, 10), (self.width - 20, 15)], fill=LCD_1in44.WHITE)
-            self.draw.ellipse([(self.width - 15, 10), (self.width - 10, 15)], fill=LCD_1in44.WHITE)
-            self.draw.arc([(self.width - 20, 15), (self.width - 15, 25)], 0, 180, fill=LCD_1in44.WHITE, width=1) # Smile
+            self.draw.ellipse([(self.width - 25, 10), (self.width - 20, 15)], fill="WHITE")
+            self.draw.ellipse([(self.width - 15, 10), (self.width - 10, 15)], fill="WHITE")
+            self.draw.arc([(self.width - 20, 15), (self.width - 15, 25)], 0, 180, fill="WHITE", width=1) # Smile
         elif self.face_state == 2: # Sad
-            self.draw.ellipse([(self.width - 25, 10), (self.width - 20, 15)], fill=LCD_1in44.WHITE)
-            self.draw.ellipse([(self.width - 15, 10), (self.width - 10, 15)], fill=LCD_1in44.WHITE)
-            self.draw.arc([(self.width - 20, 15), (self.width - 15, 25)], 180, 360, fill=LCD_1in44.WHITE, width=1) # Frown
+            self.draw.ellipse([(self.width - 25, 10), (self.width - 20, 15)], fill="WHITE")
+            self.draw.ellipse([(self.width - 15, 10), (self.width - 10, 15)], fill="WHITE")
+            self.draw.arc([(self.width - 20, 15), (self.width - 15, 25)], 180, 360, fill="WHITE", width=1) # Frown
         elif self.face_state == 3: # Pwned (eyes closed, big smile)
-            self.draw.line([(self.width - 25, 12), (self.width - 20, 12)], fill=LCD_1in44.WHITE, width=1)
-            self.draw.line([(self.width - 15, 12), (self.width - 10, 12)], fill=LCD_1in44.WHITE, width=1)
-            self.draw.arc([(self.width - 22, 18), (self.width - 13, 28)], 0, 180, fill=LCD_1in44.WHITE, width=2) # Big smile
+            self.draw.line([(self.width - 25, 12), (self.width - 20, 12)], fill="WHITE", width=1)
+            self.draw.line([(self.width - 15, 12), (self.width - 10, 12)], fill="WHITE", width=1)
+            self.draw.arc([(self.width - 22, 18), (self.width - 13, 28)], 0, 180, fill="WHITE", width=2) # Big smile
 
     def update_display(self):
-        self.draw.rectangle((0, 0, self.width, self.height), fill=LCD_1in44.BLACK) # Clear screen
+        self.draw.rectangle((0, 0, self.width, self.height), fill="BLACK") # Clear screen
         
         # Draw Pwnagotchi title
-        self.draw.text((5, 5), "Pwnagotchi", fill=LCD_1in44.WHITE, font=self.font_large)
+        self.draw.text((5, 5), "Pwnagotchi", fill="WHITE", font=self.font_large)
         
         # Draw face
         self._draw_face()
 
         # Display status
-        self.draw.text((5, 30), f"Status: {self.status_message}", fill=LCD_1in44.WHITE, font=self.font_small)
-        self.draw.text((5, 45), f"Handshakes: {self.handshakes_count}", fill=LCD_1in44.WHITE, font=self.font_small)
-        self.draw.text((5, 60), f"Channel: {self.channel}", fill=LCD_1in44.WHITE, font=self.font_small)
+        self.draw.text((5, 30), f"Status: {self.status_message}", fill="WHITE", font=self.font_small)
+        self.draw.text((5, 45), f"Handshakes: {self.handshakes_count}", fill="WHITE", font=self.font_small)
+        self.draw.text((5, 60), f"Channel: {self.channel}", fill="WHITE", font=self.font_small)
         
         # Update uptime
         current_time = time.time()
@@ -118,7 +122,7 @@ class PwnagotchiUI:
         
         hours, remainder = divmod(int(self.uptime), 3600)
         minutes, seconds = divmod(remainder, 60)
-        self.draw.text((5, 75), f"Uptime: {hours:02d}:{minutes:02d}:{seconds:02d}", fill=LCD_1in44.WHITE, font=self.font_small)
+        self.draw.text((5, 75), f"Uptime: {hours:02d}:{minutes:02d}:{seconds:02d}", fill="WHITE", font=self.font_small)
 
         self.lcd.LCD_ShowImage(self.image)
 
@@ -157,7 +161,7 @@ class PwnagotchiPayload:
         log("Initializing LCD...")
         try:
             LCD_Config.GPIO_Init()
-            self.lcd = LCD_1in44.LCD_1in44()
+            self.lcd = LCD_1in44.LCD()
             self.lcd.LCD_Init(self.lcd.SCAN_DIR_DFT)
             self.lcd.LCD_Clear()
             self.ui = PwnagotchiUI(self.lcd)
@@ -289,78 +293,57 @@ class PwnagotchiPayload:
             log("Scapy not available, cannot process pcap files.")
             return
 
-        # bettercap is configured to write all handshakes to a single file: bettercap_handshakes.pcap
-        pcap_file_path = os.path.join(PWNAGOTCHI_PCAP_DIR, "bettercap_handshakes.pcap")
-
-        if not os.path.exists(pcap_file_path):
+        source_pcap = os.path.join(PWNAGOTCHI_PCAP_DIR, "bettercap_handshakes.pcap")
+        if not os.path.exists(source_pcap) or os.path.getsize(source_pcap) == 0:
             return
 
-        log(f"Processing pcap file for handshakes: {pcap_file_path}")
-        
+        # Move the source file to a temporary location for processing.
+        # This is an atomic operation and prevents reprocessing.
+        processing_pcap = os.path.join(PWNAGOTCHI_PCAP_DIR, f"processing_{int(time.time())}.pcap")
         try:
-            packets = rdpcap(pcap_file_path)
-            found_handshakes = 0
+            os.rename(source_pcap, processing_pcap)
+            log(f"Moved {source_pcap} to {processing_pcap} for processing.")
+        except Exception as e:
+            log(f"Error renaming pcap file for processing: {e}")
+            return
+
+        try:
+            log(f"Scanning {processing_pcap} for EAPOL packets...")
+            packets = rdpcap(processing_pcap)
             
-            # Create a temporary pcap to store only the valid handshakes
-            temp_handshake_pcap = os.path.join(PWNAGOTCHI_PCAP_DIR, f"temp_verified_handshakes_{int(time.time())}.pcap")
-            
+            handshake_packets = []
             for packet in packets:
                 if packet.haslayer(EAPOL):
-                    # This is a basic check. A full handshake verification is more complex
-                    # and involves checking the 4-way handshake messages.
-                    # For now, we'll consider any EAPOL packet as part of a potential handshake.
-                    # In a real Pwnagotchi, this would be more sophisticated.
-                    
-                    # Save the EAPOL packet to a new pcap file
-                    with open(temp_handshake_pcap, 'ab') as f:
-                        f.write(bytes(packet))
-                    found_handshakes += 1
+                    handshake_packets.append(packet)
             
-            if found_handshakes > 0:
-                log(f"Found {found_handshakes} potential handshakes in {pcap_file_path}.")
-                # Move the temporary pcap with verified handshakes to the final directory
-                final_handshake_pcap_name = f"handshake_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pcap"
-                final_handshake_path = os.path.join(PWNAGOTCHI_HANDSHAKE_DIR, final_handshake_pcap_name)
-                os.rename(temp_handshake_pcap, final_handshake_path)
-                log(f"Saved {found_handshakes} handshakes to {final_handshake_path}")
-                self.handshakes_captured += found_handshakes
-                self.ui.face_state = 3 # Pwned face
-                self.ui.status_message = "Handshake saved!"
-            else:
-                log(f"No new EAPOL handshakes found in {pcap_file_path}.")
-                # Clean up the temporary pcap if no handshakes were found
-                if os.path.exists(temp_handshake_pcap):
-                    os.remove(temp_handshake_pcap)
+            if handshake_packets:
+                count = len(handshake_packets)
+                log(f"Found {count} EAPOL packets.")
+                
+                # Save the verified handshake packets to a new, permanent file
+                final_pcap_name = f"handshake_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pcap"
+                final_pcap_path = os.path.join(PWNAGOTCHI_HANDSHAKE_DIR, final_pcap_name)
+                
+                from scapy.utils import wrpcap
+                wrpcap(final_pcap_path, handshake_packets)
 
-            # Clear the bettercap_handshakes.pcap after processing to avoid reprocessing
-            # Or, bettercap might overwrite it, depending on its internal logic.
-            # For now, let's assume bettercap manages its own file or we can delete it.
-            # If bettercap is continuously writing, deleting it might cause issues.
-            # A safer approach is to move/rename bettercap_handshakes.pcap before processing.
-            
-            # Let's rename the bettercap_handshakes.pcap to a temporary name before processing
-            # to ensure bettercap can continue writing to a fresh file.
-            
-            # This logic needs to be carefully managed with bettercap's continuous writing.
-            # For now, we'll rely on bettercap's caplet to manage the file.
-            # If bettercap appends, we need to read only new packets.
-            # If bettercap overwrites, we process the whole file.
-            # The current caplet `set wifi.handshakes.file` likely appends.
-            # So, we need to read the file, process, and then truncate it or move processed packets.
-            
-            # A simpler approach for now: bettercap creates a new file for each handshake.
-            # But the caplet sets a fixed file name.
-            
-            # Let's modify the bettercap caplet to save handshakes to unique files.
-            # This is not directly supported by `wifi.handshakes.file` which is a single file.
-            # A custom bettercap event handler in the caplet would be needed.
-            
-            # For now, the current approach of processing the single bettercap_handshakes.pcap
-            # and moving EAPOL packets to a new file is a reasonable start.
-            # The `self.handshakes_captured` count will be updated based on new EAPOL packets found.
-            
+                log(f"Saved {count} handshake packets to {final_pcap_path}")
+                self.handshakes_captured += 1 # Increment by 1 for each file with handshakes, not each packet
+                if self.ui:
+                    self.ui.face_state = 3 # Pwned face
+                    self.ui.status_message = "Handshake saved!"
+            else:
+                log("No new EAPOL packets found in this batch.")
+
         except Exception as e:
-            log(f"Error processing pcap file {pcap_file_path}: {e}")
+            log(f"Error processing pcap file {processing_pcap}: {e}")
+        finally:
+            # Clean up the processed file
+            try:
+                log(f"Deleting processed file: {processing_pcap}")
+                os.remove(processing_pcap)
+            except Exception as e:
+                log(f"Error deleting processed file {processing_pcap}: {e}")
 
     def run(self):
         if not self._check_bettercap():
