@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # doom_demake.py
 # A DOOM-inspired raycasting game for the Raspyjack.
-# Stage 4: The AI - Enemies now detect and chase the player.
+# Based on the DOOM-style-Game project, adapted for Raspyjack hardware.
 
 import sys
 import os
@@ -10,6 +10,7 @@ import signal
 import math
 import RPi.GPIO as GPIO
 from PIL import Image, ImageDraw, ImageFont
+import random
 
 # --- Add Raspyjack root to Python path ---
 RASPYJACK_ROOT = '/root/Raspyjack'
@@ -17,230 +18,498 @@ if os.path.isdir(RASPYJACK_ROOT) and RASPYJACK_ROOT not in sys.path:
     sys.path.insert(0, RASPYJACK_ROOT)
 
 # --- Hardware Imports ---
-import LCD_Config
-import LCD_1in44
+try:
+    import LCD_Config
+    import LCD_1in44
+except ImportError:
+    print("WARNING: LCD libraries not found. Running in simulation mode.")
+    LCD_Config = None
+    LCD_1in44 = None
 
-# --- Game Configuration ---
-SCREEN_WIDTH = 128
-SCREEN_HEIGHT = 128
+# --- Settings ---
+WIDTH, HEIGHT = 128, 128
+RES = WIDTH, HEIGHT
+Half_WIDTH = WIDTH // 2
+Half_HEIGHT = HEIGHT // 2
+FPS = 60 # Target FPS
+
+PLAYER_POS = 1.5, 1.5
+PLAYER_ANGLE = 0
+PLAYER_SPEED = 0.004 * 30 # Adjusted for smaller scale
+PLAYER_ROT_SPEED = 0.002 * 30 # Adjusted for smaller scale
+PLAYER_SIZE_SCALE = 20
+PLAYER_MAX_HEALTH = 100
+
 FOV = math.pi / 3.0
-DEPTH = 16.0
-MOVE_SPEED = 2.0
-TURN_SPEED = 1.5
-ENEMY_SPEED = 1.0
-ENEMY_SIGHT_RADIUS = 5.0
+Half_FOV = FOV / 2
+NUM_RAYS = WIDTH // 2
+Half_NUM_RAYS = NUM_RAYS // 2
+DELTA_ANGLE = FOV / NUM_RAYS
+MAX_DEPTH = 16
+
+SCREEN_DIST = HALF_WIDTH / math.tan(HALF_FOV)
+SCALE = WIDTH // NUM_RAYS
+
+TEXTURE_SIZE = 64
+Half_TEXTURE_SIZE = TEXTURE_SIZE // 2
+FLOOR_COLOR = (30, 30, 30)
 
 # --- Map ---
-MAP_WIDTH = 16
-MAP_HEIGHT = 16
-game_map = (
-    "################"
-    "#..............#"
-    "#..##........#.#"
-    "#..##........#.#"
-    "#..##..##....#.#"
-    "#......##....#.#"
-    "#............#.#"
-    "#####........#.#"
-    "#...#........#.#"
-    "#...#..#.......#"
-    "#...#..#.......#"
-    "#...#..#.......#"
-    "#...#..#######.#"
-    "#..............#"
-    "#..............#"
-    "################"
-)
-
-# --- Sprites ---
-sprite_textures = {}
-sprites = [
-    {"x": 10.5, "y": 4.5, "texture": "cacodemon", "state": "idle"},
-    {"x": 7.5, "y": 10.5, "texture": "cacodemon", "state": "idle"},
-    {"x": 3.5, "y": 13.5, "texture": "cacodemon", "state": "idle"},
+text_map = [
+    '################',
+    '#.#............#',
+    '#.#......#######',
+    '#.#............#',
+    '#..#...........#',
+    '#..#...........#',
+    '#..#...#.......#',
+    '#......#.......#',
+    '#......#.......#',
+    '#......#.......#',
+    '#..............#',
+    '#..............#',
+    '#......#.......#',
+    '#......#.......#',
+    '#######........#',
+    '################',
 ]
 
-# --- Player & Game State ---
-player_x = 8.0
-player_y = 8.0
-player_a = 0.0
-shoot_cooldown = 0.0
-muzzle_flash_timer = 0.0
-game_won = False
+world_map = {}
+mini_map = set()
+for j, row in enumerate(text_map):
+    for i, char in enumerate(row):
+        if char != '.':
+            mini_map.add((i, j))
+            world_map[(i, j)] = 1
 
-# --- Hardware and State ---
-PINS = {
-    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
-    "KEY_PRESS": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16
-}
-RUNNING = True
-LCD = None
+# --- RayCasting ---
+class RayCasting:
+    def __init__(self, game):
+        self.game = game
+        self.ray_casting_result = []
+        self.objects_to_render = []
+        self.textures = self.game.object_renderer.wall_textures
 
-# --- Cleanup Function ---
-def cleanup(*_):
-    global RUNNING
-    if not RUNNING: return
-    RUNNING = False
-    print("DOOM Demake: Cleaning up GPIO...")
-    if LCD: LCD.LCD_Clear()
-    GPIO.cleanup()
-    print("DOOM Demake: Exiting.")
-    sys.exit(0)
+    def get_objects_to_render(self):
+        self.objects_to_render = []
+        for ray, values in enumerate(self.ray_casting_result):
+            depth, proj_height, texture, offset = values
+            if proj_height < HEIGHT:
+                wall_column = self.textures[texture].crop((offset * (TEXTURE_SIZE - SCALE), 0, offset * (TEXTURE_SIZE - SCALE) + SCALE, TEXTURE_SIZE))
+                wall_column = wall_column.resize((SCALE, proj_height), Image.Resampling.NEAREST)
+                wall_pos = (ray * SCALE, HALF_HEIGHT - proj_height // 2)
+                self.objects_to_render.append((depth, wall_column, wall_pos))
+        
+        for sprite in self.game.object_handler.sprite_list:
+            self.objects_to_render.append(sprite.object_locate(self.game.player))
 
-def create_cacodemon_sprite(size=64):
-    sprite_img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(sprite_img)
-    d.ellipse([(4, 4), (size-4, size-4)], fill="red", outline="darkred", width=2)
-    d.ellipse([(size*0.4, size*0.25), (size*0.6, size*0.45)], fill="white")
-    d.ellipse([(size*0.45, size*0.3), (size*0.55, size*0.4)], fill="black")
-    d.polygon([(size*0.5, 0), (size*0.4, 10), (size*0.6, 10)], fill="yellow")
-    return sprite_img
+    def ray_cast(self):
+        self.ray_casting_result = []
+        ox, oy = self.game.player.pos
+        x_map, y_map = self.game.player.map_pos
 
-# --- Main Execution Block ---
-if __name__ == "__main__":
-    signal.signal(signal.SIGINT, cleanup)
-    signal.signal(signal.SIGTERM, cleanup)
+        ray_angle = self.game.player.angle - HALF_FOV + 0.0001
+        for ray in range(NUM_RAYS):
+            sin_a = math.sin(ray_angle)
+            cos_a = math.cos(ray_angle)
+
+            # horizontals
+            y_hor, dy = (y_map + 1, 1) if sin_a > 0 else (y_map - 1e-6, -1)
+            depth_hor = (y_hor - oy) / sin_a
+            x_hor = ox + depth_hor * cos_a
+            delta_depth = dy / sin_a
+            dx = delta_depth * cos_a
+
+            for i in range(MAX_DEPTH):
+                tile_hor = int(x_hor), int(y_hor)
+                if tile_hor in self.game.map.world_map:
+                    texture_hor = self.game.map.world_map[tile_hor]
+                    break
+                x_hor += dx
+                y_hor += dy
+                depth_hor += delta_depth
+
+            # verticals
+            x_vert, dx = (x_map + 1, 1) if cos_a > 0 else (x_map - 1e-6, -1)
+            depth_vert = (x_vert - ox) / cos_a
+            y_vert = oy + depth_vert * cos_a
+            delta_depth = dx / cos_a
+            dy = delta_depth * sin_a
+
+            for i in range(MAX_DEPTH):
+                tile_vert = int(x_vert), int(y_vert)
+                if tile_vert in self.game.map.world_map:
+                    texture_vert = self.game.map.world_map[tile_vert]
+                    break
+                x_vert += dx
+                y_vert += dy
+                depth_vert += delta_depth
+
+            if depth_vert < depth_hor:
+                depth, texture = depth_vert, texture_vert
+                y_vert %= 1
+                offset = y_vert if cos_a > 0 else (1 - y_vert)
+            else:
+                depth, texture = depth_hor, texture_hor
+                x_hor %= 1
+                offset = x_hor if sin_a > 0 else (1 - x_hor)
+
+            depth *= math.cos(self.game.player.angle - ray_angle)
+            proj_height = min(int(SCREEN_DIST / (depth + 0.0001)), HEIGHT*2)
+            self.ray_casting_result.append((depth, proj_height, texture, offset))
+            ray_angle += DELTA_ANGLE
+
+    def update(self):
+        self.ray_cast()
+        self.get_objects_to_render()
+
+# --- Player ---
+class Player:
+    def __init__(self, game):
+        self.game = game
+        self.x, self.y = PLAYER_POS
+        self.angle = PLAYER_ANGLE
+        self.health = PLAYER_MAX_HEALTH
+
+    def movement(self):
+        sin_a = math.sin(self.angle)
+        cos_a = math.cos(self.angle)
+        dx, dy = 0, 0
+        speed = PLAYER_SPEED * self.game.delta_time
+        speed_sin = speed * sin_a
+        speed_cos = speed * cos_a
+
+        keys = self.game.keys
+        if keys['UP']:
+            dx += speed_cos
+            dy += speed_sin
+        if keys['DOWN']:
+            dx -= speed_cos
+            dy -= speed_sin
+        
+        self.check_wall_collision(dx, dy)
+
+        if keys['LEFT']:
+            self.angle -= PLAYER_ROT_SPEED * self.game.delta_time
+        if keys['RIGHT']:
+            self.angle += PLAYER_ROT_SPEED * self.game.delta_time
+        self.angle %= math.tau
+
+    def check_wall(self, x, y):
+        return (x, y) not in self.game.map.world_map
+
+    def check_wall_collision(self, dx, dy):
+        scale = PLAYER_SIZE_SCALE / self.game.delta_time
+        if self.check_wall(int(self.x + dx * scale), int(self.y)):
+            self.x += dx
+        if self.check_wall(int(self.x), int(self.y + dy * scale)):
+            self.y += dy
+
+    def draw(self):
+        self.game.screen_draw.line(
+            (self.x * 10, self.y * 10),
+            (self.x * 10 + WIDTH * math.cos(self.angle), self.y * 10 + WIDTH * math.sin(self.angle)),
+            'yellow', width=2
+        )
+        self.game.screen_draw.ellipse(
+            (self.x * 10 - 5, self.y * 10 - 5, self.x * 10 + 5, self.y * 10 + 5),
+            fill='green', outline='green'
+        )
+
+    def update(self):
+        self.movement()
+
+    @property
+    def pos:
+        return self.x, self.y
+
+    @property
+    def map_pos:
+        return int(self.x), int(self.y)
+
+# --- SpriteObject ---
+class SpriteObject:
+    def __init__(self, game, path, pos=(10.5, 3.5), scale=0.7, shift=0.27):
+        self.game = game
+        self.player = game.player
+        self.x, self.y = pos
+        self.image = self.get_image(path)
+        self.SPRITE_SCALE = scale
+        self.SPRITE_HEIGHT_SHIFT = shift
+        self.is_dead = False
+
+    def get_image(self, path):
+        # In Raspyjack, we create images procedurally
+        if "cacodemon" in path:
+            img = Image.new("RGBA", (TEXTURE_SIZE, TEXTURE_SIZE), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            d.ellipse([(4, 4), (TEXTURE_SIZE-4, TEXTURE_SIZE-4)], fill="red", outline="darkred", width=2)
+            d.ellipse([(TEXTURE_SIZE*0.4, TEXTURE_SIZE*0.25), (TEXTURE_SIZE*0.6, TEXTURE_SIZE*0.45)], fill="white")
+            d.ellipse([(TEXTURE_SIZE*0.45, TEXTURE_SIZE*0.3), (TEXTURE_SIZE*0.55, TEXTURE_SIZE*0.4)], fill="black")
+            return img
+        else: # Default sprite
+            img = Image.new("RGBA", (TEXTURE_SIZE, TEXTURE_SIZE), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            d.rectangle([(10,10), (TEXTURE_SIZE-10, TEXTURE_SIZE-10)], fill="green")
+            return img
+
+    def object_locate(self, player):
+        if self.is_dead:
+            return (False, None, None)
+
+        dx, dy = self.x - player.x, self.y - player.y
+        self.dist = math.sqrt(dx ** 2 + dy ** 2)
+
+        self.theta = math.atan2(dy, dx)
+        gamma = self.theta - player.angle
+        if dx > 0 and 180 <= math.degrees(player.angle) <= 360 or dx < 0 and dy < 0:
+            gamma += math.tau
+
+        delta_rays = int(gamma / DELTA_ANGLE)
+        self.screen_x = (HALF_NUM_RAYS + delta_rays) * SCALE
+
+        self.dist *= math.cos(HALF_FOV - self.screen_x / (2*HALF_WIDTH) * FOV)
+
+        if 0 <= self.screen_x <= WIDTH and self.dist > 0.5:
+            proj_height = min(int(SCREEN_DIST / self.dist * self.SPRITE_SCALE), HEIGHT*2)
+            half_proj_height = proj_height // 2
+            shift = proj_height * self.SPRITE_HEIGHT_SHIFT
+
+            sprite_pos = (self.screen_x - half_proj_height, HALF_HEIGHT - half_proj_height + shift)
+            sprite = self.image.resize((proj_height, proj_height), Image.Resampling.NEAREST)
+            return (self.dist, sprite, sprite_pos)
+        else:
+            return (False, None, None)
+
+# --- ObjectHandler ---
+class ObjectHandler:
+    def __init__(self, game):
+        self.game = game
+        self.sprite_list = []
+        self.add_sprite(SpriteObject(game, 'cacodemon', pos=(10.5, 5.5)))
+        self.add_sprite(SpriteObject(game, 'cacodemon', pos=(7.5, 1.5)))
+        self.add_sprite(SpriteObject(game, 'cacodemon', pos=(1.5, 7.5)))
+
+    def update(self):
+        pass
+
+    def add_sprite(self, sprite):
+        self.sprite_list.append(sprite)
+
+# --- ObjectRenderer ---
+class ObjectRenderer:
+    def __init__(self, game):
+        self.game = game
+        self.screen = game.screen
+        self.wall_textures = self.load_wall_textures()
+
+    def draw(self):
+        self.draw_background()
+        self.render_game_objects()
+
+    def draw_background(self):
+        # Draw floor
+        self.game.screen_draw.rectangle((0, HALF_HEIGHT, WIDTH, HEIGHT), fill=FLOOR_COLOR)
+        # Draw ceiling (sky)
+        self.game.screen_draw.rectangle((0, 0, WIDTH, HALF_HEIGHT), fill="skyblue")
+
+    def render_game_objects(self):
+        list_objects = sorted(self.game.raycasting.objects_to_render, key=lambda t: t[0], reverse=True)
+        for depth, image, pos in list_objects:
+            if image:
+                self.screen.paste(image, pos, image)
+
+    @staticmethod
+    def get_texture(path, res=(TEXTURE_SIZE, TEXTURE_SIZE)):
+        # Procedural textures for Raspyjack
+        if "1" in path: # Brick
+            texture = Image.new("RGB", res)
+            d = ImageDraw.Draw(texture)
+            for x in range(0, res[0], 16):
+                d.line([(x,0), (x,res[1])], fill='gray')
+            for y in range(0, res[1], 16):
+                d.line([(0,y), (res[0],y)], fill='gray')
+            d.rectangle([(0,0), res], fill=None, outline='red', width=2)
+            return texture
+        else: # Stone
+            texture = Image.new("RGB", res, "darkgray")
+            d = ImageDraw.Draw(texture)
+            for _ in range(100):
+                x,y = random.randint(0,res[0]), random.randint(0,res[1])
+                d.point((x,y), fill='gray')
+            return texture
+
+    def load_wall_textures(self):
+        return {
+            1: self.get_texture('1'),
+            2: self.get_texture('2'),
+        }
+
+# --- Map ---
+class Map:
+    def __init__(self, game):
+        self.game = game
+        self.mini_map = mini_map
+        self.world_map = world_map
+        self.rows = len(text_map)
+        self.cols = len(text_map[0])
+
+    def draw(self):
+        [self.game.screen_draw.rectangle((pos[0] * 10, pos[1] * 10, pos[0] * 10 + 10, pos[1] * 10 + 10),
+                                         fill='darkgray', outline='darkgray')
+         for pos in self.mini_map]
+
+# --- Weapon ---
+class Weapon:
+    def __init__(self, game, path='weapon/shotgun/0.png', scale=0.4, animation_time=90):
+        self.game = game
+        self.scale = scale
+        self.image = self.get_image(path)
+        self.animation_time = animation_time
+        self.reloading = False
+        self.num_images = 1 # Simplified
+        self.frame_counter = 0
+        self.damage = 50
+
+    def get_image(self, path):
+        # Procedural weapon sprite
+        img = Image.new("RGBA", (100, 100), (0,0,0,0))
+        d = ImageDraw.Draw(img)
+        d.rectangle([(40,60), (60, 100)], fill='brown')
+        d.rectangle([(30,50), (70, 60)], fill='gray')
+        return img
+
+    def animate_shot(self):
+        if self.reloading:
+            self.game.player.shot = False
+            if self.animation_trigger:
+                self.frame_counter += 1
+                if self.frame_counter == self.num_images:
+                    self.reloading = False
+                    self.frame_counter = 0
+
+    def draw(self):
+        weapon_pos = (HALF_WIDTH - self.image.width // 2, HEIGHT - self.image.height)
+        self.game.screen.paste(self.image, weapon_pos, self.image)
+
+    def update(self):
+        pass # Simplified
+
+# --- Main Game Class ---
+class Game:
+    def __init__(self):
+        self.keys = {
+            "UP": False, "DOWN": False, "LEFT": False, "RIGHT": False,
+            "KEY1": False, "KEY2": False, "KEY3": False
+        }
+        self.screen = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        self.screen_draw = ImageDraw.Draw(self.screen)
+        self.clock = time.time()
+        self.delta_time = 1
+        self.running = True
+        self.init_hardware()
+        self.new_game()
+
+    def init_hardware(self):
+        if LCD_1in44:
+            self.LCD = LCD_1in44.LCD()
+            self.LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+            self.LCD.LCD_Clear()
+            GPIO.setmode(GPIO.BCM)
+            self.PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "KEY_PRESS": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+            for pin in self.PINS.values():
+                GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        else:
+            self.LCD = None # Simulation mode
+            print("Running in simulation mode. No hardware initialized.")
+
+    def new_game(self):
+        self.map = Map(self)
+        self.player = Player(self)
+        self.object_renderer = ObjectRenderer(self)
+        self.raycasting = RayCasting(self)
+        self.object_handler = ObjectHandler(self)
+        self.weapon = Weapon(self)
+
+    def update(self):
+        self.player.update()
+        self.raycasting.update()
+        self.object_handler.update()
+        self.weapon.update()
+        
+        now = time.time()
+        self.delta_time = now - self.clock
+        self.clock = now
+        
+        # Cap FPS
+        sleep_time = (1.0 / FPS) - self.delta_time
+        if sleep_time > 0:
+            time.sleep(sleep_time)
+
+    def draw(self):
+        self.object_renderer.draw()
+        self.weapon.draw()
+        # self.map.draw() # Mini-map disabled for performance
+        # self.player.draw()
+
+    def check_events(self):
+        if self.LCD:
+            self.keys['UP'] = GPIO.input(self.PINS['UP']) == 0
+            self.keys['DOWN'] = GPIO.input(self.PINS['DOWN']) == 0
+            self.keys['LEFT'] = GPIO.input(self.PINS['LEFT']) == 0
+            self.keys['RIGHT'] = GPIO.input(self.PINS['RIGHT']) == 0
+            self.keys['KEY1'] = GPIO.input(self.PINS['KEY1']) == 0
+            self.keys['KEY2'] = GPIO.input(self.PINS['KEY2']) == 0
+            if GPIO.input(self.PINS['KEY3']) == 0:
+                self.running = False
+        else: # Simulation keys
+            # In a real sim, you'd poll a library like pynput
+            pass
+
+        if self.keys['KEY1']: # Shoot
+            for sprite in sorted(self.object_handler.sprite_list, key=lambda s: s.dist):
+                if not sprite.is_dead:
+                    dx, dy = sprite.x - self.player.x, sprite.y - self.player.y
+                    dist = (dx**2 + dy**2)**0.5
+                    norm_dx, norm_dy = dx / dist, dy / dist
+                    dot_product = (norm_dx * math.sin(self.player.angle) + norm_dy * math.cos(self.player.angle))
+                    if dot_product > 0.95: # Narrow cone of fire
+                        sprite.is_dead = True
+                        break
+
+
+    def run(self):
+        while self.running:
+            self.check_events()
+            self.update()
+            self.draw()
+            if self.LCD:
+                self.LCD.LCD_ShowImage(self.screen, 0, 0)
+        
+        # Cleanup
+        if self.LCD:
+            self.LCD.LCD_Clear()
+            GPIO.cleanup()
+        print("DOOM Demake: Exiting.")
+        sys.exit(0)
+
+if __name__ == '__main__':
+    game = Game()
+    
+    def cleanup_handler(signum, frame):
+        game.running = False
+    
+    signal.signal(signal.SIGINT, cleanup_handler)
+    signal.signal(signal.SIGTERM, cleanup_handler)
 
     try:
-        GPIO.setmode(GPIO.BCM)
-        for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-        LCD = LCD_1in44.LCD()
-        LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-        LCD.LCD_Clear()
-
-        sprite_textures["cacodemon"] = create_cacodemon_sprite()
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
-
-        image = Image.new("RGB", (SCREEN_WIDTH, SCREEN_HEIGHT), "BLACK")
-        draw = ImageDraw.Draw(image)
-        
-        depth_buffer = [0] * SCREEN_WIDTH
-        last_frame_time = time.time()
-
-        while RUNNING:
-            current_time = time.time()
-            elapsed_time = current_time - last_frame_time
-            last_frame_time = current_time
-            shoot_cooldown -= elapsed_time
-            muzzle_flash_timer -= elapsed_time
-
-            # --- Input ---
-            if not game_won:
-                if GPIO.input(PINS["LEFT"]) == 0: player_a -= TURN_SPEED * elapsed_time
-                if GPIO.input(PINS["RIGHT"]) == 0: player_a += TURN_SPEED * elapsed_time
-                if GPIO.input(PINS["UP"]) == 0:
-                    new_x = player_x + math.sin(player_a) * MOVE_SPEED * elapsed_time
-                    new_y = player_y + math.cos(player_a) * MOVE_SPEED * elapsed_time
-                    if game_map[int(new_y) * MAP_WIDTH + int(new_x)] != '#': player_x, player_y = new_x, new_y
-                if GPIO.input(PINS["DOWN"]) == 0:
-                    new_x = player_x - math.sin(player_a) * MOVE_SPEED * elapsed_time
-                    new_y = player_y - math.cos(player_a) * MOVE_SPEED * elapsed_time
-                    if game_map[int(new_y) * MAP_WIDTH + int(new_x)] != '#': player_x, player_y = new_x, new_y
-                
-                if GPIO.input(PINS["KEY1"]) == 0 and shoot_cooldown <= 0:
-                    shoot_cooldown = 0.5
-                    muzzle_flash_timer = 0.1
-                    for sprite in sorted(sprites, key=lambda s: s.get('dist', 999)):
-                        if sprite['state'] != 'dead':
-                            dx, dy = sprite['x'] - player_x, sprite['y'] - player_y
-                            dist = (dx**2 + dy**2)**0.5
-                            norm_dx, norm_dy = dx / dist, dy / dist
-                            dot_product = (norm_dx * math.sin(player_a) + norm_dy * math.cos(player_a))
-                            if dot_product > 0.90: # Cone of fire
-                                sprite['state'] = 'dead'
-                                break
-
-            if GPIO.input(PINS["KEY3"]) == 0: break
-
-            # --- AI Update ---
-            if not game_won:
-                for sprite in sprites:
-                    if sprite['state'] == 'idle':
-                        dist_to_player = ((player_x - sprite['x'])**2 + (player_y - sprite['y'])**2)**0.5
-                        if dist_to_player < ENEMY_SIGHT_RADIUS:
-                            sprite['state'] = 'chasing'
-                    elif sprite['state'] == 'chasing':
-                        vec_x, vec_y = player_x - sprite['x'], player_y - sprite['y']
-                        dist = (vec_x**2 + vec_y**2)**0.5
-                        if dist > 0:
-                            vec_x, vec_y = (vec_x / dist) * ENEMY_SPEED * elapsed_time, (vec_y / dist) * ENEMY_SPEED * elapsed_time
-                            new_x, new_y = sprite['x'] + vec_x, sprite['y'] + vec_y
-                            if game_map[int(new_y) * MAP_WIDTH + int(new_x)] != '#':
-                                sprite['x'], sprite['y'] = new_x, new_y
-
-            # --- Rendering ---
-            # Walls
-            for x in range(SCREEN_WIDTH):
-                ray_angle = (player_a - FOV / 2.0) + (x / float(SCREEN_WIDTH)) * FOV
-                eye_x, eye_y = math.sin(ray_angle), math.cos(ray_angle)
-                distance_to_wall = 0.0
-                hit_wall = False
-                while not hit_wall and distance_to_wall < DEPTH:
-                    distance_to_wall += 0.1
-                    test_x, test_y = int(player_x + eye_x * distance_to_wall), int(player_y + eye_y * distance_to_wall)
-                    if not (0 <= test_x < MAP_WIDTH and 0 <= test_y < MAP_HEIGHT):
-                        hit_wall, distance_to_wall = True, DEPTH
-                    elif game_map[test_y * MAP_WIDTH + test_x] == '#':
-                        hit_wall = True
-                
-                depth_buffer[x] = distance_to_wall
-                ceiling = int((SCREEN_HEIGHT / 2.0) - SCREEN_HEIGHT / distance_to_wall) if distance_to_wall > 0 else SCREEN_HEIGHT
-                floor = SCREEN_HEIGHT - ceiling
-                shade = max(0.1, 1.0 - (distance_to_wall / DEPTH))
-                wall_color = (int(100 * shade), int(100 * shade), int(255 * shade))
-                draw.line([(x, 0), (x, ceiling)], fill=(0,0,0))
-                draw.line([(x, ceiling), (x, floor)], fill=wall_color)
-                draw.line([(x, floor), (x, SCREEN_HEIGHT)], fill=(int(50*shade), int(150*shade), int(50*shade)))
-
-            # Sprites
-            live_sprites = [s for s in sprites if s['state'] != 'dead']
-            for sprite in live_sprites:
-                sprite['dist'] = ((player_x - sprite['x'])**2 + (player_y - sprite['y'])**2)**0.5
-            live_sprites.sort(key=lambda s: s['dist'], reverse=True)
-
-            for sprite in live_sprites:
-                rel_x, rel_y = sprite['x'] - player_x, sprite['y'] - player_y
-                transform_x = rel_y * math.cos(player_a) - rel_x * math.sin(player_a)
-                transform_y = rel_x * math.cos(player_a) + rel_y * math.sin(player_a)
-
-                if transform_y > 0.5:
-                    sprite_screen_x = int((SCREEN_WIDTH / 2) * (1 + (transform_x / transform_y)))
-                    sprite_height = abs(int(SCREEN_HEIGHT / transform_y))
-                    start_y, end_y = int((SCREEN_HEIGHT - sprite_height) / 2), int((SCREEN_HEIGHT + sprite_height) / 2)
-                    start_x, end_x = int(sprite_screen_x - sprite_height / 2), int(sprite_screen_x + sprite_height / 2)
-                    texture = sprite_textures[sprite['texture']]
-                    
-                    for stripe in range(start_x, end_x):
-                        if 0 <= stripe < SCREEN_WIDTH and transform_y < depth_buffer[stripe]:
-                            tex_x = int(255 * (stripe - start_x) / sprite_height) / 255
-                            tex_column = texture.crop((int(tex_x * texture.width), 0, int(tex_x * texture.width) + 1, texture.height))
-                            scaled_column = tex_column.resize((1, sprite_height), Image.Resampling.NEAREST)
-                            image.paste(scaled_column, (stripe, start_y), scaled_column)
-            
-            # --- UI / HUD ---
-            cx, cy = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
-            draw.line([(cx - 5, cy), (cx + 5, cy)], fill="white")
-            draw.line([(cx, cy - 5), (cx, cy + 5)], fill="white")
-
-            if muzzle_flash_timer > 0:
-                d = ImageDraw.Draw(image)
-                d.polygon([(cx-10, SCREEN_HEIGHT-10), (cx, SCREEN_HEIGHT-30), (cx+10, SCREEN_HEIGHT-10)], fill="yellow")
-
-            if not game_won and all(s['state'] == 'dead' for s in sprites):
-                game_won = True
-            
-            if game_won:
-                bbox = draw.textbbox((0, 0), "VICTORY!", font=font)
-                text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-                draw.text(((SCREEN_WIDTH - text_w) / 2, (SCREEN_HEIGHT - text_h) / 2), "VICTORY!", font=font, fill="yellow")
-
-            LCD.LCD_ShowImage(image, 0, 0)
-
+        game.run()
     except Exception as e:
-        with open("/tmp/doom_demake.log", "a") as f:
-            f.write(f"ERROR: {e}\n")
+        if LCD_1in44:
+            GPIO.cleanup()
+        with open("/tmp/doom_demake_error.log", "w") as f:
+            f.write(f"An error occurred: {e}\n")
             import traceback
             traceback.print_exc(file=f)
-    finally:
-        cleanup()
+        print(f"An error occurred: {e}. See /tmp/doom_demake_error.log")
+        sys.exit(1)
