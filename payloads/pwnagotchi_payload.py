@@ -65,14 +65,11 @@ class PwnagotchiUI:
         self.image = Image.new("RGB", (self.width, self.height), "BLACK")
         self.draw = ImageDraw.Draw(self.image)
         
-        # Fonts (assuming these are available from LCD_1in44 or similar)
-        self.font_small = ImageFont.load_default() # Fallback
-        try:
-            self.font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 10)
-            self.font_medium = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 12)
-            self.font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 16)
-        except:
-            log("Could not load DejaVuSansMono fonts, using default.")
+        # Fonts
+        log("Forcing default PIL font to isolate potential crash source.")
+        self.font_small = ImageFont.load_default()
+        self.font_medium = ImageFont.load_default()
+        self.font_large = ImageFont.load_default()
 
         self.face_state = 0 # 0: neutral, 1: happy, 2: sad, 3: pwned
         self.status_message = "Initializing..."
@@ -448,10 +445,10 @@ class PwnagotchiPayload:
                 self.ui.handshakes_count = self.handshakes_captured
                 self.ui.update_display()
                 
-                # --- DIAGNOSTIC: Temporarily disable pcap processing to isolate crash ---
-                # if time.time() - last_pcap_process_time > 10: # Every 10 seconds
-                #     self._process_pcap_files()
-                #     last_pcap_process_time = time.time()
+                # Periodically process pcap files
+                if time.time() - last_pcap_process_time > 10: # Every 10 seconds
+                    self._process_pcap_files()
+                    last_pcap_process_time = time.time()
 
         except KeyboardInterrupt:
             log("KeyboardInterrupt detected.")
