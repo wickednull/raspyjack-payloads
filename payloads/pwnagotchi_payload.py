@@ -122,7 +122,7 @@ class PwnagotchiUI:
         minutes, seconds = divmod(remainder, 60)
         self.draw.text((5, 75), f"Uptime: {hours:02d}:{minutes:02d}:{seconds:02d}", fill="WHITE", font=self.font_small)
 
-        self.lcd.LCD_ShowImage(self.image)
+        self.lcd.LCD_ShowImage(self.image, 0, 0)
 
 # --- Pwnagotchi Payload Class ---
 class PwnagotchiPayload:
