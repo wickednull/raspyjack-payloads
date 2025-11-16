@@ -279,7 +279,7 @@ class SpriteObject:
             half_proj_height = proj_height // 2
             shift = proj_height * self.SPRITE_HEIGHT_SHIFT
 
-            sprite_pos = (self.screen_x - half_proj_height, HALF_HEIGHT - half_proj_height + shift)
+            sprite_pos = (int(self.screen_x - half_proj_height), int(HALF_HEIGHT - half_proj_height + shift))
             sprite = self.image.resize((proj_height, proj_height), Image.NEAREST)
             return (self.dist, sprite, sprite_pos)
         else:
