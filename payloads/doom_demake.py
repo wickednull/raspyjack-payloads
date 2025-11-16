@@ -51,7 +51,7 @@ SCREEN_DIST = HALF_WIDTH / math.tan(HALF_FOV)
 SCALE = WIDTH // NUM_RAYS
 
 TEXTURE_SIZE = 64
-Half_TEXTURE_SIZE = TEXTURE_SIZE // 2
+HALF_TEXTURE_SIZE = TEXTURE_SIZE // 2
 FLOOR_COLOR = (30, 30, 30)
 
 # --- Map ---
@@ -269,20 +269,13 @@ class SpriteObject:
         if dx > 0 and 180 <= math.degrees(player.angle) <= 360 or dx < 0 and dy < 0:
             gamma += (2 * math.pi)
 
-        
-
         delta_rays = int(gamma / DELTA_ANGLE)
-
         self.screen_x = (HALF_NUM_RAYS + delta_rays) * SCALE
 
-
-
         # self.dist *= math.cos(HALF_FOV - self.screen_x / (2*HALF_WIDTH) * FOV) # Incorrect fisheye correction
-
-
-
+        
         if 0 <= self.screen_x <= WIDTH and self.dist > 0.5:
-            proj_height = min(int(SCREEN_DIST / self.dist * self.SPRITE_SCALE), HEIGHT*2)
+            proj_height = min(int(SCREEN_DIST / (self.dist + 1e-6) * self.SPRITE_SCALE), HEIGHT*2)
             half_proj_height = proj_height // 2
             shift = proj_height * self.SPRITE_HEIGHT_SHIFT
 
@@ -393,7 +386,7 @@ class Weapon:
     def animate_shot(self):
         if self.reloading:
             self.game.player.shot = False
-            if self.animation_trigger:
+            if False: # self.animation_trigger was not defined
                 self.frame_counter += 1
                 if self.frame_counter == self.num_images:
                     self.reloading = False
