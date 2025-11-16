@@ -183,7 +183,7 @@ class PwnagotchiUI:
             
             # Highlight the selected option
             if i == self.settings_cursor:
-                self.draw.rectangle([(0, y_offset - 2), (self.width, y_offset + line_height - 2)], fill="BLUE")
+                self.draw.rectangle([(0, y_offset - 2), (self.width, y_offset + line_height - 2)], fill=(0, 0, 100)) # Dark blue
             
             # Display setting name
             self.draw.text((5, y_offset), key, font=self.font_medium, fill="WHITE")
@@ -191,10 +191,10 @@ class PwnagotchiUI:
             # Display setting value
             if isinstance(value, bool):
                 display_value = "[ON]" if value else "[OFF]"
-                fill_color = "GREEN" if value else "RED"
+                fill_color = (0, 255, 0) if value else (255, 0, 0) # Green/Red
             else:
                 display_value = str(value)
-                fill_color = "YELLOW"
+                fill_color = (255, 255, 0) # Yellow
             
             bbox = self.draw.textbbox((0,0), display_value, font=self.font_medium)
             value_width = bbox[2] - bbox[0]
@@ -428,6 +428,29 @@ class PwnagotchiPayload:
             log(f"Failed to create bettercap caplet: {e}")
             return False
 
+        try:
+            # Start bettercap with the caplet in a non-interactive way
+            self.bettercap_process = subprocess.Popen(
+                ['bettercap', '-iface', self.monitor_interface, '-caplet', caplet_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1, # Line-buffered output
+                universal_newlines=True
+            )
+            log(f"bettercap started with PID {self.bettercap_process.pid}")
+            
+            # Start a thread to read bettercap's output
+            threading.Thread(target=self._read_bettercap_output, daemon=True).start()
+            
+            return True
+        except FileNotFoundError:
+            log("bettercap command not found. Please ensure it's installed and in your PATH.")
+            return False
+        except Exception as e:
+            log(f"Failed to start bettercap: {e}")
+            return False
+
     def _apply_settings(self):
         log("Applying new settings and restarting bettercap...")
         
@@ -455,30 +478,6 @@ class PwnagotchiPayload:
             log("bettercap restarted successfully with new settings.")
             if self.ui:
                 self.ui.status_message = "Settings applied!"
-
-
-        try:
-            # Start bettercap with the caplet in a non-interactive way
-            self.bettercap_process = subprocess.Popen(
-                ['bettercap', '-iface', self.monitor_interface, '-caplet', caplet_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1, # Line-buffered output
-                universal_newlines=True
-            )
-            log(f"bettercap started with PID {self.bettercap_process.pid}")
-            
-            # Start a thread to read bettercap's output
-            threading.Thread(target=self._read_bettercap_output, daemon=True).start()
-            
-            return True
-        except FileNotFoundError:
-            log("bettercap command not found. Please ensure it's installed and in your PATH.")
-            return False
-        except Exception as e:
-            log(f"Failed to start bettercap: {e}")
-            return False
 
     def _read_bettercap_output(self):
         log("Starting bettercap output reader thread...")
