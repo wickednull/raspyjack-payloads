@@ -116,9 +116,9 @@ class RayCasting:
 
             # horizontals
             y_hor, dy = (y_map + 1, 1) if sin_a > 0 else (y_map - 1e-6, -1)
-            depth_hor = (y_hor - oy) / sin_a
+            depth_hor = (y_hor - oy) / (sin_a + 1e-6)
             x_hor = ox + depth_hor * cos_a
-            delta_depth = dy / sin_a
+            delta_depth = dy / (sin_a + 1e-6)
             dx = delta_depth * cos_a
 
             for i in range(MAX_DEPTH):
@@ -132,9 +132,9 @@ class RayCasting:
 
             # verticals
             x_vert, dx = (x_map + 1, 1) if cos_a > 0 else (x_map - 1e-6, -1)
-            depth_vert = (x_vert - ox) / cos_a
-            y_vert = oy + depth_vert * cos_a
-            delta_depth = dx / cos_a
+            depth_vert = (x_vert - ox) / (cos_a + 1e-6)
+            y_vert = oy + depth_vert * sin_a
+            delta_depth = dx / (cos_a + 1e-6)
             dy = delta_depth * sin_a
 
             for i in range(MAX_DEPTH):
