@@ -71,56 +71,153 @@ class PwnagotchiUI:
         self.font_medium = ImageFont.load_default()
         self.font_large = ImageFont.load_default()
 
+        self.view_mode = "main"
         self.face_state = 0 # 0: neutral, 1: happy, 2: sad, 3: pwned
         self.status_message = "Initializing..."
         self.handshakes_count = 0
         self.channel = "N/A"
-        self.uptime = 0 # in seconds
+        self.uptime = 0
         self.last_update_time = time.time()
 
-    def _draw_face(self):
-        # Simple Pwnagotchi-like face based on state
-        self.draw.rectangle([(self.width - 30, 5), (self.width - 5, 30)], fill="BLACK", outline="WHITE")
-        
-        if self.face_state == 0: # Neutral
-            self.draw.ellipse([(self.width - 25, 10), (self.width - 20, 15)], fill="WHITE") # Left eye
-            self.draw.ellipse([(self.width - 15, 10), (self.width - 10, 15)], fill="WHITE") # Right eye
-            self.draw.line([(self.width - 20, 20), (self.width - 15, 20)], fill="WHITE", width=1) # Mouth
-        elif self.face_state == 1: # Happy
-            self.draw.ellipse([(self.width - 25, 10), (self.width - 20, 15)], fill="WHITE")
-            self.draw.ellipse([(self.width - 15, 10), (self.width - 10, 15)], fill="WHITE")
-            self.draw.arc([(self.width - 20, 15), (self.width - 15, 25)], 0, 180, fill="WHITE", width=1) # Smile
-        elif self.face_state == 2: # Sad
-            self.draw.ellipse([(self.width - 25, 10), (self.width - 20, 15)], fill="WHITE")
-            self.draw.ellipse([(self.width - 15, 10), (self.width - 10, 15)], fill="WHITE")
-            self.draw.arc([(self.width - 20, 15), (self.width - 15, 25)], 180, 360, fill="WHITE", width=1) # Frown
-        elif self.face_state == 3: # Pwned (eyes closed, big smile)
-            self.draw.line([(self.width - 25, 12), (self.width - 20, 12)], fill="WHITE", width=1)
-            self.draw.line([(self.width - 15, 12), (self.width - 10, 12)], fill="WHITE", width=1)
-            self.draw.arc([(self.width - 22, 18), (self.width - 13, 28)], 0, 180, fill="WHITE", width=2) # Big smile
+        # Face mode attributes
+        self.sayings = [
+            "feed me handshakes", "looking for wifi...", "is that a deauth?",
+            "hehehe >:)", "*zzt*", "pwned!", "sleepy...", "bored",
+            "need more power", "channel surfing..."
+        ]
+        self.bubble_text = None
+        self.bubble_timer = 0
+        self.bubble_duration = 5 # seconds
 
-    def update_display(self):
-        self.draw.rectangle((0, 0, self.width, self.height), fill="BLACK") # Clear screen
+        # Settings mode attributes
+        self.settings = {}
+        self.settings_options = []
+        self.settings_cursor = 0
+
+    def _draw_face(self, box):
+        # Simple Pwnagotchi-like face based on state, drawn in a specific box
+        x, y, width, height = box
         
+        # Scale factors for drawing within the box
+        w_ratio = width / 25.0
+        h_ratio = height / 25.0
+
+        if self.face_state == 0: # Neutral
+            self.draw.ellipse([(x + 5*w_ratio, y + 5*h_ratio), (x + 10*w_ratio, y + 10*h_ratio)], fill="WHITE")
+            self.draw.ellipse([(x + 15*w_ratio, y + 5*h_ratio), (x + 20*w_ratio, y + 10*h_ratio)], fill="WHITE")
+            self.draw.line([(x + 10*w_ratio, y + 15*h_ratio), (x + 15*w_ratio, y + 15*h_ratio)], fill="WHITE", width=1)
+        elif self.face_state == 1: # Happy
+            self.draw.ellipse([(x + 5*w_ratio, y + 5*h_ratio), (x + 10*w_ratio, y + 10*h_ratio)], fill="WHITE")
+            self.draw.ellipse([(x + 15*w_ratio, y + 5*h_ratio), (x + 20*w_ratio, y + 10*h_ratio)], fill="WHITE")
+            self.draw.arc([(x + 8*w_ratio, y + 10*h_ratio), (x + 17*w_ratio, y + 20*h_ratio)], 0, 180, fill="WHITE", width=2)
+        elif self.face_state == 2: # Sad
+            self.draw.ellipse([(x + 5*w_ratio, y + 5*h_ratio), (x + 10*w_ratio, y + 10*h_ratio)], fill="WHITE")
+            self.draw.ellipse([(x + 15*w_ratio, y + 5*h_ratio), (x + 20*w_ratio, y + 10*h_ratio)], fill="WHITE")
+            self.draw.arc([(x + 8*w_ratio, y + 15*h_ratio), (x + 17*w_ratio, y + 25*h_ratio)], 180, 360, fill="WHITE", width=2)
+        elif self.face_state == 3: # Pwned
+            self.draw.line([(x + 5*w_ratio, y + 8*h_ratio), (x + 10*w_ratio, y + 8*h_ratio)], fill="WHITE", width=2)
+            self.draw.line([(x + 15*w_ratio, y + 8*h_ratio), (x + 20*w_ratio, y + 8*h_ratio)], fill="WHITE", width=2)
+            self.draw.arc([(x + 7*w_ratio, y + 12*h_ratio), (x + 18*w_ratio, y + 23*h_ratio)], 0, 180, fill="WHITE", width=2)
+
+    def _draw_main_view(self):
         # Draw Pwnagotchi title
         self.draw.text((5, 5), "Pwnagotchi", fill="WHITE", font=self.font_large)
         
-        # Draw face
-        self._draw_face()
+        # Draw small face in the corner
+        self._draw_face((self.width - 30, 5, 25, 25))
 
         # Display status
         self.draw.text((5, 30), f"Status: {self.status_message}", fill="WHITE", font=self.font_small)
         self.draw.text((5, 45), f"Handshakes: {self.handshakes_count}", fill="WHITE", font=self.font_small)
         self.draw.text((5, 60), f"Channel: {self.channel}", fill="WHITE", font=self.font_small)
         
-        # Update uptime
-        current_time = time.time()
-        self.uptime += (current_time - self.last_update_time)
-        self.last_update_time = current_time
+        hours, rem = divmod(int(self.uptime), 3600)
+        mins, secs = divmod(rem, 60)
+        self.draw.text((5, 75), f"Uptime: {hours:02d}:{mins:02d}:{secs:02d}", fill="WHITE", font=self.font_small)
+
+    def _draw_face_view(self):
+        # Draw large face in the center
+        face_size = 80
+        face_box = ((self.width - face_size) // 2, (self.height - face_size) // 2, face_size, face_size)
+        self._draw_face(face_box)
+
+        # Update and draw speech bubble
+        if self.bubble_timer <= 0:
+            self.bubble_text = random.choice(self.sayings)
+            self.bubble_timer = self.bubble_duration + random.uniform(-1, 1)
+
+        if self.bubble_text:
+            bubble_padding = 5
+            text_bbox = self.draw.textbbox((0,0), self.bubble_text, font=self.font_medium)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+            
+            bubble_x = (self.width - text_width) // 2
+            bubble_y = face_box[1] - text_height - bubble_padding * 3
+            
+            if bubble_y < 0: bubble_y = 5 # Prevent drawing off-screen
+
+            bubble_box = [
+                (bubble_x - bubble_padding, bubble_y - bubble_padding),
+                (bubble_x + text_width + bubble_padding, bubble_y + text_height + bubble_padding)
+            ]
+            self.draw.rectangle(bubble_box, fill="BLACK", outline="WHITE", width=1)
+            self.draw.text((bubble_x, bubble_y), self.bubble_text, font=self.font_medium, fill="WHITE")
+            
+            # Draw pointer triangle
+            pointer_base_y = bubble_box[1][1]
+            self.draw.polygon([
+                (bubble_x + 10, pointer_base_y),
+                (bubble_x + 20, pointer_base_y),
+                (bubble_x + 15, pointer_base_y + 5)
+            ], fill="WHITE")
+
+    def _draw_settings_view(self):
+        self.draw.text((5, 5), "Settings", fill="WHITE", font=self.font_large)
         
-        hours, remainder = divmod(int(self.uptime), 3600)
-        minutes, seconds = divmod(remainder, 60)
-        self.draw.text((5, 75), f"Uptime: {hours:02d}:{minutes:02d}:{seconds:02d}", fill="WHITE", font=self.font_small)
+        y_offset = 30
+        line_height = 15
+        
+        for i, key in enumerate(self.settings_options):
+            value = self.settings[key]
+            
+            # Highlight the selected option
+            if i == self.settings_cursor:
+                self.draw.rectangle([(0, y_offset - 2), (self.width, y_offset + line_height - 2)], fill="BLUE")
+            
+            # Display setting name
+            self.draw.text((5, y_offset), key, font=self.font_medium, fill="WHITE")
+            
+            # Display setting value
+            if isinstance(value, bool):
+                display_value = "[ON]" if value else "[OFF]"
+                fill_color = "GREEN" if value else "RED"
+            else:
+                display_value = str(value)
+                fill_color = "YELLOW"
+            
+            bbox = self.draw.textbbox((0,0), display_value, font=self.font_medium)
+            value_width = bbox[2] - bbox[0]
+            self.draw.text((self.width - value_width - 5, y_offset), display_value, font=self.font_medium, fill=fill_color)
+
+            y_offset += line_height + 5
+
+    def update_display(self):
+        self.draw.rectangle((0, 0, self.width, self.height), fill="BLACK") # Clear screen
+        
+        # Update timers
+        current_time = time.time()
+        delta = current_time - self.last_update_time
+        self.uptime += delta
+        self.bubble_timer -= delta
+        self.last_update_time = current_time
+
+        if self.view_mode == "face":
+            self._draw_face_view()
+        elif self.view_mode == "settings":
+            self._draw_settings_view()
+        else: # "main" view
+            self._draw_main_view()
 
         self.lcd.LCD_ShowImage(self.image, 0, 0)
 
@@ -134,9 +231,79 @@ class PwnagotchiPayload:
         self.running = False
         self.handshakes_captured = 0
         self.current_channel = "N/A"
+        self.view_mode = "main" # main, face, settings
         
+        # Settings
+        self.settings = {
+            "Channel Hop": True,
+            "Save Handshakes": True,
+            "Channels": "2.4GHz" # 2.4GHz or 5GHz
+        }
+        self.settings_options = list(self.settings.keys())
+        self.settings_cursor = 0
+
+        # Debouncing for keys
+        self.last_press_time = 0
+        self.debounce_delay = 0.3
+
         os.makedirs(PWNAGOTCHI_PCAP_DIR, exist_ok=True)
         os.makedirs(PWNAGOTCHI_HANDSHAKE_DIR, exist_ok=True)
+
+    def _handle_input(self):
+        current_time = time.time()
+        if (current_time - self.last_press_time) < self.debounce_delay:
+            return # Debouncing
+        
+        if GPIO.input(self.PINS["KEY3"]) == 0:
+            self.last_press_time = current_time
+            self.running = False # Signal to exit
+            return
+
+        if self.view_mode == "main":
+            if GPIO.input(self.PINS["KEY1"]) == 0:
+                self.last_press_time = current_time
+                self.view_mode = "face"
+            elif GPIO.input(self.PINS["KEY2"]) == 0:
+                self.last_press_time = current_time
+                self.view_mode = "settings"
+        
+        elif self.view_mode == "face":
+            if GPIO.input(self.PINS["KEY_PRESS"]) == 0:
+                self.last_press_time = current_time
+                self.view_mode = "main"
+
+        elif self.view_mode == "settings":
+            if GPIO.input(self.PINS["KEY_PRESS"]) == 0:
+                self.last_press_time = current_time
+                setting_key = self.settings_options[self.settings_cursor]
+                
+                # Toggle boolean settings
+                if isinstance(self.settings[setting_key], bool):
+                    self.settings[setting_key] = not self.settings[setting_key]
+                    log(f"Toggled setting '{setting_key}' to {self.settings[setting_key]}")
+                    self._apply_settings()
+                
+                # Cycle through string settings
+                elif setting_key == "Channels":
+                    if self.settings[setting_key] == "2.4GHz":
+                        self.settings[setting_key] = "5GHz" # Add 5GHz channel list to caplet generator
+                    else:
+                        self.settings[setting_key] = "2.4GHz"
+                    log(f"Cycled setting '{setting_key}' to {self.settings[setting_key]}")
+                    self._apply_settings()
+
+            elif GPIO.input(self.PINS["KEY_UP"]) == 0:
+                self.last_press_time = current_time
+                self.settings_cursor = (self.settings_cursor - 1) % len(self.settings_options)
+            
+            elif GPIO.input(self.PINS["KEY_DOWN"]) == 0:
+                self.last_press_time = current_time
+                self.settings_cursor = (self.settings_cursor + 1) % len(self.settings_options)
+
+            elif GPIO.input(self.PINS["KEY2"]) == 0: # Use KEY2 to exit settings
+                self.last_press_time = current_time
+                self.view_mode = "main"
+
 
     def _check_bettercap(self):
         log("Checking for bettercap installation...")
@@ -168,6 +335,21 @@ class PwnagotchiPayload:
         except Exception as e:
             log(f"Failed to initialize LCD: {e}")
             return False
+
+    def _init_gpio(self):
+        log("Initializing GPIO for keys...")
+        try:
+            # Pin definitions
+            self.PINS = { "KEY_UP": 6, "KEY_DOWN": 19, "KEY_LEFT": 5, "KEY_RIGHT": 26, "KEY_PRESS": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16 }
+            GPIO.setmode(GPIO.BCM)
+            for pin in self.PINS.values():
+                GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            log("GPIO initialized successfully.")
+            return True
+        except Exception as e:
+            log(f"Failed to initialize GPIO: {e}")
+            return False
+
 
     def _cleanup(self):
         log("Cleaning up Pwnagotchi payload...")
@@ -203,31 +385,77 @@ class PwnagotchiPayload:
         
         log("Cleanup complete.")
 
-    def _start_bettercap(self):
-        log(f"Starting bettercap on {self.monitor_interface}...")
+    def _generate_caplet(self):
+        log("Generating new bettercap caplet from settings...")
         
-        # Create a temporary caplet for basic sniffing and handshake saving
-        # bettercap will save handshakes to a .pcap file in the current directory
-        # We'll then move/process these files.
+        # Base settings
         caplet_content = f"""
         set events.stream.output off
         set ui.update.interval 1s
         set wifi.show.uptime true
-        set wifi.recon.channel hop
-        set wifi.recon.channels 1,6,11
         set wifi.recon.interval 5s
-        set wifi.handshakes.file {PWNAGOTCHI_PCAP_DIR}/bettercap_handshakes.pcap # bettercap saves to this file
-        wifi.recon on
-        wifi.handshakes on
         """
+
+        # Apply dynamic settings
+        if self.settings["Channel Hop"]:
+            caplet_content += "\\nset wifi.recon.channel hop"
+            if self.settings["Channels"] == "2.4GHz":
+                caplet_content += "\\nset wifi.recon.channels 1,6,11"
+            elif self.settings["Channels"] == "5GHz":
+                caplet_content += "\\nset wifi.recon.channels 36,40,44,48,149,153,157,161"
+        else:
+            # If not hopping, stay on the current channel or a default
+            caplet_content += f"\\nset wifi.recon.channel {self.current_channel if self.current_channel != 'N/A' else '1'}"
+
+        if self.settings["Save Handshakes"]:
+            caplet_content += f"\\nset wifi.handshakes.file {PWNAGOTCHI_PCAP_DIR}/bettercap_handshakes.pcap"
+            caplet_content += "\\nwifi.handshakes on"
+        
+        caplet_content += "\\nwifi.recon on"
+        
+        log(f"Generated Caplet:\\n{caplet_content}")
+        return caplet_content
+
+    def _start_bettercap(self, caplet_content):
+        log(f"Starting bettercap on {self.monitor_interface}...")
+        
         caplet_path = "/tmp/pwnagotchi.cap"
         try:
             with open(caplet_path, "w") as f:
                 f.write(caplet_content)
-            log(f"Created temporary bettercap caplet at {caplet_path}")
+            log(f"Wrote bettercap caplet to {caplet_path}")
         except Exception as e:
             log(f"Failed to create bettercap caplet: {e}")
             return False
+
+    def _apply_settings(self):
+        log("Applying new settings and restarting bettercap...")
+        
+        # Stop current bettercap process
+        if self.bettercap_process:
+            log("Terminating bettercap process for restart...")
+            self.bettercap_process.terminate()
+            try:
+                self.bettercap_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                log("bettercap did not terminate, killing...")
+                self.bettercap_process.kill()
+            self.bettercap_process = None
+            # Give a moment for the process to die
+            time.sleep(1)
+
+        # Generate new caplet and restart
+        new_caplet = self._generate_caplet()
+        if not self._start_bettercap(new_caplet):
+            log("Failed to restart bettercap with new settings!")
+            if self.ui:
+                self.ui.status_message = "Restart failed!"
+                self.ui.face_state = 2
+        else:
+            log("bettercap restarted successfully with new settings.")
+            if self.ui:
+                self.ui.status_message = "Settings applied!"
+
 
         try:
             # Start bettercap with the caplet in a non-interactive way
@@ -343,6 +571,11 @@ class PwnagotchiPayload:
                 log(f"Error deleting processed file {processing_pcap}: {e}")
 
     def run(self):
+        if not self._init_gpio():
+            log("GPIO failed to initialize. Exiting.")
+            self._cleanup()
+            return
+
         if not self._check_bettercap():
             if self.ui:
                 self.ui.status_message = "bettercap missing!"
@@ -362,10 +595,7 @@ class PwnagotchiPayload:
             return
 
         if not self._init_lcd():
-            log("Could not initialize LCD. Running headless is not fully supported for Pwnagotchi UI.")
-            # Decide if we want to continue headless or exit
-            self.ui = PwnagotchiUI(None) # Create a dummy UI to avoid errors, but it won't display
-            # For now, let's exit if LCD is critical for Pwnagotchi experience
+            # This payload is very UI-focused, so we will exit on LCD failure.
             log("Exiting Pwnagotchi payload due to LCD failure.")
             self._cleanup()
             return
@@ -374,28 +604,18 @@ class PwnagotchiPayload:
         self.ui.update_display()
 
         # Find and activate monitor mode
-        # We need to iterate through available interfaces and try to activate monitor mode
-        # The monitor_mode_helper.activate_monitor_mode already handles the onboard WiFi check
-        
-        # First, detect available WiFi interfaces using wifi_manager's logic
-        # We need to import wifi_manager or replicate its interface detection
-        # For simplicity, let's assume monitor_mode_helper can take any interface and try
-        
-        # Let's try to get a list of interfaces from /sys/class/net
         potential_interfaces = []
         try:
             for iface in os.listdir("/sys/class/net"):
-                wireless_path = f"/sys/class/net/{iface}/wireless"
-                if os.path.exists(wireless_path):
+                if os.path.exists(f"/sys/class/net/{iface}/wireless"):
                     potential_interfaces.append(iface)
-            # Prioritize wlan1 over wlan0
             potential_interfaces.sort(key=lambda x: (x != 'wlan1', x != 'wlan0', x))
         except Exception as e:
             log(f"Error detecting potential interfaces: {e}")
         
         if not potential_interfaces:
             self.ui.status_message = "No WiFi interfaces!"
-            self.ui.face_state = 2 # Sad face
+            self.ui.face_state = 2
             self.ui.update_display()
             log("No WiFi interfaces detected. Exiting.")
             self._cleanup()
@@ -407,7 +627,7 @@ class PwnagotchiPayload:
             if self.monitor_interface:
                 log(f"Monitor mode activated on {self.monitor_interface}")
                 self.ui.status_message = f"Monitor: {self.monitor_interface}"
-                self.ui.face_state = 0 # Neutral face
+                self.ui.face_state = 0
                 self.ui.update_display()
                 break
             else:
@@ -415,15 +635,17 @@ class PwnagotchiPayload:
         
         if not self.monitor_interface:
             self.ui.status_message = "Monitor mode failed!"
-            self.ui.face_state = 2 # Sad face
+            self.ui.face_state = 2
             self.ui.update_display()
             log("Failed to activate monitor mode on any interface. Exiting.")
             self._cleanup()
             return
 
-        if not self._start_bettercap():
+        # Generate the initial caplet and start bettercap
+        initial_caplet = self._generate_caplet()
+        if not self._start_bettercap(initial_caplet):
             self.ui.status_message = "bettercap failed!"
-            self.ui.face_state = 2 # Sad face
+            self.ui.face_state = 2
             self.ui.update_display()
             log("Failed to start bettercap. Exiting.")
             self._cleanup()
@@ -437,18 +659,22 @@ class PwnagotchiPayload:
         try:
             last_pcap_process_time = time.time()
             while self.running:
-                # Check for exit condition (e.g., button press)
-                # For now, just a simple sleep and check
-                time.sleep(0.5) # Update UI more frequently
+                self._handle_input()
                 
-                # Update UI
+                # Pass current state to the UI object for drawing
+                self.ui.view_mode = self.view_mode
                 self.ui.handshakes_count = self.handshakes_captured
+                self.ui.settings = self.settings
+                self.ui.settings_options = self.settings_options
+                self.ui.settings_cursor = self.settings_cursor
                 self.ui.update_display()
                 
                 # Periodically process pcap files
-                if time.time() - last_pcap_process_time > 10: # Every 10 seconds
+                if time.time() - last_pcap_process_time > 10:
                     self._process_pcap_files()
                     last_pcap_process_time = time.time()
+                
+                time.sleep(0.1) # Short sleep for responsiveness
 
         except KeyboardInterrupt:
             log("KeyboardInterrupt detected.")
