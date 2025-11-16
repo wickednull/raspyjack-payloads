@@ -9,7 +9,7 @@ import time
 import signal
 import math
 import RPi.GPIO as GPIO
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import random
 
 # --- Add Raspyjack root to Python path ---
@@ -29,8 +29,8 @@ except ImportError:
 # --- Settings ---
 WIDTH, HEIGHT = 128, 128
 RES = WIDTH, HEIGHT
-Half_WIDTH = WIDTH // 2
-Half_HEIGHT = HEIGHT // 2
+HALF_WIDTH = WIDTH // 2
+HALF_HEIGHT = HEIGHT // 2
 FPS = 60 # Target FPS
 
 PLAYER_POS = 1.5, 1.5
@@ -41,9 +41,9 @@ PLAYER_SIZE_SCALE = 20
 PLAYER_MAX_HEALTH = 100
 
 FOV = math.pi / 3.0
-Half_FOV = FOV / 2
+HALF_FOV = FOV / 2
 NUM_RAYS = WIDTH // 2
-Half_NUM_RAYS = NUM_RAYS // 2
+HALF_NUM_RAYS = NUM_RAYS // 2
 DELTA_ANGLE = FOV / NUM_RAYS
 MAX_DEPTH = 16
 
@@ -95,8 +95,9 @@ class RayCasting:
         for ray, values in enumerate(self.ray_casting_result):
             depth, proj_height, texture, offset = values
             if proj_height < HEIGHT:
-                wall_column = self.textures[texture].crop((offset * (TEXTURE_SIZE - SCALE), 0, offset * (TEXTURE_SIZE - SCALE) + SCALE, TEXTURE_SIZE))
-                wall_column = wall_column.resize((SCALE, proj_height), Image.Resampling.NEAREST)
+                tex_x = int(offset * (TEXTURE_SIZE - SCALE))
+                wall_column = self.textures[texture].crop((tex_x, 0, tex_x + SCALE, TEXTURE_SIZE))
+                wall_column = wall_column.resize((SCALE, proj_height), Image.NEAREST)
                 wall_pos = (ray * SCALE, HALF_HEIGHT - proj_height // 2)
                 self.objects_to_render.append((depth, wall_column, wall_pos))
         
@@ -199,11 +200,14 @@ class Player:
         return (x, y) not in self.game.map.world_map
 
     def check_wall_collision(self, dx, dy):
-        scale = PLAYER_SIZE_SCALE / self.game.delta_time
-        if self.check_wall(int(self.x + dx * scale), int(self.y)):
-            self.x += dx
-        if self.check_wall(int(self.x), int(self.y + dy * scale)):
-            self.y += dy
+        new_x = self.x + dx
+        new_y = self.y + dy
+        
+        # Check collision with sliding
+        if self.check_wall(int(new_x), int(self.y)):
+            self.x = new_x
+        if self.check_wall(int(self.x), int(new_y)):
+            self.y = new_y
 
     def draw(self):
         self.game.screen_draw.line(
@@ -220,11 +224,11 @@ class Player:
         self.movement()
 
     @property
-    def pos:
+    def pos(self):
         return self.x, self.y
 
     @property
-    def map_pos:
+    def map_pos(self):
         return int(self.x), int(self.y)
 
 # --- SpriteObject ---
@@ -265,18 +269,24 @@ class SpriteObject:
         if dx > 0 and 180 <= math.degrees(player.angle) <= 360 or dx < 0 and dy < 0:
             gamma += math.tau
 
+        
+
         delta_rays = int(gamma / DELTA_ANGLE)
+
         self.screen_x = (HALF_NUM_RAYS + delta_rays) * SCALE
 
-        self.dist *= math.cos(HALF_FOV - self.screen_x / (2*HALF_WIDTH) * FOV)
 
-        if 0 <= self.screen_x <= WIDTH and self.dist > 0.5:
-            proj_height = min(int(SCREEN_DIST / self.dist * self.SPRITE_SCALE), HEIGHT*2)
+
+        # self.dist *= math.cos(HALF_FOV - self.screen_x / (2*HALF_WIDTH) * FOV) # Incorrect fisheye correction
+
+
+
+        if 0 <= self.screen_x <= WIDTH and self.dist > 0.5:            proj_height = min(int(SCREEN_DIST / self.dist * self.SPRITE_SCALE), HEIGHT*2)
             half_proj_height = proj_height // 2
             shift = proj_height * self.SPRITE_HEIGHT_SHIFT
 
             sprite_pos = (self.screen_x - half_proj_height, HALF_HEIGHT - half_proj_height + shift)
-            sprite = self.image.resize((proj_height, proj_height), Image.Resampling.NEAREST)
+            sprite = self.image.resize((proj_height, proj_height), Image.NEAREST)
             return (self.dist, sprite, sprite_pos)
         else:
             return (False, None, None)
@@ -407,6 +417,7 @@ class Game:
         self.clock = time.time()
         self.delta_time = 1
         self.running = True
+        self.shoot_cooldown = 0
         self.init_hardware()
         self.new_game()
 
@@ -432,6 +443,8 @@ class Game:
         self.weapon = Weapon(self)
 
     def update(self):
+        if self.shoot_cooldown > 0:
+            self.shoot_cooldown -= self.delta_time
         self.player.update()
         self.raycasting.update()
         self.object_handler.update()
@@ -466,16 +479,21 @@ class Game:
             # In a real sim, you'd poll a library like pynput
             pass
 
-        if self.keys['KEY1']: # Shoot
+        if self.keys['KEY1'] and self.shoot_cooldown <= 0: # Shoot
+            self.shoot_cooldown = 0.5 # 500ms cooldown
+            for sprite in self.object_handler.sprite_list:
+                sprite.dist = math.sqrt((self.player.x - sprite.x) ** 2 + (self.player.y - sprite.y) ** 2)
+
             for sprite in sorted(self.object_handler.sprite_list, key=lambda s: s.dist):
                 if not sprite.is_dead:
                     dx, dy = sprite.x - self.player.x, sprite.y - self.player.y
-                    dist = (dx**2 + dy**2)**0.5
-                    norm_dx, norm_dy = dx / dist, dy / dist
-                    dot_product = (norm_dx * math.sin(self.player.angle) + norm_dy * math.cos(self.player.angle))
-                    if dot_product > 0.95: # Narrow cone of fire
-                        sprite.is_dead = True
-                        break
+                    dist = sprite.dist
+                    if dist > 0:
+                        norm_dx, norm_dy = dx / dist, dy / dist
+                        dot_product = (norm_dx * math.sin(self.player.angle) + norm_dy * math.cos(self.player.angle))
+                        if dot_product > 0.95: # Narrow cone of fire
+                            sprite.is_dead = True
+                            break
 
 
     def run(self):
@@ -485,13 +503,14 @@ class Game:
             self.draw()
             if self.LCD:
                 self.LCD.LCD_ShowImage(self.screen, 0, 0)
-        
-        # Cleanup
-        if self.LCD:
+
+    def cleanup(self):
+        """Handles cleaning up GPIO and LCD."""
+        if hasattr(self, 'LCD') and self.LCD:
             self.LCD.LCD_Clear()
+        if LCD_1in44: # Check if hardware library was imported
             GPIO.cleanup()
-        print("DOOM Demake: Exiting.")
-        sys.exit(0)
+        print("DOOM Demake: Cleanup complete.")
 
 if __name__ == '__main__':
     game = Game()
@@ -505,11 +524,12 @@ if __name__ == '__main__':
     try:
         game.run()
     except Exception as e:
-        if LCD_1in44:
-            GPIO.cleanup()
         with open("/tmp/doom_demake_error.log", "w") as f:
             f.write(f"An error occurred: {e}\n")
             import traceback
             traceback.print_exc(file=f)
-        print(f"An error occurred: {e}. See /tmp/doom_demake_error.log")
-        sys.exit(1)
+        print(f"An error occurred: {e}. See /home/null/testing/doom_demake_error.log")
+    finally:
+        game.cleanup()
+        print("DOOM Demake: Exiting.")
+        sys.exit(0)
