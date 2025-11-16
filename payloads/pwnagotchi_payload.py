@@ -5,6 +5,7 @@ import subprocess
 import re
 import threading
 from datetime import datetime
+import random
 
 # Add Raspyjack root to sys.path for imports
 sys.path.append('/root/Raspyjack/')
@@ -44,6 +45,10 @@ except ImportError as e:
 PWNAGOTCHI_LOG_FILE = "/tmp/pwnagotchi_payload.log"
 PWNAGOTCHI_PCAP_DIR = "/root/Raspyjack/loot/pwnagotchi_pcaps/"
 PWNAGOTCHI_HANDSHAKE_DIR = "/root/Raspyjack/loot/handshakes/" # Where verified handshakes will go
+PWNAGOTCHI_HASHCAT_DIR = "/root/Raspyjack/loot/hashcat_files/"
+
+# --- Global State ---
+HCXTOOLS_AVAILABLE = False
 
 # --- Logging ---
 def log(message):
@@ -52,7 +57,7 @@ def log(message):
     print(log_msg)
     try:
         with open(PWNAGOTCHI_LOG_FILE, 'a') as f:
-            f.write(log_msg + "\n")
+            f.write(log_msg + "\\n")
     except Exception as e:
         print(f"Error writing to log file: {e}")
 
@@ -72,7 +77,7 @@ class PwnagotchiUI:
         self.font_large = ImageFont.load_default()
 
         self.view_mode = "main"
-        self.face_state = 0 # 0: neutral, 1: happy, 2: sad, 3: pwned
+        self.face_state = 0 # 0: neutral, 1: happy, 2: sad, 3: pwned, 4: bored, 5: excited
         self.status_message = "Initializing..."
         self.handshakes_count = 0
         self.channel = "N/A"
@@ -117,6 +122,14 @@ class PwnagotchiUI:
         elif self.face_state == 3: # Pwned
             self.draw.line([(x + 5*w_ratio, y + 8*h_ratio), (x + 10*w_ratio, y + 8*h_ratio)], fill="WHITE", width=2)
             self.draw.line([(x + 15*w_ratio, y + 8*h_ratio), (x + 20*w_ratio, y + 8*h_ratio)], fill="WHITE", width=2)
+            self.draw.arc([(x + 7*w_ratio, y + 12*h_ratio), (x + 18*w_ratio, y + 23*h_ratio)], 0, 180, fill="WHITE", width=2)
+        elif self.face_state == 4: # Bored
+            self.draw.line([(x + 5*w_ratio, y + 8*h_ratio), (x + 10*w_ratio, y + 8*h_ratio)], fill="WHITE", width=1)
+            self.draw.line([(x + 15*w_ratio, y + 8*h_ratio), (x + 20*w_ratio, y + 8*h_ratio)], fill="WHITE", width=1)
+            self.draw.line([(x + 10*w_ratio, y + 15*h_ratio), (x + 15*w_ratio, y + 15*h_ratio)], fill="WHITE", width=1)
+        elif self.face_state == 5: # Excited
+            self.draw.ellipse([(x + 3*w_ratio, y + 3*h_ratio), (x + 12*w_ratio, y + 12*h_ratio)], fill="WHITE")
+            self.draw.ellipse([(x + 13*w_ratio, y + 3*h_ratio), (x + 22*w_ratio, y + 12*h_ratio)], fill="WHITE")
             self.draw.arc([(x + 7*w_ratio, y + 12*h_ratio), (x + 18*w_ratio, y + 23*h_ratio)], 0, 180, fill="WHITE", width=2)
 
     def _draw_main_view(self):
@@ -243,8 +256,12 @@ class PwnagotchiPayload:
         self.last_press_time = 0
         self.debounce_delay = 0.3
 
+        # AI Mood attributes
+        self.last_ap_seen_time = time.time()
+
         os.makedirs(PWNAGOTCHI_PCAP_DIR, exist_ok=True)
         os.makedirs(PWNAGOTCHI_HANDSHAKE_DIR, exist_ok=True)
+        os.makedirs(PWNAGOTCHI_HASHCAT_DIR, exist_ok=True)
 
     def _handle_input(self):
         current_time = time.time()
@@ -283,7 +300,7 @@ class PwnagotchiPayload:
                 # Cycle through string settings
                 elif setting_key == "Channels":
                     if self.settings[setting_key] == "2.4GHz":
-                        self.settings[setting_key] = "5GHz" # Add 5GHz channel list to caplet generator
+                        self.settings[setting_key] = "5GHz"
                     else:
                         self.settings[setting_key] = "2.4GHz"
                     log(f"Cycled setting '{setting_key}' to {self.settings[setting_key]}")
@@ -300,7 +317,6 @@ class PwnagotchiPayload:
             elif GPIO.input(self.PINS["KEY2"]) == 0: # Use KEY2 to exit settings
                 self.last_press_time = current_time
                 self.view_mode = "main"
-
 
     def _check_bettercap(self):
         log("Checking for bettercap installation...")
@@ -347,7 +363,6 @@ class PwnagotchiPayload:
             log(f"Failed to initialize GPIO: {e}")
             return False
 
-
     def _cleanup(self):
         log("Cleaning up Pwnagotchi payload...")
         self.running = False
@@ -385,31 +400,31 @@ class PwnagotchiPayload:
     def _generate_caplet(self):
         log("Generating new bettercap caplet from settings...")
         
-        # Base settings
-        caplet_content = f"""
-        set events.stream.output off
-        set ui.update.interval 1s
-        set wifi.show.uptime true
-        set wifi.recon.interval 5s
-        """
+        commands = [
+            "set events.stream.output off",
+            "set ui.update.interval 1s",
+            "set wifi.show.uptime true",
+            "set wifi.recon.interval 5s"
+        ]
 
         # Apply dynamic settings
         if self.settings["Channel Hop"]:
-            caplet_content += "\\nset wifi.recon.channel hop"
+            commands.append("set wifi.recon.channel hop")
             if self.settings["Channels"] == "2.4GHz":
-                caplet_content += "\\nset wifi.recon.channels 1,6,11"
+                commands.append("set wifi.recon.channels 1,6,11")
             elif self.settings["Channels"] == "5GHz":
-                caplet_content += "\\nset wifi.recon.channels 36,40,44,48,149,153,157,161"
+                commands.append("set wifi.recon.channels 36,40,44,48,149,153,157,161")
         else:
-            # If not hopping, stay on the current channel or a default
-            caplet_content += f"\\nset wifi.recon.channel {self.current_channel if self.current_channel != 'N/A' else '1'}"
+            channel = self.current_channel if self.current_channel != 'N/A' else '1'
+            commands.append(f"set wifi.recon.channel {channel}")
 
         if self.settings["Save Handshakes"]:
-            caplet_content += f"\\nset wifi.handshakes.file {PWNAGOTCHI_PCAP_DIR}/bettercap_handshakes.pcap"
-            caplet_content += "\\nwifi.handshakes on"
+            commands.append(f"set wifi.handshakes.file {PWNAGOTCHI_PCAP_DIR}/bettercap_handshakes.pcap")
+            commands.append("wifi.handshakes on")
         
-        caplet_content += "\\nwifi.recon on"
+        commands.append("wifi.recon on")
         
+        caplet_content = "\\n".join(commands)
         log(f"Generated Caplet:\\n{caplet_content}")
         return caplet_content
 
@@ -476,6 +491,14 @@ class PwnagotchiPayload:
             if self.ui:
                 self.ui.status_message = "Settings applied!"
 
+    def _update_ai_mood(self):
+        # Check for boredom
+        if time.time() - self.last_ap_seen_time > 30: # 30 seconds of no new APs
+            if self.ui and self.ui.face_state not in [3, 2]: # Don't get bored if sad or pwned
+                self.ui.face_state = 4 # Bored
+                self.ui.status_message = "Bored..."
+
+
     def _read_bettercap_output(self):
         log("Starting bettercap output reader thread...")
         try:
@@ -491,7 +514,7 @@ class PwnagotchiPayload:
                         self.ui.status_message = "Handshake!"
                     log(f"Handshake detected! Total: {self.handshakes_captured}")
                 elif "hopping on channel" in line:
-                    match = re.search(r'hopping on channel (\d+)', line)
+                    match = re.search(r'hopping on channel (\\d+)', line)
                     if match:
                         self.current_channel = match.group(1)
                         if self.ui:
@@ -504,7 +527,8 @@ class PwnagotchiPayload:
                 elif "wifi.client.new" in line and self.ui:
                     self.ui.face_state = 1 # Happy face for new client
                 elif "wifi.ap.new" in line and self.ui:
-                    self.ui.face_state = 0 # Neutral for new AP
+                    self.ui.face_state = 5 # Excited face
+                    self.last_ap_seen_time = time.time()
         except Exception as e:
             log(f"Error reading bettercap output: {e}")
         finally:
@@ -547,8 +571,21 @@ class PwnagotchiPayload:
                 final_pcap_path = os.path.join(PWNAGOTCHI_HANDSHAKE_DIR, final_pcap_name)
                 
                 wrpcap(final_pcap_path, handshake_packets)
-
                 log(f"Saved {count} handshake packets to {final_pcap_path}")
+
+                # --- Convert to hashcat format ---
+                if HCXTOOLS_AVAILABLE:
+                    hash_file_path = os.path.join(PWNAGOTCHI_HASHCAT_DIR, final_pcap_name.replace('.pcap', '.hc22000'))
+                    log(f"Converting {final_pcap_path} to {hash_file_path}...")
+                    try:
+                        conversion_cmd = ['hcxpcapngtool', '-o', hash_file_path, final_pcap_path]
+                        subprocess.run(conversion_cmd, check=True, capture_output=True)
+                        log("Conversion successful.")
+                        if self.ui: self.ui.status_message = "Converted hash!"
+                    except Exception as conv_e:
+                        log(f"Handshake conversion failed: {conv_e}")
+                # --- End conversion ---
+
                 self.handshakes_captured += 1 # Increment by 1 for each file with handshakes, not each packet
                 if self.ui:
                     self.ui.face_state = 3 # Pwned face
@@ -566,36 +603,51 @@ class PwnagotchiPayload:
             except Exception as e:
                 log(f"Error deleting processed file {processing_pcap}: {e}")
 
+    def _check_hcxtools(self):
+        global HCXTOOLS_AVAILABLE
+        log("Checking for hcxtools installation...")
+        try:
+            subprocess.run(['which', 'hcxpcapngtool'], check=True, capture_output=True)
+            log("hcxtools found.")
+            HCXTOOLS_AVAILABLE = True
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            log("hcxpcapngtool not found. Handshake conversion will be disabled.")
+            log("To enable, please install 'hcxtools' on your device.")
+            HCXTOOLS_AVAILABLE = False
+            return False
+
     def run(self):
-        if not self._init_gpio():
-            log("GPIO failed to initialize. Exiting.")
+        # --- 1. Initialize Core Hardware ---
+        if not self._init_gpio() or not self._init_lcd():
+            log("Fatal: GPIO or LCD failed to initialize.")
             self._cleanup()
             return
 
-        if not self._check_bettercap():
-            if self.ui:
-                self.ui.status_message = "bettercap missing!"
-                self.ui.face_state = 2 # Sad face
-                self.ui.update_display()
-            log("bettercap not found. Exiting Pwnagotchi payload.")
+        # --- 2. Perform Dependency Checks ---
+        bettercap_ok = self._check_bettercap()
+        self._check_hcxtools() # This one is not critical, just sets a flag
+
+        # --- 3. Report Critical Errors on Screen ---
+        if not bettercap_ok:
+            self.ui.status_message = "bettercap missing!"
+            self.ui.face_state = 2 # Sad face
+            self.ui.update_display()
+            log("bettercap not found. Exiting.")
+            time.sleep(5)
             self._cleanup()
             return
-
+        
         if not SCAPY_AVAILABLE:
-            if self.ui:
-                self.ui.status_message = "Scapy missing!"
-                self.ui.face_state = 2 # Sad face
-                self.ui.update_display()
-            log("Scapy not found. Exiting Pwnagotchi payload.")
+            self.ui.status_message = "Scapy missing!"
+            self.ui.face_state = 2 # Sad face
+            self.ui.update_display()
+            log("Scapy not found. Exiting.")
+            time.sleep(5)
             self._cleanup()
             return
 
-        if not self._init_lcd():
-            # This payload is very UI-focused, so we will exit on LCD failure.
-            log("Exiting Pwnagotchi payload due to LCD failure.")
-            self._cleanup()
-            return
-
+        # --- 4. Proceed with Payload Logic ---
         self.ui.status_message = "Activating monitor mode..."
         self.ui.update_display()
 
@@ -614,6 +666,7 @@ class PwnagotchiPayload:
             self.ui.face_state = 2
             self.ui.update_display()
             log("No WiFi interfaces detected. Exiting.")
+            time.sleep(5)
             self._cleanup()
             return
 
@@ -634,6 +687,7 @@ class PwnagotchiPayload:
             self.ui.face_state = 2
             self.ui.update_display()
             log("Failed to activate monitor mode on any interface. Exiting.")
+            time.sleep(5)
             self._cleanup()
             return
 
@@ -644,6 +698,7 @@ class PwnagotchiPayload:
             self.ui.face_state = 2
             self.ui.update_display()
             log("Failed to start bettercap. Exiting.")
+            time.sleep(5)
             self._cleanup()
             return
 
@@ -656,10 +711,12 @@ class PwnagotchiPayload:
             last_pcap_process_time = time.time()
             while self.running:
                 self._handle_input()
+                self._update_ai_mood()
                 
                 # Pass current state to the UI object for drawing
                 self.ui.view_mode = self.view_mode
                 self.ui.handshakes_count = self.handshakes_captured
+                self.ui.channel = self.current_channel
                 self.ui.settings = self.settings
                 self.ui.settings_options = self.settings_options
                 self.ui.settings_cursor = self.settings_cursor
