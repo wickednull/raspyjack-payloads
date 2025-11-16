@@ -148,9 +148,7 @@ class PwnagotchiUI:
 
         if self.bubble_text:
             bubble_padding = 5
-            text_bbox = self.draw.textbbox((0,0), self.bubble_text, font=self.font_medium)
-            text_width = text_bbox[2] - text_bbox[0]
-            text_height = text_bbox[3] - text_bbox[1]
+            text_width, text_height = self.draw.textsize(self.bubble_text, font=self.font_medium)
             
             bubble_x = (self.width - text_width) // 2
             bubble_y = face_box[1] - text_height - bubble_padding * 3
@@ -196,8 +194,7 @@ class PwnagotchiUI:
                 display_value = str(value)
                 fill_color = (255, 255, 0) # Yellow
             
-            bbox = self.draw.textbbox((0,0), display_value, font=self.font_medium)
-            value_width = bbox[2] - bbox[0]
+            value_width, _ = self.draw.textsize(display_value, font=self.font_medium)
             self.draw.text((self.width - value_width - 5, y_offset), display_value, font=self.font_medium, fill=fill_color)
 
             y_offset += line_height + 5
