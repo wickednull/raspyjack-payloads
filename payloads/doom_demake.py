@@ -194,7 +194,7 @@ class Player:
             self.angle -= PLAYER_ROT_SPEED * self.game.delta_time
         if keys['RIGHT']:
             self.angle += PLAYER_ROT_SPEED * self.game.delta_time
-        self.angle %= math.tau
+        self.angle %= (2 * math.pi)
 
     def check_wall(self, x, y):
         return (x, y) not in self.game.map.world_map
@@ -267,7 +267,7 @@ class SpriteObject:
         self.theta = math.atan2(dy, dx)
         gamma = self.theta - player.angle
         if dx > 0 and 180 <= math.degrees(player.angle) <= 360 or dx < 0 and dy < 0:
-            gamma += math.tau
+            gamma += (2 * math.pi)
 
         
 
@@ -281,7 +281,8 @@ class SpriteObject:
 
 
 
-        if 0 <= self.screen_x <= WIDTH and self.dist > 0.5:            proj_height = min(int(SCREEN_DIST / self.dist * self.SPRITE_SCALE), HEIGHT*2)
+        if 0 <= self.screen_x <= WIDTH and self.dist > 0.5:
+            proj_height = min(int(SCREEN_DIST / self.dist * self.SPRITE_SCALE), HEIGHT*2)
             half_proj_height = proj_height // 2
             shift = proj_height * self.SPRITE_HEIGHT_SHIFT
 
