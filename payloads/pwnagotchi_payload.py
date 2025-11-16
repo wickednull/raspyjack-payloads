@@ -448,10 +448,10 @@ class PwnagotchiPayload:
                 self.ui.handshakes_count = self.handshakes_captured
                 self.ui.update_display()
                 
-                # Periodically process pcap files
-                if time.time() - last_pcap_process_time > 10: # Every 10 seconds
-                    self._process_pcap_files()
-                    last_pcap_process_time = time.time()
+                # --- DIAGNOSTIC: Temporarily disable pcap processing to isolate crash ---
+                # if time.time() - last_pcap_process_time > 10: # Every 10 seconds
+                #     self._process_pcap_files()
+                #     last_pcap_process_time = time.time()
 
         except KeyboardInterrupt:
             log("KeyboardInterrupt detected.")
