@@ -163,7 +163,7 @@ class PwnagotchiPayload:
         try:
             LCD_Config.GPIO_Init()
             self.lcd = LCD_1in44.LCD()
-            self.lcd.LCD_Init(self.lcd.SCAN_DIR_DFT)
+            self.lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
             self.lcd.LCD_Clear()
             self.ui = PwnagotchiUI(self.lcd)
             log("LCD initialized successfully.")
