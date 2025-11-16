@@ -52,7 +52,7 @@ SCALE = WIDTH // NUM_RAYS
 
 TEXTURE_SIZE = 64
 HALF_TEXTURE_SIZE = TEXTURE_SIZE // 2
-FLOOR_COLOR = (30, 30, 30)
+FLOOR_COLOR = (255, 0, 255) # Bright pink for visual test
 
 # --- Map ---
 text_map = [
