@@ -9,7 +9,7 @@ import time
 import signal
 import math
 import RPi.GPIO as GPIO
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import random
 
 # --- Add Raspyjack root to Python path ---
@@ -52,7 +52,7 @@ SCALE = WIDTH // NUM_RAYS
 
 TEXTURE_SIZE = 64
 HALF_TEXTURE_SIZE = TEXTURE_SIZE // 2
-FLOOR_COLOR = (255, 0, 255) # Bright pink for visual test
+FLOOR_COLOR = (30, 30, 30)
 
 # --- Map ---
 text_map = [
@@ -95,9 +95,12 @@ class RayCasting:
         for ray, values in enumerate(self.ray_casting_result):
             depth, proj_height, texture, offset = values
             if proj_height < HEIGHT:
+                shade = max(0.2, 1.0 - (depth / MAX_DEPTH))
                 tex_x = int(offset * (TEXTURE_SIZE - SCALE))
                 wall_column = self.textures[texture].crop((tex_x, 0, tex_x + SCALE, TEXTURE_SIZE))
                 wall_column = wall_column.resize((SCALE, proj_height), Image.NEAREST)
+                if shade < 1.0:
+                    wall_column = wall_column.point(lambda p: p * shade)
                 wall_pos = (ray * SCALE, HALF_HEIGHT - proj_height // 2)
                 self.objects_to_render.append((depth, wall_column, wall_pos))
         
@@ -241,24 +244,38 @@ class SpriteObject:
         self.SPRITE_SCALE = scale
         self.SPRITE_HEIGHT_SHIFT = shift
         self.is_dead = False
+        self.health = 100
+        self.attack_damage = 10
+        self.attack_cooldown = 0
+        self.speed = 0.02
+        self.chasing = False
 
     def get_image(self, path):
         # In Raspyjack, we create images procedurally
         if "cacodemon" in path:
             img = Image.new("RGBA", (TEXTURE_SIZE, TEXTURE_SIZE), (0, 0, 0, 0))
             d = ImageDraw.Draw(img)
-            d.ellipse([(4, 4), (TEXTURE_SIZE-4, TEXTURE_SIZE-4)], fill="red", outline="darkred", width=2)
-            d.ellipse([(TEXTURE_SIZE*0.4, TEXTURE_SIZE*0.25), (TEXTURE_SIZE*0.6, TEXTURE_SIZE*0.45)], fill="white")
-            d.ellipse([(TEXTURE_SIZE*0.45, TEXTURE_SIZE*0.3), (TEXTURE_SIZE*0.55, TEXTURE_SIZE*0.4)], fill="black")
-            return img
-        else: # Default sprite
-            img = Image.new("RGBA", (TEXTURE_SIZE, TEXTURE_SIZE), (0, 0, 0, 0))
-            d = ImageDraw.Draw(img)
-            d.rectangle([(10,10), (TEXTURE_SIZE-10, TEXTURE_SIZE-10)], fill="green")
+            # Body
+            d.ellipse([(4, 10), (TEXTURE_SIZE-4, TEXTURE_SIZE-4)], fill=(180, 20, 20), outline=(100, 10, 10), width=2)
+            # Horns
+            d.polygon([(10, 12), (5, 2), (20, 8)], fill=(200, 200, 200))
+            d.polygon([(TEXTURE_SIZE-10, 12), (TEXTURE_SIZE-5, 2), (TEXTURE_SIZE-20, 8)], fill=(200, 200, 200))
+            # Eye
+            eye_box = (TEXTURE_SIZE*0.4, TEXTURE_SIZE*0.35)
+            eye_size = (TEXTURE_SIZE*0.6, TEXTURE_SIZE*0.55)
+            d.ellipse([eye_box, eye_size], fill=(255, 255, 100))
+            d.ellipse([(TEXTURE_SIZE*0.45, TEXTURE_SIZE*0.4), (TEXTURE_SIZE*0.55, TEXTURE_SIZE*0.5)], fill="red")
+            # Mouth
+            d.arc([(20, 50), (TEXTURE_SIZE-20, TEXTURE_SIZE-15)], 20, 160, fill=(100, 10, 10), width=3)
             return img
 
     def object_locate(self, player):
         if self.is_dead:
+            return (False, None, None)
+        
+        if self.health <= 0:
+            self.is_dead = True
+            # Could add a death animation trigger here later
             return (False, None, None)
 
         dx, dy = self.x - player.x, self.y - player.y
@@ -281,21 +298,58 @@ class SpriteObject:
 
             sprite_pos = (int(self.screen_x - half_proj_height), int(HALF_HEIGHT - half_proj_height + shift))
             sprite = self.image.resize((proj_height, proj_height), Image.NEAREST)
+            
+            shade = max(0.3, 1.0 - (self.dist / (MAX_DEPTH * 0.7)))
+            if shade < 1.0:
+                sprite = sprite.point(lambda p: p * shade)
+
             return (self.dist, sprite, sprite_pos)
         else:
             return (False, None, None)
 
+    def update(self):
+        if self.is_dead:
+            return
+
+        if self.attack_cooldown > 0:
+            self.attack_cooldown -= self.game.delta_time
+
+        # Basic AI
+        dist_to_player = math.sqrt((self.player.x - self.x) ** 2 + (self.player.y - self.y) ** 2)
+
+        if dist_to_player > 20: # Too far away
+            self.chasing = False
+        elif dist_to_player < 1.0: # Close enough to attack
+            self.chasing = False
+            if self.attack_cooldown <= 0:
+                self.attack_cooldown = 1.0 # 1 second cooldown
+                self.game.player.health -= self.attack_damage
+                self.game.pain_timer = 0.2 # Trigger pain flash
+        else: # Chase
+            self.chasing = True
+            
+        if self.chasing:
+            dx = self.player.x - self.x
+            dy = self.player.y - self.y
+            # Normalize
+            dist = dist_to_player
+            dx /= dist
+            dy /= dist
+            # Move
+            new_x = self.x + dx * self.speed
+            new_y = self.y + dy * self.speed
+            # Check wall collision for sprite
+            if self.game.map.check_wall(int(new_x), int(self.y)):
+                self.x = new_x
+            if self.game.map.check_wall(int(self.x), int(new_y)):
+                self.y = new_y
+
+
 # --- ObjectHandler ---
 class ObjectHandler:
-    def __init__(self, game):
-        self.game = game
-        self.sprite_list = []
-        self.add_sprite(SpriteObject(game, 'cacodemon', pos=(10.5, 5.5)))
-        self.add_sprite(SpriteObject(game, 'cacodemon', pos=(7.5, 1.5)))
-        self.add_sprite(SpriteObject(game, 'cacodemon', pos=(1.5, 7.5)))
-
     def update(self):
-        pass
+        for sprite in self.sprite_list:
+            sprite.update()
 
     def add_sprite(self, sprite):
         self.sprite_list.append(sprite)
@@ -312,41 +366,71 @@ class ObjectRenderer:
         self.render_game_objects()
 
     def draw_background(self):
-        # Draw floor
-        self.game.screen_draw.rectangle((0, HALF_HEIGHT, WIDTH, HEIGHT), fill=FLOOR_COLOR)
-        # Draw ceiling (sky)
-        self.game.screen_draw.rectangle((0, 0, WIDTH, HALF_HEIGHT), fill="skyblue")
+        # Ceiling gradient
+        for y in range(HALF_HEIGHT):
+            shade = 1.0 - (y / HALF_HEIGHT)
+            color = (int(20 * shade), int(20 * shade), int(30 * shade))
+            self.game.screen_draw.line([(0, y), (WIDTH, y)], fill=color)
+            
+        # Floor gradient
+        for y in range(HALF_HEIGHT, HEIGHT):
+            shade = (y - HALF_HEIGHT) / HALF_HEIGHT
+            color = (int(40 * shade), int(30 * shade), int(25 * shade))
+            self.game.screen_draw.line([(0, y), (WIDTH, y)], fill=color)
 
     def render_game_objects(self):
         list_objects = sorted(self.game.raycasting.objects_to_render, key=lambda t: t[0], reverse=True)
         for depth, image, pos in list_objects:
-            if image:
-                self.screen.paste(image, pos, image)
+            if image and pos:
+                # Defensive cast to int to solve the persistent TypeError
+                int_pos = (int(pos[0]), int(pos[1]))
+                self.screen.paste(image, int_pos, image)
 
     @staticmethod
-    def get_texture(path, res=(TEXTURE_SIZE, TEXTURE_SIZE)):
-        # Procedural textures for Raspyjack
-        if "1" in path: # Brick
-            texture = Image.new("RGB", res)
-            d = ImageDraw.Draw(texture)
-            for x in range(0, res[0], 16):
-                d.line([(x,0), (x,res[1])], fill='gray')
-            for y in range(0, res[1], 16):
-                d.line([(0,y), (res[0],y)], fill='gray')
-            d.rectangle([(0,0), res], fill=None, outline='red', width=2)
-            return texture
-        else: # Stone
-            texture = Image.new("RGB", res, "darkgray")
-            d = ImageDraw.Draw(texture)
-            for _ in range(100):
-                x,y = random.randint(0,res[0]), random.randint(0,res[1])
-                d.point((x,y), fill='gray')
-            return texture
+    def get_stone_texture(res=(TEXTURE_SIZE, TEXTURE_SIZE)):
+        """Generates a procedural stone brick texture."""
+        img = Image.new('RGB', res, (50, 50, 50))
+        draw = ImageDraw.Draw(img)
+        for x in range(0, res[0], 32): # Vertical mortar
+            draw.line([(x, 0), (x, res[1])], fill=(40, 40, 40), width=2)
+        for y in range(0, res[1], 16): # Horizontal mortar
+            draw.line([(0, y), (res[0], y)], fill=(40, 40, 40), width=2)
+            for x_offset in range(0, res[0], 32):
+                if (y // 16) % 2 == 0:
+                    draw.line([(x_offset + 16, y), (x_offset + 16, y + 16)], fill=(40, 40, 40), width=2)
+        # Add some grime
+        for _ in range(res[0] * res[1] // 10):
+            x, y = random.randint(0, res[0]-1), random.randint(0, res[1]-1)
+            c = random.randint(45, 55)
+            draw.point((x, y), fill=(c, c, c))
+        return img
+
+    @staticmethod
+    def get_metal_texture(res=(TEXTURE_SIZE, TEXTURE_SIZE)):
+        """Generates a procedural metal panel texture."""
+        img = Image.new('RGB', res, (80, 80, 80))
+        draw = ImageDraw.Draw(img)
+        # Panel lines
+        draw.line([(0, 0), (res[0], 0)], fill=(60, 60, 60), width=2)
+        draw.line([(0, 0), (0, res[1])], fill=(60, 60, 60), width=2)
+        draw.line([(res[0]-1, 0), (res[0]-1, res[1])], fill=(100, 100, 100), width=2)
+        draw.line([(0, res[1]-1), (res[0], res[1]-1)], fill=(100, 100, 100), width=2)
+        # Rivets
+        for x in [5, res[0] - 7]:
+            for y in [5, res[1] - 7]:
+                draw.rectangle([(x, y), (x+2, y+2)], fill=(65, 65, 65))
+                draw.point((x+1, y+1), fill=(95, 95, 95))
+        # Rust/grime
+        for _ in range(res[0] * res[1] // 20):
+            x, y = random.randint(0, res[0]-1), random.randint(0, res[1]-1)
+            c = random.randint(70, 75)
+            draw.point((x, y), fill=(c, c-5, c-10))
+        return img
 
     def load_wall_textures(self):
         return {
-            1: self.get_texture('1'),
-            2: self.get_texture('2'),
+            1: self.get_stone_texture(),
+            2: self.get_metal_texture(),
         }
 
 # --- Map ---
@@ -376,11 +460,19 @@ class Weapon:
         self.damage = 50
 
     def get_image(self, path):
-        # Procedural weapon sprite
-        img = Image.new("RGBA", (100, 100), (0,0,0,0))
+        # Procedural weapon sprite (shotgun style)
+        img = Image.new("RGBA", (150, 150), (0,0,0,0))
         d = ImageDraw.Draw(img)
-        d.rectangle([(40,60), (60, 100)], fill='brown')
-        d.rectangle([(30,50), (70, 60)], fill='gray')
+        # Barrel
+        d.rectangle([(65, 50), (85, 100)], fill=(60, 60, 60))
+        d.rectangle([(68, 52), (82, 95)], fill=(50, 50, 50))
+        d.ellipse([(70, 40), (80, 50)], fill=(40,40,40))
+        # Pump
+        d.rectangle([(60, 100), (90, 115)], fill=(100, 80, 60))
+        # Stock/Body
+        d.rectangle([(50, 115), (100, 130)], fill=(70, 70, 70))
+        # Handle
+        d.polygon([(100, 115), (110, 135), (95, 145), (85, 130)], fill=(90, 70, 50))
         return img
 
     def animate_shot(self):
@@ -393,8 +485,28 @@ class Weapon:
                     self.frame_counter = 0
 
     def draw(self):
-        weapon_pos = (HALF_WIDTH - self.image.width // 2, HEIGHT - self.image.height)
+        # Recoil animation
+        recoil_progress = max(0, self.game.shoot_cooldown / 0.5) # Cooldown is 0.5s
+        recoil_offset = int((-(recoil_progress**2) + recoil_progress) * 4 * 20) # Parabolic arc for smooth recoil
+        weapon_pos = (HALF_WIDTH - self.image.width // 2, HEIGHT - self.image.height + 10 - recoil_offset)
         self.game.screen.paste(self.image, weapon_pos, self.image)
+
+        # Muzzle flash
+        if self.game.muzzle_flash_timer > 0:
+            flash_size = int(WIDTH * 0.4)
+            half_flash = flash_size // 2
+            flash_points = [
+                (HALF_WIDTH - half_flash, HALF_HEIGHT), (HALF_WIDTH + half_flash, HALF_HEIGHT),
+                (HALF_WIDTH, HALF_HEIGHT - half_flash), (HALF_WIDTH, HALF_HEIGHT + half_flash),
+                (HALF_WIDTH - int(half_flash*0.7), HALF_HEIGHT - int(half_flash*0.7)),
+                (HALF_WIDTH + int(half_flash*0.7), HALF_HEIGHT - int(half_flash*0.7)),
+                (HALF_WIDTH - int(half_flash*0.7), HALF_HEIGHT + int(half_flash*0.7)),
+                (HALF_WIDTH + int(half_flash*0.7), HALF_HEIGHT + int(half_flash*0.7)),
+            ]
+            # Draw a bright, semi-random star shape
+            random.shuffle(flash_points)
+            for i in range(0, len(flash_points), 2):
+                self.game.screen_draw.line([flash_points[i], flash_points[i-1]], fill=(255, 255, random.randint(0, 255)), width=2)
 
     def update(self):
         pass # Simplified
@@ -412,6 +524,8 @@ class Game:
         self.delta_time = 1
         self.running = True
         self.shoot_cooldown = 0
+        self.muzzle_flash_timer = 0
+        self.pain_timer = 0
         self.init_hardware()
         self.new_game()
 
@@ -439,6 +553,10 @@ class Game:
     def update(self):
         if self.shoot_cooldown > 0:
             self.shoot_cooldown -= self.delta_time
+        if self.muzzle_flash_timer > 0:
+            self.muzzle_flash_timer -= self.delta_time
+        if self.pain_timer > 0:
+            self.pain_timer -= self.delta_time
         self.player.update()
         self.raycasting.update()
         self.object_handler.update()
@@ -459,6 +577,27 @@ class Game:
         # self.map.draw() # Mini-map disabled for performance
         # self.player.draw()
 
+        # Pain flash
+        if self.pain_timer > 0:
+            # Create a red, semi-transparent overlay
+            overlay = Image.new('RGBA', (WIDTH, HEIGHT), (255, 0, 0, 50))
+            self.screen.paste(overlay, (0,0), overlay)
+
+        self.draw_hud()
+
+    def draw_hud(self):
+        """Draws the Heads-Up Display."""
+        bar_height = 20
+        self.game.screen_draw.rectangle([(0, HEIGHT - bar_height), (WIDTH, HEIGHT)], fill=(50, 50, 50))
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
+        except IOError:
+            font = ImageFont.load_default()
+        
+        health_text = f"HEALTH: {max(0, self.player.health)}%"
+        self.game.screen_draw.text((5, HEIGHT - bar_height + 2), health_text, font=font, fill=(255, 255, 0))
+
+
     def check_events(self):
         if self.LCD:
             self.keys['UP'] = GPIO.input(self.PINS['UP']) == 0
@@ -475,6 +614,7 @@ class Game:
 
         if self.keys['KEY1'] and self.shoot_cooldown <= 0: # Shoot
             self.shoot_cooldown = 0.5 # 500ms cooldown
+            self.muzzle_flash_timer = 0.1 # 100ms flash
             for sprite in self.object_handler.sprite_list:
                 sprite.dist = math.sqrt((self.player.x - sprite.x) ** 2 + (self.player.y - sprite.y) ** 2)
 
@@ -486,7 +626,7 @@ class Game:
                         norm_dx, norm_dy = dx / dist, dy / dist
                         dot_product = (norm_dx * math.sin(self.player.angle) + norm_dy * math.cos(self.player.angle))
                         if dot_product > 0.95: # Narrow cone of fire
-                            sprite.is_dead = True
+                            sprite.health -= self.weapon.damage
                             break
 
 
