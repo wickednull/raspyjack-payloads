@@ -146,20 +146,15 @@ def play() -> None:
     food = random_empty_cell(snake)
     score = 0
 
-    last_button_press_time = 0
-    BUTTON_DEBOUNCE_TIME = 0.2 # seconds
-
     # 6.2 – frame loop
     while running:
         start_time = time.time()
-        current_time = time.time()
 
         # --- Read input ----------------------------------------------------
         pressed: Optional[str] = None
         for name, pin in PINS.items():
-            if GPIO.input(pin) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
+            if GPIO.input(pin) == 0:
                 pressed = name
-                last_button_press_time = current_time
                 break
 
         if pressed == "KEY3":            # user wants to quit game & payload
@@ -207,13 +202,11 @@ def play() -> None:
 
     # Wait for OK to restart or KEY3 to quit payload
     while running:
-        current_time = time.time()
-        if GPIO.input(PINS["KEY3"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-            last_button_press_time = current_time
+        if GPIO.input(PINS["KEY3"]) == 0:
             cleanup()
             return
-        if GPIO.input(PINS["OK"]) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-            last_button_press_time = current_time
+        if GPIO.input(PINS["OK"]) == 0:
+            time.sleep(0.3)  # simple debounce
             play()           # recursive restart
             return
         time.sleep(0.05)

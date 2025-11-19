@@ -199,13 +199,6 @@ def process_shell_output():
 shift = False
 running = True
 
-def cleanup(*_):
-    global running
-    running = False
-
-signal.signal(signal.SIGINT, cleanup)
-signal.signal(signal.SIGTERM, cleanup)
-
 def handle_key(event):
     global shift, running
     key_name = event.keycode if isinstance(event.keycode, str) else event.keycode[0]
@@ -228,11 +221,7 @@ def handle_key(event):
 
 draw_buffer([], "Micro Shell ready – KEY1/KEY2 = zoom ±")
 try:
-    last_button_press_time = 0
-    BUTTON_DEBOUNCE_TIME = 0.3 # seconds
-
     while running:
-        current_time = time.time()
         # Poll PTY + keyboard
         for fd, _ in poller.poll(50):
             if fd == master_fd:
@@ -244,15 +233,13 @@ try:
         # Zoom buttons
         for pin, delta in ((KEY1_PIN, +1), (KEY2_PIN, -1)):
             state = GPIO.input(pin)
-            if _prev_state[pin] == 1 and state == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):  # falling edge
-                last_button_press_time = current_time
+            if _prev_state[pin] == 1 and state == 0:  # falling edge
                 set_font(FONT_SIZE + delta)
                 draw_buffer(scrollback, current_line)
-                time.sleep(BUTTON_DEBOUNCE_TIME)  # simple debounce
+                time.sleep(0.15)  # simple debounce
             _prev_state[pin] = state
         # Quit via KEY3 held
-        if GPIO.input(KEY3_PIN) == 0 and (current_time - last_button_press_time > BUTTON_DEBOUNCE_TIME):
-            last_button_press_time = current_time
+        if GPIO.input(KEY3_PIN) == 0:
             running = False
 except Exception as exc:
     print(f"[ERROR] {exc}", file=sys.stderr)

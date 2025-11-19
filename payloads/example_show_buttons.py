@@ -21,15 +21,18 @@ and understand every step.
 """
 
 # ---------------------------------------------------------------------------
-# 0) Host Application Environment
+# 0) Make sure we can import local helper modules when launched directly
 # ---------------------------------------------------------------------------
-# This payload relies on the Raspyjack host application to set the current
-# working directory to the Raspyjack root. This allows the following
-# library imports to succeed without path modification.
-import os
-import sys
-import time
-import signal
+import os, sys
+# «…/Raspyjack/» is two directories up from this script. Add it to sys.path so
+# that `import LCD_1in44` works even when we run the script manually from
+# inside the “payloads” folder.
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+
+# ---------------------------- Standard library ----------------------------
+import time           # sleep() for timing / debouncing
+import signal         # capture Ctrl‑C (SIGINT) & termination (SIGTERM)
+import sys            # print exceptions to stderr
 
 # ----------------------------- Third‑party libs ---------------------------
 # These come pre‑installed on RaspyJack; on a vanilla Pi OS you’d need:

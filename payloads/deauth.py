@@ -24,34 +24,15 @@ DURING ATTACK:
 """
 
 import os, sys, time, signal, subprocess, threading
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 
-# ----------------------------
-# RaspyJack PATH and ROOT check
-# ----------------------------
-def is_root():
-    return os.geteuid() == 0
+import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
+from PIL import Image, ImageDraw, ImageFont
 
-# Dynamically add Raspyjack path
-RASPYJACK_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'Raspyjack'))
-if RASPYJACK_PATH not in sys.path:
-    sys.path.append(RASPYJACK_PATH)
-
-# ----------------------------
-# Third-party library imports 
-# ----------------------------
+# WiFi Integration - Import dynamic interface support
 try:
-    import RPi.GPIO as GPIO
-    import LCD_1in44, LCD_Config
-    from PIL import Image, ImageDraw, ImageFont
-except ImportError:
-    print("ERROR: Hardware libraries (RPi.GPIO, LCD, PIL) not found.", file=sys.stderr)
-    print("Please run 'sudo pip3 install RPi.GPIO spidev Pillow'.", file=sys.stderr)
-    sys.exit(1)
-
-# ----------------------------
-# RaspyJack WiFi Integration
-# ----------------------------
-try:
+    sys.path.append('/root/Raspyjack/wifi/')
     from wifi.raspyjack_integration import (
         get_best_interface,
         get_available_interfaces,
@@ -238,7 +219,7 @@ def check_interface_exists():
         
         # Check for USB dongles specifically
         show_status("Check USB dongles...")
-        usb_check = run_command(r"lsusb | grep -i 'realtek\|ralink\|atheros\|broadcom'")
+        usb_check = run_command("lsusb | grep -i 'realtek\|ralink\|atheros\|broadcom'")
         if usb_check:
             log(f"USB WiFi dongles detected: {usb_check}")
             show_status("USB dongles found!")
@@ -363,12 +344,6 @@ def validate_setup():
     
     # Check if aircrack-ng tools are available
     show_status("Check tools...")
-    aircrack_check = run_command("which aircrack-ng")
-    if "aircrack-ng" not in aircrack_check:
-        show_status("No aircrack-ng!")
-        time.sleep(3)
-        return False
-        
     aireplay_check = run_command("which aireplay-ng")
     if "aireplay-ng" not in aireplay_check:
         show_status("No aireplay!")
@@ -854,21 +829,6 @@ def switch_interface():
         show_status("Switch error!")
         log(f"❌ Switch error: {e}")
         time.sleep(2)
-
-if not is_root():
-    print("ERROR: This script requires root privileges.", file=sys.stderr)
-    # Attempt to display on LCD if possible
-    try:
-        LCD = LCD_1in44.LCD()
-        LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-        img = Image.new("RGB", (128, 128), "black")
-        d = ImageDraw.Draw(img)
-        FONT_TITLE = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-        d.text((10, 40), "ERROR:\nRoot privileges\nrequired.", font=FONT_TITLE, fill="red")
-        LCD.LCD_ShowImage(img, 0, 0)
-    except Exception as e:
-        print(f"Could not display error on LCD: {e}", file=sys.stderr)
-    sys.exit(1)
 
 # Main event loop
 current_screen = "main"

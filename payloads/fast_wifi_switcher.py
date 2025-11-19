@@ -25,11 +25,9 @@ import time
 import subprocess
 import signal
 
-# Add the required paths (prefer installed RaspyJack; avoid duplicate entries)
-if os.path.isdir('/root/Raspyjack') and '/root/Raspyjack' not in sys.path:
-    sys.path.insert(0, '/root/Raspyjack')
-if os.path.isdir('/root/Raspyjack/wifi') and '/root/Raspyjack/wifi' not in sys.path:
-    sys.path.insert(1, '/root/Raspyjack/wifi')
+# Add the required paths
+sys.path.append('/root/Raspyjack/')
+sys.path.append('/root/Raspyjack/wifi/')
 
 try:
     # Import RaspyJack LCD functions (PROPER WAY)
@@ -86,8 +84,6 @@ class FastWiFiSwitcher:
         # Button state tracking for responsiveness
         self.button_states = {pin: 1 for pin in self.buttons.values()}
         self.last_press_time = {pin: 0 for pin in self.buttons.values()}
-        
-        signal.signal(signal.SIGTERM, self.cleanup)
         
         print("🚀 Fast WiFi Switcher initialized")
     

