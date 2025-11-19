@@ -14,15 +14,13 @@ import select
 from PIL import Image, ImageDraw, ImageFont
 
 # --- Raspyjack Path Setup ---
-RASPYJACK_ROOT = '/root/Raspyjack'
-if os.path.isdir(RASPYJACK_ROOT) and RASPYJACK_ROOT not in sys.path:
-    sys.path.insert(0, RASPYJACK_ROOT)
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+if '/root/Raspyjack' not in sys.path:
+    sys.path.insert(0, '/root/Raspyjack')
 
 # --- Hardware Imports ---
-import LCD_Config
-from LCD_1in44 import LCD
-from KEY import KEY
 import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
 
 # --- Global State ---
 RUNNING = True
@@ -32,10 +30,9 @@ DEBOUNCE_DELAY = 0.2
 active_process = None
 
 # --- Interfaces and Config ---
-BASE_WIFI_INTERFACE = "wlan1" 
-WIFI_INTERFACE = None # This will be set by the monitor mode helper
+WIFI_INTERFACE = None
 BT_INTERFACE = "hci0"
-LOOT_PATH = os.path.join(RASPYJACK_ROOT, "loot", "marauder")
+LOOT_PATH = os.path.join('/root/Raspyjack', "loot", "marauder")
 WARDRIVE_PATH = os.path.join(LOOT_PATH, "wardrive")
 HANDSHAKE_PATH = os.path.join(LOOT_PATH, "handshakes")
 
@@ -59,6 +56,17 @@ RICK_ROLL_SSIDS = [
 ]
 BLE_SPAM_MENU_ITEMS = ["Apple Devices", "Android Devices", "Flipper Zero", "Back"]
 
+# --- Hardware and Display Setup (Init First) ---
+GPIO.setmode(GPIO.BCM)
+for pin in PINS.values():
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+LCD = LCD_1in44.LCD()
+LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+draw = ImageDraw.Draw(LCD.buffer)
+font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
+
 # --- Logging ---
 LOG_FILE = "/tmp/marauder_debug.log"
 def log(message):
@@ -67,21 +75,16 @@ def log(message):
         f.write(f"[{timestamp}] Marauder: {message}\n")
 
 # --- UI & System Functions (Adapted from deauth.py) ---
-lcd = None
-draw = None
-font = None
-small_font = None
-
 def show_message(lines, color="white"):
     """Display multi-line message on the LCD."""
     if not draw or not lcd: return
     if isinstance(lines, str): lines = [lines]
-    draw.rectangle((0, 0, lcd.width, lcd.height), outline=0, fill=0)
+    draw.rectangle((0, 0, LCD.width, LCD.height), outline=0, fill=0)
     y = 20
     for line in lines:
         draw.text((5, y), line, font=font, fill=color)
         y += 15
-    lcd.ShowImage(lcd.buffer)
+    LCD.ShowImage(LCD.buffer)
 
 def show_status(message, duration=1):
     """Display a temporary status message."""
@@ -217,7 +220,7 @@ def cleanup(*_):
     os.system(f"hcitool -i {BT_INTERFACE} dev down >/dev/null 2>&1")
     os.system(f"hcitool -i {BT_INTERFACE} dev up >/dev/null 2>&1")
     try:
-        if lcd:
+        if 'lcd' in globals() and lcd is not None:
             lcd.clear()
         GPIO.cleanup()
     except Exception as e:
@@ -225,72 +228,168 @@ def cleanup(*_):
     log("Cleanup complete.")
     sys.exit(0)
 
-# --- Main Execution Block ---
+signal.signal(signal.SIGINT, cleanup)
+signal.signal(signal.SIGTERM, cleanup)
+
+def validate_setup():
+    """
+    Checks dependencies and sets up monitor mode.
+    Returns True on success, False on failure.
+    """
+    global WIFI_INTERFACE
+    log("Starting setup validation...")
+    show_message(["Validating setup..."])
+
+    # 1. Dependency Check
+    log("Checking dependencies...")
+    show_status("Checking tools...", 0)
+    missing_dep = check_dependencies()
+    if missing_dep:
+        log(f"ERROR: Missing dependency: {missing_dep}")
+        show_message([f"ERROR: Missing:", f"'{missing_dep}'"], "red")
+        time.sleep(5)
+        return False
+    log("Dependencies OK.")
+    show_status("Tools OK", 1)
+
+    # 2. Interface Selection
+    log("Getting available WiFi interfaces...")
+    interfaces = get_available_wifi_interfaces()
+    log(f"Interfaces found: {interfaces}")
+    if not interfaces:
+        log("ERROR: No WiFi adapters found.")
+        show_message(["No WiFi adapters", "found!"], "red")
+        time.sleep(3)
+        return False
+
+    selection = 0
+    selected_interface = None
+    log("Entering interface selection menu.")
+    while not selected_interface:
+        draw.rectangle((0,0,128,128), fill="black")
+        draw.text((10, 5), "Select WiFi Adapter", font=font, fill="CYAN")
+        for i, iface in enumerate(interfaces):
+            display_y = 25 + (i * 15)
+            if i == selection:
+                draw.rectangle([(0, display_y - 2), (128, display_y + 12)], fill="BLUE")
+                draw.text((10, display_y), f"> {iface}", font=small_font, fill="white")
+            else:
+                draw.text((20, display_y), iface, font=small_font, fill="white")
+        LCD.ShowImage(LCD.buffer)
+
+        # Simplified input handler for setup
+        time.sleep(0.05)
+        if GPIO.input(PINS["KEY3"]) == 0: return False
+        if GPIO.input(PINS["DOWN"]) == 0:
+            selection = (selection + 1) % len(interfaces)
+            time.sleep(DEBOUNCE_DELAY)
+        if GPIO.input(PINS["UP"]) == 0:
+            selection = (selection - 1 + len(interfaces)) % len(interfaces)
+            time.sleep(DEBOUNCE_DELAY)
+        if GPIO.input(PINS["PRESS"]) == 0:
+            selected_interface = interfaces[selection]
+            time.sleep(DEBOUNCE_DELAY)
+    log(f"Interface selected: {selected_interface}")
+
+    # 3. Activate Monitor Mode
+    if not setup_monitor_mode(selected_interface):
+        return False
+
+    log("Setup validation successful.")
+    return True
+
 if __name__ == "__main__":
     with open(LOG_FILE, "w") as f: f.write("Marauder Payload Log\n" + "="*20 + "\n")
-    log("Payload started.")
-    signal.signal(signal.SIGINT, cleanup)
-    signal.signal(signal.SIGTERM, cleanup)
-
+    log("Payload started & hardware initialized.")
+    
     try:
-        log("Initializing GPIO...")
-        GPIO.setmode(GPIO.BCM)
-        for pin in PINS.values(): GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        
-        log("Initializing LCD...")
-        lcd = LCD()
-        lcd.Init()
-        lcd.clear()
-        
-        draw = ImageDraw.Draw(lcd.buffer)
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-        small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
-        
-        # --- Dependency Check ---
-        missing_dep = check_dependencies()
-        if missing_dep:
-            show_message([f"ERROR: Missing dependency:", f"'{missing_dep}'", "Please install it."], "red")
-            time.sleep(5)
-            cleanup()
-
-        # --- Interface Selection Menu ---
-        interfaces = get_available_wifi_interfaces()
-        if not interfaces:
-            show_message(["No WiFi adapters", "found!"], "red")
+        if not validate_setup():
+            show_message(["Setup Failed.", "Check logs."], "red")
             time.sleep(3)
             cleanup()
 
-        selection = 0
-        selected_interface = None
-        while not selected_interface:
-            clear_screen()
-            display_text("Select WiFi Adapter", 10, 5, font_to_use=font, fill="CYAN")
-            for i, iface in enumerate(interfaces):
-                display_y = 25 + (i * 15)
-                if i == selection:
-                    draw.rectangle([(0, display_y - 2), (128, display_y + 12)], fill="BLUE")
-                    display_text(f"> {iface}", 10, display_y, font_to_use=small_font)
-                else:
-                    display_text(iface, 20, display_y, font_to_use=small_font)
-            update_screen()
-
-            selection, action = handle_menu_input(selection, len(interfaces))
-            if action == "Select":
-                selected_interface = interfaces[selection]
-            elif action == "Back":
-                cleanup()
-
-        # --- Activate Monitor Mode ---
-        if not setup_monitor_mode(selected_interface):
-            cleanup() # Exit if monitor mode fails
-
-        log(f"Monitor mode enabled on {WIFI_INTERFACE}")
-        show_message([f"Monitor mode on:", f"{WIFI_INTERFACE}"], "lime")
-        time.sleep(2)
-        
+        log("Ensuring loot directories exist...")
         os.makedirs(WARDRIVE_PATH, exist_ok=True)
         os.makedirs(HANDSHAKE_PATH, exist_ok=True)
+        os.makedirs(os.path.join(LOOT_PATH, "passive"), exist_ok=True)
         log("Loot directories ensured.")
+        
+        show_message([f"Monitor mode on:", f"{WIFI_INTERFACE}"], "lime")
+        time.sleep(2)
+
+        log("Entering main menu loop.")
+        # --- Main Loop ---
+        while RUNNING:
+            item = show_menu(MENU_ITEMS, "Python Marauder")
+            if not item or item == "Exit":
+                break
+            
+            if item == "Scan":
+                scan_item = show_menu(SCAN_MENU_ITEMS, "Scan Menu")
+                if scan_item == "Scan APs":
+                    scan_for_aps()
+            elif item == "Attack":
+                attack_item = show_menu(ATTACK_MENU_ITEMS, "Attack Menu")
+                if attack_item == "Deauth Attack":
+                    target_ap_object = scan_for_aps(as_target_selector=True)
+                    if target_ap_object:
+                        run_deauth_attack(target_ap_object)
+                elif attack_item == "Beacon Flood":
+                    run_beacon_flood(rick_roll=False)
+                elif attack_item == "Probe Flood":
+                    run_probe_flood()
+                elif attack_item == "Auth Flood":
+                    run_auth_flood()
+                elif attack_item == "PMKID Capture":
+                    run_pmkid_capture()
+                elif attack_item == "Rick Roll":
+                    run_beacon_flood(rick_roll=True)
+            elif item == "Sniff":
+                sniff_item = show_menu(SNIFF_MENU_ITEMS, "Sniff Menu")
+                if sniff_item == "Capture Handshakes":
+                    run_handshake_capture()
+                elif sniff_item == "Sniff Probes":
+                    run_probe_sniffer()
+                elif sniff_item == "Passive Capture":
+                    run_passive_capture()
+            elif item == "Bluetooth":
+                bt_item = show_menu(BT_MENU_ITEMS, "Bluetooth Menu")
+                if bt_item == "Scan BLE Devices":
+                    run_ble_scan()
+                elif bt_item == "Detect Apple Devices":
+                    run_apple_detection()
+                elif bt_item == "Detect Card Skimmers":
+                    run_skimmer_detection()
+                elif bt_item == "BLE Spam Menu":
+                    spam_item = show_menu(BLE_SPAM_MENU_ITEMS, "BLE Spam Menu")
+                    if spam_item and spam_item != "Back":
+                        run_ble_spam(spam_item)
+            elif item == "Wardriving":
+                run_wardriving()
+            elif item == "Settings":
+                settings_item = show_menu(SETTINGS_MENU_ITEMS, "Settings Menu")
+                if settings_item == "Set WiFi Channel":
+                    set_wifi_channel()
+                elif settings_item == "Clear Logs":
+                    clear_logs()
+                elif settings_item == "System Info":
+                    show_system_info()
+                elif settings_item == "Reboot":
+                    reboot_system()
+                elif settings_item == "Shutdown":
+                    shutdown_system()
+
+    except Exception as e:
+        log(f"FATAL: An unhandled exception occurred: {e}")
+        with open(LOG_FILE, "a") as f:
+            traceback.print_exc(file=f)
+        try:
+            show_message(["FATAL ERROR", "Check debug log"], "red")
+        except:
+            pass # LCD might be the issue
+        time.sleep(5)
+    finally:
+        cleanup()
 
         # --- UI HELPER FUNCTIONS (Originals) ---
         def display_text(text, x, y, font_to_use=None, fill="WHITE"):
