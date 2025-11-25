@@ -305,3 +305,14 @@ def draw_status_box(draw, x, y, width, height, title, value, title_color="CYAN",
     value_x = x + (width - text_width) // 2
     draw_text(draw, value_text, (value_x, y + 10), font_bold, value_color)
 
+🏁 Finalizing the Operation: Conclusion
+You now possess the foundational knowledge and the validated core structure to write production-grade payloads for the RaspyJack platform.
+Remember the mission parameters:
+• Cleanup is Sacred: Always release the GPIO pins and restore system states (GPIO.cleanup() and ARP/IP table restoration).
+• Debug Smart: Use /tmp/ logging to avoid the black box problem.
+• Be Efficient: The ARM architecture demands lean, threaded code and the diligent use of store=0 when sniffing.
+May your packets always find their target and your logs remain clean.
+
+Created by WickedNull
+    Happy Hacking. 🦾
+
