@@ -2,7 +2,7 @@
 
 Maintainer: @null_lyfe
 
-This is the central vault for all custom payloads built for the RaspyJack platform. We got a little bit of everything in here: network tools, wireless disruption, HID stuff (still fighting with the USB stack, lol), and custom phishing pages for testing.
+This is the central vault for all my custom payloads built for the RaspyJack platform. We got a little bit of everything in here: network tools, wireless disruption, HID stuff (still fighting with the USB stack, lol), and custom phishing pages for testing.
 
 
 > ⚠️ Standard Warning (Read it, don't be a scrub): This gear is for education, defense research, and testing only. Test on networks/hardware you own and have permission to touch. Don't be a jerk. If you mess up, you're on your own.
