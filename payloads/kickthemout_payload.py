@@ -31,22 +31,45 @@ try:
     import nmap
     import netifaces
 except ImportError as e:
-    # Use the LCD to display an error if possible, otherwise log and exit.
+    # Use the LCD to display a detailed diagnostic error.
     try:
+        # Attempt to initialize display for error reporting
         LCD = LCD_1in44.LCD()
         LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
         image = Image.new("RGB", (128, 128), "BLACK")
         draw = ImageDraw.Draw(image)
-        draw.text((5, 5), "Import Error:", fill="RED")
-        draw.text((5, 20), "scapy, nmap, or", fill="WHITE")
-        draw.text((5, 35), "netifaces missing.", fill="WHITE")
-        draw.text((5, 55), "Run dependency", fill="YELLOW")
-        draw.text((5, 70), "installer.", fill="YELLOW")
+        s_font = ImageFont.load_default()
+
+        # Get diagnostic info
+        py_executable = sys.executable
+        py_paths = [p for p in sys.path if 'site-packages' in p]
+
+        # Display info on LCD
+        draw.text((5, 2), "Import Error", font=s_font, fill="RED")
+        draw.text((5, 14), f"Module: {e.name}", font=s_font, fill="WHITE")
+        
+        draw.text((5, 28), "Python used:", font=s_font, fill="YELLOW")
+        draw.text((5, 38), py_executable.replace('/usr/bin/', ''), font=s_font, fill="CYAN")
+
+        draw.text((5, 52), "Search paths:", font=s_font, fill="YELLOW")
+        y = 62
+        for path in py_paths[:3]: # Show first 3 site-packages paths
+            # Shorten path for display
+            short_path = path.replace('/usr/lib/', '').replace('/dist-packages', '/d-p')
+            draw.text((5, y), short_path, font=s_font, fill="CYAN")
+            y += 10
+
+        draw.text((5, 115), "Install deps for this env", font=s_font, fill="WHITE")
+
         LCD.LCD_ShowImage(image, 0, 0)
-        time.sleep(10)
+        time.sleep(20) # Keep message on screen for a while
+
     finally:
+        # Also log to file as a fallback
         with open("/tmp/kickthemout_payload.log", "a") as f:
             f.write(f"Failed to import libraries: {e}\n")
+            f.write(f"Python Executable: {sys.executable}\n")
+            f.write(f"Sys Path: {sys.path}\n")
         sys.exit(1)
 
 
@@ -328,10 +351,10 @@ if __name__ == "__main__":
                 if (current_time - last_press_time) > DEBOUNCE_DELAY:
                     if GPIO.input(PINS["UP"]) == 0:
                         last_press_time = current_time
-                        PACKETS_PER_SECOND = min(300, PACKETS_PER_SECOND + 1)
+                        PACKETS_PER_SECOND = min(300, PACKETS_PER_SECOND + 10)
                     elif GPIO.input(PINS["DOWN"]) == 0:
                         last_press_time = current_time
-                        PACKETS_PER_SECOND = max(1, PACKETS_PER_SECOND - 1)
+                        PACKETS_PER_SECOND = max(1, PACKETS_PER_SECOND - 10)
                     elif GPIO.input(PINS["LEFT"]) == 0:
                         last_press_time = current_time
                         state = 'menu'
