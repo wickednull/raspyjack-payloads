@@ -245,29 +245,92 @@ def get_network_info():
         log(f"Error getting network info: {e}")
         return None, None, None, None
 
+# --- UPDATED scan_network() with mDNS & NetBIOS fallbacks ---
 def scan_network(draw, image, network_range):
     log(f"Scanning network: {network_range}")
     display_message(draw, image, ["Scanning...", network_range])
     
     nm = nmap.PortScanner()
     try:
-        nm.scan(hosts=network_range, arguments='-sn')
+        nm.scan(hosts=network_range, arguments='-sn -R')
     except nmap.PortScannerError:
         log("Nmap not found. Please install it.")
         return []
 
     hosts = []
+
+    import socket
+    import subprocess
+
+    # mDNS lookup (Avahi)
+    def mdns_lookup(ip):
+        try:
+            result = subprocess.check_output(
+                ["avahi-resolve-address", ip],
+                stderr=subprocess.DEVNULL
+            ).decode().strip()
+            parts = result.split("\t")
+            if len(parts) >= 2:
+                return parts[1]
+        except Exception:
+            return ""
+        return ""
+
+    # NetBIOS lookup (nmblookup)
+    def netbios_lookup(ip):
+        try:
+            result = subprocess.check_output(
+                ["nmblookup", "-A", ip],
+                stderr=subprocess.DEVNULL
+            ).decode()
+            # Parse typical nmblookup output lines for name
+            for line in result.splitlines():
+                # Example: WORKGROUP<00> -         B <ACTIVE>
+                if "<00>" in line or "<20>" in line:
+                    parts = line.strip().split()
+                    if parts:
+                        return parts[0]
+        except Exception:
+            return ""
+        return ""
+
     for host_ip in nm.all_hosts():
         if 'mac' in nm[host_ip]['addresses']:
-            hostname = ''
-            if 'hostnames' in nm[host_ip] and nm[host_ip]['hostnames']:
-                hostname = nm[host_ip]['hostnames'][0].get('name', '')
+
+            # 1) Nmap hostname
+            hostname = nm[host_ip].hostname()
+
+            # 2) System DNS
+            if not hostname or hostname == host_ip:
+                try:
+                    fq = socket.getfqdn(host_ip)
+                    if fq and fq != host_ip:
+                        hostname = fq
+                except Exception:
+                    pass
+
+            # 3) mDNS (Avahi)
+            if not hostname or hostname == host_ip:
+                md = mdns_lookup(host_ip)
+                if md and md != host_ip:
+                    hostname = md
+
+            # 4) NetBIOS (nmblookup)
+            if not hostname or hostname == host_ip:
+                nb = netbios_lookup(host_ip)
+                if nb and nb != host_ip:
+                    hostname = nb
+
+            # Final cleanup
+            if hostname == host_ip:
+                hostname = ""
 
             hosts.append({
                 'ip': host_ip,
                 'mac': nm[host_ip]['addresses']['mac'],
                 'name': hostname
             })
+
     log(f"Scan found {len(hosts)} hosts.")
     return hosts
 
