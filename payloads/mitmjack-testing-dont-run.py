@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Raspyjack Payload: MITMJack v2.0
+# Raspyjack Payload: MITMJack
 
 # --- IMPORTS ---
 import sys
