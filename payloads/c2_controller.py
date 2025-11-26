@@ -5,12 +5,12 @@ import time
 import signal
 import subprocess
 
+# --- Setup Paths & Imports ---
 RASPYJACK_ROOT = '/root/Raspyjack'
 if os.path.isdir(RASPYJACK_ROOT) and RASPYJACK_ROOT not in sys.path:
     sys.path.insert(0, RASPYJACK_ROOT)
 
 try:
-    import LCD_Config
     import LCD_1in44
     import RPi.GPIO as GPIO
     from PIL import Image, ImageDraw, ImageFont
@@ -18,12 +18,12 @@ except ImportError:
     print("This payload must be run on the Raspyjack hardware.")
     sys.exit(0)
 
-# --- CONFIG & STATE ---
+# --- CONFIGURATION ---
 PINS = {"UP": 6, "DOWN": 19, "KEY_PRESS": 13, "KEY3": 16}
-RUNNING = True
 DEBOUNCE_DELAY = 0.25
 CLIENT_SCRIPT_PATH = "c2_client/client.py"
 CLIENT_PROCESS_NAME = f"python3 {CLIENT_SCRIPT_PATH}"
+RUNNING = True # Global flag to control the main loop
 
 # --- CLEANUP ---
 def cleanup(*_):
@@ -33,35 +33,7 @@ def cleanup(*_):
     GPIO.cleanup()
     sys.exit(0)
 
-# --- UI & LOGIC ---
-def draw_menu(draw, menu_items, selected_index, status):
-    draw.rectangle([(0, 0), (128, 128)], fill="BLACK")
-    font = ImageFont.load_default()
-    
-    # Title
-    bbox = draw.textbbox((0, 0), "C2 Client Manager", font=font); text_width = bbox[2] - bbox[0]
-    draw.text(((128 - text_width) // 2, 5), "C2 Client Manager", font=font, fill="CYAN")
-    
-    # Status
-    status_color = "LIME" if status == "Running" else "RED"
-    bbox = draw.textbbox((0, 0), f"Status: {status}", font=font); text_width = bbox[2] - bbox[0]
-    draw.text(((128 - text_width) // 2, 25), f"Status: {status}", font=font, fill=status_color)
-
-    # Menu
-    y = 50
-    for i, item in enumerate(menu_items):
-        if i == selected_index:
-            draw.rectangle([(0, y - 2), (128, y + 12)], fill="BLUE")
-            bbox = draw.textbbox((0, 0), item, font=font); text_width = bbox[2] - bbox[0]
-            draw.text(((128 - text_width) // 2, y), item, font=font, fill="YELLOW")
-        else:
-            bbox = draw.textbbox((0, 0), item, font=font); text_width = bbox[2] - bbox[0]
-            draw.text(((128 - text_width) // 2, y), item, font=font, fill="WHITE")
-        y += 20
-    
-    bbox = draw.textbbox((0, 0), "KEY3 to Exit", font=font); text_width = bbox[2] - bbox[0]
-    draw.text(((128 - text_width) // 2, 115), "KEY3 to Exit", font=font, fill="WHITE")
-
+# --- CORE LOGIC ---
 def get_client_status():
     try:
         subprocess.check_output(["pgrep", "-f", CLIENT_PROCESS_NAME])
@@ -78,13 +50,38 @@ def stop_client():
     if get_client_status() == "Stopped": return
     subprocess.run(["pkill", "-f", CLIENT_PROCESS_NAME])
 
-# --- MAIN ---
+# --- DRAWING ---
+def draw_display(draw, menu_items, selected_index, status):
+    draw.rectangle([(0, 0), (128, 128)], fill="BLACK")
+    font = ImageFont.load_default()
+    
+    def draw_centered(text, y, fill):
+        bbox = draw.textbbox((0, 0), text, font=font)
+        x = (128 - (bbox[2] - bbox[0])) // 2
+        draw.text((x, y), text, font=font, fill=fill)
+
+    draw_centered("C2 Controller", 5, "CYAN")
+    status_color = "LIME" if status == "Running" else "RED"
+    draw_centered(f"Status: {status}", 25, status_color)
+
+    y = 50
+    for i, item in enumerate(menu_items):
+        fill = "WHITE"
+        if i == selected_index:
+            draw.rectangle([(0, y - 2), (128, y + 12)], fill="BLUE")
+            fill = "YELLOW"
+        draw_centered(item, y, fill)
+        y += 20
+    
+    draw_centered("KEY3 to Exit", 115, "WHITE")
+
+# --- MAIN EXECUTION ---
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
 
     try:
-        # Hardware Init
+        # --- Hardware Init ---
         GPIO.setmode(GPIO.BCM)
         for pin in PINS.values():
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -96,7 +93,7 @@ if __name__ == "__main__":
         image = Image.new("RGB", (128, 128), "BLACK")
         draw = ImageDraw.Draw(image)
         
-        # State Variables
+        # --- State Variables ---
         menu_items = ["Start Client", "Stop Client", "Refresh Status"]
         selected_index = 0
         last_press_time = 0
@@ -104,28 +101,17 @@ if __name__ == "__main__":
         while RUNNING:
             current_time = time.time()
             
-            # Always check status for drawing
-            client_status = get_client_status()
-            
-            # Draw the screen
-            draw_menu(draw, menu_items, selected_index, client_status)
-            LCD.LCD_ShowImage(image, 0, 0)
-
-            # Handle Input after debounce
+            # --- Input Handling ---
             if (current_time - last_press_time) > DEBOUNCE_DELAY:
-                # QUIT
                 if GPIO.input(PINS["KEY3"]) == 0:
                     RUNNING = False
-                    break
-                # UP
+                    continue
                 elif GPIO.input(PINS["UP"]) == 0:
                     last_press_time = current_time
                     selected_index = (selected_index - 1) % len(menu_items)
-                # DOWN
                 elif GPIO.input(PINS["DOWN"]) == 0:
                     last_press_time = current_time
                     selected_index = (selected_index + 1) % len(menu_items)
-                # OK
                 elif GPIO.input(PINS["KEY_PRESS"]) == 0:
                     last_press_time = current_time
                     action = menu_items[selected_index]
@@ -133,7 +119,11 @@ if __name__ == "__main__":
                         start_client()
                     elif action == "Stop Client":
                         stop_client()
-                    # "Refresh Status" does nothing on its own, the loop does it
+            
+            # --- Drawing ---
+            client_status = get_client_status()
+            draw_display(draw, menu_items, selected_index, client_status)
+            LCD.LCD_ShowImage(image, 0, 0)
             
             time.sleep(0.1)
 
