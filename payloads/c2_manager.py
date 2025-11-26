@@ -121,7 +121,8 @@ if __name__ == "__main__":
 
     try:
         # --- Hardware Init ---
-        GPIO.setmode(GPIO.BCM)
+        # Initialize the GPIO pins using the LCD_Config helper
+        LCD_Config.GPIO_Init()
         for pin in PINS.values():
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
