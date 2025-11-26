@@ -158,8 +158,12 @@ if __name__ == "__main__":
                     action = menu_items[selected_index]
                     if action == "Start Client":
                         start_client()
+                        draw_menu(draw, font)
+                        LCD.LCD_ShowImage(image, 0, 0)
                     elif action == "Stop Client":
                         stop_client()
+                        draw_menu(draw, font)
+                        LCD.LCD_ShowImage(image, 0, 0)
 
                 elif GPIO.input(PINS["KEY3"]) == 0:
                     break # Exit loop
