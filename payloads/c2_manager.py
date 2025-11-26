@@ -25,7 +25,7 @@ except ImportError:
     sys.exit(0)
 
 # --- Globals ---
-PINS = {"UP": 6, "DOWN": 19, "OK": 20, "KEY3": 16}
+PINS = {"UP": 6, "DOWN": 19, "OK": 13, "KEY3": 16}
 RUNNING = True
 DEBOUNCE_DELAY = 0.2
 last_press_time = 0
