@@ -25,7 +25,7 @@ except ImportError:
     sys.exit(0)
 
 # --- Globals ---
-PINS = {"UP": 6, "DOWN": 19, "OK": 13, "KEY3": 16}
+PINS = {"UP": 6, "DOWN": 19, "KEY_PRESS": 13, "KEY3": 16}
 RUNNING = True
 DEBOUNCE_DELAY = 0.2
 last_press_time = 0
@@ -121,8 +121,7 @@ if __name__ == "__main__":
 
     try:
         # --- Hardware Init ---
-        # Initialize the GPIO pins using the LCD_Config helper
-        LCD_Config.GPIO_Init()
+        GPIO.setmode(GPIO.BCM)
         for pin in PINS.values():
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
@@ -154,7 +153,7 @@ if __name__ == "__main__":
                     last_press_time = current_time
                     selected_index = (selected_index + 1) % len(menu_items)
 
-                elif GPIO.input(PINS["OK"]) == 0:
+                elif GPIO.input(PINS["KEY_PRESS"]) == 0:
                     last_press_time = current_time
                     action = menu_items[selected_index]
                     if action == "Start Client":
